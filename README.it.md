@@ -52,7 +52,7 @@ Il **canale dell'aspetto** è costituito da 30 numeri per immagine (palette, ton
 ## Installazione
 
 ```bash
-pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.0"
+pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
 ```
 
 Questo fornisce il **livello "lite"**: solo numpy e Pillow, senza torch. I controlli sui duplicati, il canale dell'aspetto, il filtro delle descrizioni e il report funzionano tutti in questo livello (`--backend none`).
@@ -60,7 +60,7 @@ Questo fornisce il **livello "lite"**: solo numpy e Pillow, senza torch. I contr
 Per l'indice di embedding (ricerca, copertura, duplicati semantici, controllo della corrispondenza della descrizione), aggiungere le librerie del modello:
 
 ```bash
-pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.0"
+pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
 ```
 
 I modelli vengono scaricati da Hugging Face alle revisioni specificate la prima volta che vengono utilizzati, quindi vengono caricati dalla cache: [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) (`--backend eg2`) o [SigLIP2 so400m](https://huggingface.co/google/siglip2-so400m-patch14-384) (`--backend siglip2`). Impostare `HF_HUB_OFFLINE=1` per impedire i download. Il redattore plain-sight è sempre offline: non scarica mai nulla.
@@ -107,7 +107,7 @@ Segnala una vulnerabilità come descritto in [SECURITY.md](SECURITY.md).
 
 ## Stato
 
-**v0.1.0, un prototipo pubblico.** Il codice è stato testato offline (142 test, 96% di copertura delle righe, con piccoli sostituti per le librerie del modello), ma non è ancora stato calibrato su dati reali: le soglie per i duplicati quasi identici e i duplicati semantici sono solo punti di partenza. Prevedi che la riga di comando cambierà prima della versione 1.0.
+**v0.1.1, un prototipo pubblico.** Il codice è stato testato offline (145 test, 96% di copertura delle righe, con piccoli sostituti per le librerie del modello), ma non è ancora stato calibrato su dati reali: le soglie per i duplicati quasi identici e i duplicati semantici sono solo punti di partenza. Prevedi che la riga di comando cambierà prima della versione 1.0.
 
 La documentazione del progetto, le ricerche su cui si basa e la cronologia delle revisioni sono conservate nella biblioteca di ricerca dello studio: [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).
 
