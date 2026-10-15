@@ -43,6 +43,7 @@ backends.cap_threads(backends._argv_threads())
 import numpy as np  # noqa: E402
 from dataset_desk import description_gate  # noqa: E402
 from dataset_desk.errors import EXIT_RUNTIME, DeskError  # noqa: E402
+from dataset_desk import __version__  # noqa: E402
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 NEAR_BITS = 10        # dHash Hamming distance (of 256 bits) for a near-duplicate, as in the multimodal design
@@ -1202,26 +1203,38 @@ def lower_priority() -> None:
 
 
 def main(argv: list[str] | None = None, make=backends.make) -> int:
-    ap = argparse.ArgumentParser(prog="dataset-desk", description=__doc__.split("\n\n")[0])
-    ap.add_argument("command", choices=["index", "dupes", "search", "coverage", "report"])
+    ap = argparse.ArgumentParser(
+        prog="dataset-desk", description=__doc__.split("\n\n")[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=("commands:\n"
+                "  index     scan the project and embed its images (and descriptions) into the cache under --out\n"
+                "  dupes     exact, near and semantic duplicates, as JSON\n"
+                "  search    the nearest images to --text, --image, or both\n"
+                "  coverage  the best images for each subject in --subjects\n"
+                "  report    the Markdown report: duplicates, outliers, descriptions, coverage\n\n"
+                "exit codes: 0 ok, 1 user error or refusal, 2 unexpected error"))
+    ap.add_argument("command", choices=["index", "dupes", "search", "coverage", "report"], help="what to do")
+    ap.add_argument("--version", action="version", version=f"dataset-desk {__version__}")
     ap.add_argument("--project", required=True, help="a style-dataset-lab project folder (read only)")
-    ap.add_argument("--backend", default="eg2", choices=["eg2", "siglip2", "none", "fake"])
+    ap.add_argument("--backend", default="eg2", choices=["eg2", "siglip2", "none", "fake"],
+                    help="the index: EmbeddingGemma 2, SigLIP2, none (model-free lite mode), or fake (tests)")
     ap.add_argument("--out", help="where the cache and report go (default: desk-out/<project> here)")
-    ap.add_argument("--threads", type=int, default=4, help="CPU threads (the rig's rule: half the cores at most)")
-    ap.add_argument("--device", default="cpu")
-    ap.add_argument("--grant", help="a Publisher grant id; required for any device but cpu")
+    ap.add_argument("--threads", type=int, default=4, help="CPU threads (on a shared machine, half the cores at most)")
+    ap.add_argument("--device", default="cpu", help="cpu (default) or a torch device such as cuda; needs --grant")
+    ap.add_argument("--grant", help="a GPU grant id from whoever schedules the card; required for any device but cpu")
     ap.add_argument("--limit", type=int, help="index only the first N unique images (a smoke test)")
     ap.add_argument("--strict", action="store_true", help="halt immediately on an unreadable image file")
     ap.add_argument("--images-only", action="store_true",
                     help="index/report images and model-free gates only; do not embed descriptions")
     ap.add_argument("--allow-multimodal-pool", action="store_true",
-                    help="permit description embeddings and arm-model checks on rustline, tallow-fen, salt-road and hesperia after the counted run")
+                    help="permit description embeddings and arm-model checks on the locked benchmark projects "
+                         f"({', '.join(sorted(MULTIMODAL_POOL))}) once its counted run is done")
     ap.add_argument("--draft", default="none", choices=["none", "fake", "plain-sight", "florence2"],
                     help="report: draft flagged descriptions blind from image pixels via plain-sight (or fake)")
     ap.add_argument("--text", help="search: a description (combine with --image on eg2/fake for multimodal search)")
     ap.add_argument("--image", help="search: an image file")
     ap.add_argument("--subjects", help="coverage/report: a file with one wanted subject per line")
-    ap.add_argument("-k", type=int, default=10)
+    ap.add_argument("-k", type=int, default=10, help="search: how many results")
     ap.add_argument("--debug", action="store_true", help="show stack traces for unexpected errors")
     a = ap.parse_args(argv)
     project = os.path.abspath(a.project)

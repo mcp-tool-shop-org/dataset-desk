@@ -1,7 +1,7 @@
 """Embedding backends for the dataset desk.
 
 Every backend maps images and texts into one space and returns unit-norm float32 rows. Thread pools are capped before
-numpy, torch, the tokenizers or the BLAS libraries load. CPU is the default. A GPU needs a Publisher grant id, which
+numpy, torch, the tokenizers or the BLAS libraries load. CPU is the default. A GPU needs a grant id (from whoever schedules the card), which
 the desk records in its cache. The 'none' backend needs no torch and powers the lite tier's model-free report sections.
 """
 
