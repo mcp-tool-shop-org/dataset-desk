@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.ruff_cache/
+desk-out/
+site/.astro/
+site/dist/
+site/node_modules/
+.polyglot-cache.json

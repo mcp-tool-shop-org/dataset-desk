@@ -1,0 +1,4 @@
+* text=auto eol=lf
+# The stopword list is hashed into every manifest; its bytes must never change on checkout.
+dataset_desk/stopwords.txt -text
+*.png binary
