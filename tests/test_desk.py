@@ -11,10 +11,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 from PIL import Image
 
+import fakes
 from dataset_desk import backends, description_gate, desk
 
 TINT = {"red": (175, 0, 0), "green": (0, 175, 0), "blue": (0, 0, 175)}
@@ -121,12 +123,13 @@ class ThreadCaps(unittest.TestCase):
         self.assertEqual(got["RAYON_NUM_THREADS"], "1")
 
     def test_enter_torch_region_forces_blas_to_one_and_guards_interop(self):
-        backends.enter_torch_region(3)
-        self.assertEqual(os.environ.get("OPENBLAS_NUM_THREADS"), "1")
-        self.assertEqual(os.environ.get("MKL_NUM_THREADS"), "1")
-        # Calling a second time must not raise RuntimeError from torch.set_num_interop_threads
-        backends.enter_torch_region(3)
-        backends.cap_threads(4)
+        with mock.patch.dict(sys.modules, {"torch": fakes.make_torch()}):
+            backends.enter_torch_region(3)
+            self.assertEqual(os.environ.get("OPENBLAS_NUM_THREADS"), "1")
+            self.assertEqual(os.environ.get("MKL_NUM_THREADS"), "1")
+            # Calling a second time must not raise RuntimeError from torch.set_num_interop_threads
+            backends.enter_torch_region(3)
+            backends.cap_threads(4)
 
 
 class Scan(Project):
@@ -752,8 +755,11 @@ class DescriptionGateTests(unittest.TestCase):
 
     def test_plain_sight_drafter_pin_offline_no_remote_code_and_missing_snapshot(self):
         import types
-        from unittest import mock
 
+        with mock.patch.dict(sys.modules, {"torch": fakes.make_torch(), "transformers": fakes.make_transformers()}):
+            self._plain_sight_pin_checks(types)
+
+    def _plain_sight_pin_checks(self, types):
         # 1. Verify the remote-code flag appears nowhere in the folder's Python code
         here = os.path.dirname(os.path.abspath(backends.__file__))
         forbidden_flag = "_".join(("trust", "remote", "code"))

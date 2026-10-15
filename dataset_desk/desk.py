@@ -1226,7 +1226,11 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
     a = ap.parse_args(argv)
     project = os.path.abspath(a.project)
     out = os.path.abspath(a.out or os.path.join("desk-out", os.path.basename(project)))
-    if os.path.commonpath([project, out]) == project:
+    try:
+        out_inside = os.path.commonpath([project, out]) == project
+    except ValueError:  # different drives on Windows: --out cannot be inside the project
+        out_inside = False
+    if out_inside:
         raise DeskError("PERM_OUT_INSIDE_PROJECT", "REFUSED: --out is inside the project; the desk never writes into a project")
     backends.check_device(a.device, a.grant)
     backends.cap_threads(a.threads)

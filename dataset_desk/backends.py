@@ -416,12 +416,9 @@ class PlainSightDrafter:
         prev_tf_offline = os.environ.get("TRANSFORMERS_OFFLINE")
         os.environ["HF_HUB_OFFLINE"] = "1"
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
-        plain_sight_installed = False
         try:
             try:
                 from plain_sight.engine import Florence2Engine
-
-                plain_sight_installed = True
             except ImportError:
                 Florence2Engine = None
 
@@ -483,11 +480,9 @@ class PlainSightDrafter:
                     )
                 model = model.eval().to(self.device)
             except Exception as exc:
-                hint = (
-                    "install plain-sight (`pip install -e E:\\AI\\plain-sight`) and ensure the cached snapshot exists"
-                    if not plain_sight_installed
-                    else "ensure the cached snapshot exists"
-                )
+                # Only reached when plain-sight isn't installed: the engine path above returns or raises.
+                hint = ("install plain-sight (https://github.com/mcp-tool-shop-org/plain-sight) and make sure the "
+                        "pinned snapshot is in the Hugging Face cache")
                 raise RuntimeError(
                     f"plain-sight offline snapshot missing for repo {self.model_id!r} at revision "
                     f"{self.requested_revision!r} (local_files_only=True, HF_HUB_OFFLINE=1; {hint}): {exc}"
