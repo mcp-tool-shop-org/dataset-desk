@@ -12,14 +12,14 @@ dataset-desk needs Python 3.11 or 3.12. It runs on Windows and Linux.
 The **lite tier** needs only numpy and Pillow:
 
 ```bash
-pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
+pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.2"
 dataset-desk --version
 ```
 
 For the embedding index, add the `models` extra (torch, transformers and sentence-transformers):
 
 ```bash
-pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
+pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.2"
 ```
 
 ## Lay out a project

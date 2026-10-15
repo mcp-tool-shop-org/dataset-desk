@@ -304,3 +304,107 @@ class ModuleEntryPoint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeTokenizer:
+    """Stands in for the SigLIP2 tokenizer: a fixed number of ids per text, or one per word plus an end token."""
+
+    def __init__(self, fixed=None):
+        self.fixed, self.seen = fixed, []
+
+    def __call__(self, text, padding=None, truncation=None):
+        self.seen.append((text, padding, truncation))
+        n = self.fixed if self.fixed is not None else len(text.split()) + 1
+        return {"input_ids": list(range(n))}
+
+
+class CountTokens(unittest.TestCase):
+    """report --count-tokens runs the gate's 64-token test; without it, model-free passes stay 'unchecked'."""
+
+    GOOD = "A hunched grey heron stands in brown reeds at dusk, one leg raised, watching the still water below."
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = self._tmp.name
+        self.proj = os.path.join(root, "birds")
+        os.makedirs(os.path.join(self.proj, "outputs", "w1"))
+        os.makedirs(os.path.join(self.proj, "records"))
+        Image.new("RGB", (16, 16), (90, 90, 90)).save(os.path.join(self.proj, "outputs", "w1", "heron.png"))
+        rec = {"id": "heron", "asset_path": "outputs/w1/heron.png",
+               "judgment": {"status": "approved", "explanation": self.GOOD},
+               "provenance": {"prompt": "painted wading bird, muted palette"}}
+        with open(os.path.join(self.proj, "records", "heron.json"), "w", encoding="utf-8") as f:
+            json.dump(rec, f)
+        self.out = os.path.join(root, "out")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(desk.main(["index", "--project", self.proj, "--backend", "none", "--out", self.out]), 0)
+
+    def review(self, *extra):
+        with contextlib.redirect_stdout(io.StringIO()):
+            rc = desk.run(["report", "--project", self.proj, "--backend", "none", "--out", self.out, *extra])
+        with open(os.path.join(self.out, "description-review.jsonl"), encoding="utf-8") as f:
+            return rc, [json.loads(line) for line in f]
+
+    def test_without_the_flag_a_model_free_pass_stays_unchecked(self):
+        rc, rows = self.review()
+        self.assertEqual(rc, 0)
+        self.assertEqual([r["gate_status"] for r in rows], ["unchecked"])
+
+    def test_with_the_flag_the_token_test_runs_lowercased_unpadded(self):
+        tok = FakeTokenizer()
+        with mock.patch.object(desk.description_gate, "load_siglip2_tokenizer", return_value=tok):
+            rc, rows = self.review("--count-tokens")
+        self.assertEqual(rc, 0)
+        self.assertEqual([r["gate_status"] for r in rows], ["passed"])
+        self.assertEqual(rows[0]["siglip2_tokens"], len(self.GOOD.split()) + 1)
+        self.assertTrue(all(t == t.lower() and p is False and tr is False for t, p, tr in tok.seen))
+
+    def test_over_64_tokens_fails(self):
+        with mock.patch.object(desk.description_gate, "load_siglip2_tokenizer", return_value=FakeTokenizer(65)):
+            rc, rows = self.review("--count-tokens")
+        self.assertEqual(rows[0]["gate_status"], "failed")
+        self.assertIn("too_long_siglip2", rows[0]["flags"])
+
+    def test_missing_tokenizer_is_a_structured_error(self):
+        err = io.StringIO()
+        with mock.patch.object(desk.description_gate, "load_siglip2_tokenizer", side_effect=OSError("not cached")), \
+                contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = desk.run(["report", "--project", self.proj, "--backend", "none", "--out", self.out,
+                           "--count-tokens"])
+        self.assertEqual(rc, EXIT_USER)
+        self.assertIn("error DEP_TOKENIZER_MISSING", err.getvalue())
+
+
+class LinkTarget(unittest.TestCase):
+    def test_relative_when_it_can_be(self):
+        base = tempfile.gettempdir()
+        got = desk.description_gate.link_target(os.path.join(base, "p", "a b.png"), os.path.join(base, "out"))
+        self.assertEqual(got, "../p/a%20b.png")
+
+    def test_file_uri_when_the_drives_differ(self):
+        target = os.path.join(tempfile.gettempdir(), "p", "a b.png")
+        with mock.patch("os.path.relpath", side_effect=ValueError("path is on mount 'E:', start on mount 'C:'")):
+            got = desk.description_gate.link_target(target, "elsewhere")
+        self.assertTrue(got.startswith("file:///") or got.startswith("file://"))
+        self.assertIn("a%20b.png", got)
+
+    def test_report_survives_an_out_on_another_drive(self):
+        with tempfile.TemporaryDirectory() as root:
+            proj = make_project(root)
+            out = os.path.join(root, "out")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(desk.main(["index", "--project", proj, "--backend", "none", "--out", out]), 0)
+            real = os.path.relpath
+
+            def cross_drive(path, start=os.curdir):
+                if os.path.abspath(start).startswith(os.path.abspath(out)):
+                    raise ValueError("path is on mount 'E:', start on mount 'C:'")
+                return real(path, start)
+
+            with mock.patch("os.path.relpath", side_effect=cross_drive), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                rc = desk.run(["report", "--project", proj, "--backend", "none", "--out", out])
+            self.assertEqual(rc, 0)
+            with open(os.path.join(out, "report-none.md"), encoding="utf-8") as f:
+                self.assertIn("file://", f.read())

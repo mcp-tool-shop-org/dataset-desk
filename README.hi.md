@@ -52,7 +52,7 @@ dataset-desk दोनों को एक प्रोजेक्ट फ़ो
 ## इंस्टॉल करें
 
 ```bash
-pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
+pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.2"
 ```
 
 यह **लाइट टियर** देता है: केवल numpy और Pillow, कोई torch नहीं। डुप्लिकेट जांच, लुक चैनल, विवरण गेट और रिपोर्ट सभी इसमें काम करते हैं (`--backend none`)।
@@ -60,7 +60,7 @@ pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-des
 एम्बेडिंग इंडेक्स (खोज, कवरेज, सिमेंटिक डुप्लिकेट, विवरण फिट जांच) के लिए, मॉडल लाइब्रेरी जोड़ें:
 
 ```bash
-pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
+pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.2"
 ```
 
 मॉडल पहली बार उपयोग किए जाने पर पिन किए गए संशोधन पर हगिंग फेस से प्राप्त किए जाते हैं, फिर आपके कैश से लोड होते हैं: [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) (`--backend eg2`) या [SigLIP2 so400m](https://huggingface.co/google/siglip2-so400m-patch14-384) (`--backend siglip2`)। डाउनलोड को रोकने के लिए `HF_HUB_OFFLINE=1` सेट करें। प्लेन-साइट ड्राफ्टर हमेशा ऑफ़लाइन होता है: यह कभी भी डाउनलोड नहीं करता है।
@@ -107,7 +107,7 @@ project/
 
 ## स्थिति
 
-**v0.1.1, एक सार्वजनिक प्रोटोटाइप।** कोड ऑफ़लाइन परीक्षण किया गया है (145 परीक्षण, 96% लाइन कवरेज, मॉडल लाइब्रेरी के लिए छोटे स्टैंड-इन के साथ), लेकिन इसे अभी तक वास्तविक डेटा पर कैलिब्रेट नहीं किया गया है: लगभग-डुप्लिकेट और सिमेंटिक थ्रेसहोल्ड शुरुआती बिंदु हैं। 1.0 से पहले कमांड लाइन में बदलाव की अपेक्षा करें।
+**v0.1.2, एक सार्वजनिक प्रोटोटाइप।** कोड ऑफ़लाइन परीक्षण किया गया है (152 परीक्षण, 96% लाइन कवरेज, मॉडल लाइब्रेरी के लिए छोटे स्टैंड-इन के साथ), लेकिन इसे अभी तक वास्तविक डेटा पर कैलिब्रेट नहीं किया गया है: लगभग-डुप्लिकेट और सिमेंटिक थ्रेसहोल्ड शुरुआती बिंदु हैं। 1.0 से पहले कमांड लाइन में बदलाव की अपेक्षा करें।
 
 डिजाइन रिकॉर्ड, इसके शोध का आधार और इसकी समीक्षा का इतिहास स्टूडियो की शोध लाइब्रेरी में उपलब्ध है: [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk)।
 

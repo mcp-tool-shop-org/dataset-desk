@@ -52,7 +52,7 @@ Les enregistrements signalés sont envoyés à `description-review.jsonl` et à 
 ## Installation
 
 ```bash
-pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
+pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.2"
 ```
 
 Cela donne la **version allégée** : uniquement numpy et Pillow, pas de torch. Les vérifications de doublons, le canal d’apparence, la validation des descriptions et le rapport fonctionnent tous dans cette version (`--backend none`).
@@ -60,7 +60,7 @@ Cela donne la **version allégée** : uniquement numpy et Pillow, pas de torch.
 Pour l’index d’intégration (recherche, couverture, doublons sémantiques, vérification de l’adéquation de la description), ajoutez les bibliothèques de modèle :
 
 ```bash
-pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
+pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.2"
 ```
 
 Les modèles sont récupérés sur Hugging Face aux révisions fixées la première fois qu’ils sont utilisés, puis chargés à partir de votre cache : [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) (`--backend eg2`) ou [SigLIP2 so400m](https://huggingface.co/google/siglip2-so400m-patch14-384) (`--backend siglip2`). Définissez `HF_HUB_OFFLINE=1` pour interdire les téléchargements. Le rédacteur plain-sight est toujours hors ligne : il ne télécharge jamais.
@@ -107,7 +107,7 @@ Signalez une vulnérabilité comme décrit dans [SECURITY.md](SECURITY.md).
 
 ## État
 
-**v0.1.1, un prototype public.** Le code est testé hors ligne (145 tests, 96 % de couverture des lignes, avec de petits éléments de substitution pour les bibliothèques de modèle), mais il n’a pas encore été calibré sur des données réelles : les seuils de quasi-doublons et de doublons sémantiques sont des points de départ. Attendez-vous à ce que la ligne de commande change avant la version 1.0.
+**v0.1.2, un prototype public.** Le code est testé hors ligne (152 tests, 96 % de couverture des lignes, avec de petits éléments de substitution pour les bibliothèques de modèle), mais il n’a pas encore été calibré sur des données réelles : les seuils de quasi-doublons et de doublons sémantiques sont des points de départ. Attendez-vous à ce que la ligne de commande change avant la version 1.0.
 
 Les documents de conception, les données de recherche et l’historique des révisions sont conservés dans la bibliothèque de recherche du studio : [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).
 

@@ -19,7 +19,7 @@
   "changes": {
     "fileCounts": {
       "added": 0,
-      "changed": 18,
+      "changed": 22,
       "moved": 0,
       "parts": 4,
       "removed": 0
@@ -27,13 +27,13 @@
     "items": [
       {
         "kind": "counts",
-        "sentence": "Nothing structural changed since 2026-10-15; 18 files changed content.",
+        "sentence": "Nothing structural changed since 2026-10-15; 22 files changed content.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "1f622476982c8e582703452756aec8f7fb92d9b2",
-      "generatedAt": "2026-10-15T22:54:35.483Z"
+      "commit": "ae916ec41378596eac95e9a64ecc8d8424b97db6",
+      "generatedAt": "2026-10-15T23:11:28.742Z"
     },
     "unchanged": true
   },
@@ -42,7 +42,7 @@
     "Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "ae916ec41378596eac95e9a64ecc8d8424b97db6",
+  "commit": "44b0fdb3a79a63a4f1b76a00d6064c7128f2cfe7",
   "defaultBranch": "main",
   "derived": "5 parts, mostly Python (11 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 3 doors; the busiest is CI, which reaches 3 parts. It deploys a site to GitHub Pages. People run dataset-desk.",
   "doors": [
@@ -154,7 +154,7 @@
   "edges": [],
   "engine": "1.24.0",
   "generated": [],
-  "generatedAt": "2026-10-15T23:11:28.742Z",
+  "generatedAt": "2026-10-15T23:30:07.819Z",
   "limits": [
     "1 read uses a path built at run time and is not named here.",
     "5 writes and 13 reads go to a path their caller passes, not to this repository.",

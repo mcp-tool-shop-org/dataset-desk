@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dataset-desk"
-version = "0.1.1"
+version = "0.1.2"
 description = "Make and review visual datasets: an image-text index for duplicates, search, outliers and coverage, and a model-free gate for image descriptions."
 readme = "README.md"
 license = "MIT"
