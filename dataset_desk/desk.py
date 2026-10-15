@@ -1052,8 +1052,7 @@ def coverage(items: list[Item], img: np.ndarray, subjects: list[str], qv: np.nda
 # ---- the report ------------------------------------------------------------------------------------------------
 
 def _link(project: str, report_dir: str, it: Item) -> str:
-    rel = os.path.relpath(os.path.join(project, it.paths[0]), report_dir).replace("\\", "/")
-    return f"[{it.paths[0]}]({rel.replace(' ', '%20')})"
+    return f"[{it.paths[0]}]({description_gate.link_target(os.path.join(project, it.paths[0]), report_dir)})"
 
 
 def _status_label(it: Item) -> str:
@@ -1066,7 +1065,7 @@ def _status_label(it: Item) -> str:
 
 def report(project: str, out: str, items: list[Item], img: np.ndarray, txt: dict, meta: dict,
            cov: list[dict] | None = None, images_only: bool = False,
-           allow_multimodal_pool: bool = False, drafter=None) -> str:
+           allow_multimodal_pool: bool = False, drafter=None, token_counter=None) -> str:
     eff_images_only = bool(images_only or meta.get("images_only") or meta.get("backend") == "none")
     check_multimodal_pool(project, meta.get("backend", "eg2"), images_only=eff_images_only,
                           allow_multimodal_pool=allow_multimodal_pool)
@@ -1077,11 +1076,11 @@ def report(project: str, out: str, items: list[Item], img: np.ndarray, txt: dict
     c = captions(items, img, txt) if (has_vecs and not eff_images_only) else {"described": 0}
     raw_recs = description_gate.load_project_records(project)
     if raw_recs:
-        desc_audit = description_gate.audit_records(raw_recs)
+        desc_audit = description_gate.audit_records(raw_recs, token_counter=token_counter)
     else:
         synth = [{"id": it.record.get("id") or it.paths[0], "asset_path": it.paths[0], **it.record}
                  for it in items if it.record and it.record.get("recorded")]
-        desc_audit = description_gate.audit_records(synth)
+        desc_audit = description_gate.audit_records(synth, token_counter=token_counter)
     if drafter is not None:
         description_gate.draft_flagged_records(project, desc_audit, drafter)
     dhashes = {p: it.dhash for it in items for p in it.paths if it.dhash}
@@ -1202,6 +1201,18 @@ def lower_priority() -> None:
         os.nice(10)
 
 
+def _token_counter():
+    """The gate's SigLIP2 token counter over the cached tokenizer, loaded once, offline. A missing tokenizer is a
+    structured error, not a crash."""
+    try:
+        tok = description_gate.load_siglip2_tokenizer()
+    except (ImportError, OSError, ValueError) as err:
+        raise DeskError("DEP_TOKENIZER_MISSING",
+                        f"--count-tokens needs the SigLIP2 tokenizer ({backends.SIGLIP2_REPO} at "
+                        f"{backends.SIGLIP2_REVISION[:7]}) in the local Hugging Face cache", cause=err) from err
+    return lambda texts: description_gate.siglip2_token_counts(texts, tokenizer=tok)
+
+
 def main(argv: list[str] | None = None, make=backends.make) -> int:
     ap = argparse.ArgumentParser(
         prog="dataset-desk", description=__doc__.split("\n\n")[0],
@@ -1224,6 +1235,9 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
     ap.add_argument("--grant", help="a GPU grant id from whoever schedules the card; required for any device but cpu")
     ap.add_argument("--limit", type=int, help="index only the first N unique images (a smoke test)")
     ap.add_argument("--strict", action="store_true", help="halt immediately on an unreadable image file")
+    ap.add_argument("--count-tokens", action="store_true",
+                    help="report: run the gate's 64-token test with the cached SigLIP2 tokenizer (offline; needs the "
+                         "models extra); without it, records that pass the other tests stay 'unchecked'")
     ap.add_argument("--images-only", action="store_true",
                     help="index/report images and model-free gates only; do not embed descriptions")
     ap.add_argument("--allow-multimodal-pool", action="store_true",
@@ -1297,7 +1311,8 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         cov = coverage(items, img, subjects, emb.texts(subjects, "query")) if (subjects and a.backend != "none") else None
         drafter = backends.make_drafter(a.draft, device=a.device, threads=a.threads, grant=a.grant)
         print(report(project, out, items, img, txt, meta, cov,
-                     images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool, drafter=drafter))
+                     images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool, drafter=drafter,
+                     token_counter=_token_counter() if a.count_tokens else None))
     return 0
 
 

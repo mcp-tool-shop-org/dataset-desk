@@ -33,6 +33,7 @@ python -m dataset_desk ...        same as dataset-desk
 | `--grant ID` | | required for any device but `cpu` |
 | `--limit N` | | `index`: only the first N unique images |
 | `--strict` | off | stop on the first unreadable image |
+| `--count-tokens` | off | `report`: run the gate's 64-token test with the cached SigLIP2 tokenizer, offline |
 | `--images-only` | off | embed images only; skip descriptions |
 | `--allow-multimodal-pool` | off | allow description embeddings and model-based checks on locked benchmark projects |
 | `--draft` | `none` | `report`: draft flagged descriptions with `plain-sight` (alias `florence2`) or `fake` |
@@ -81,6 +82,7 @@ hint: run `dataset-desk index` with the same --project, --backend and --out firs
 | `PERM_OUT_INSIDE_PROJECT` | `--out` is inside `--project` | 1 |
 | `PERM_GPU_NEEDS_GRANT` | a device other than `cpu` without `--grant` | 1 |
 | `PERM_LOCKED_POOL` | description embeddings or a model-based check on a locked benchmark project | 1 |
+| `DEP_TOKENIZER_MISSING` | `--count-tokens` without the SigLIP2 tokenizer in the local cache | 1 |
 | `STATE_NO_INDEX` | a command needs a cache that `index` hasn't written | 1 |
 | `RUNTIME_UNEXPECTED` | anything else; rerun with `--debug` | 2 |
 

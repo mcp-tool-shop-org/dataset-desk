@@ -49,8 +49,9 @@ len(tokenizer(s.lower(), padding=False, truncation=False)["input_ids"])
 on the `google/siglip2-so400m-patch14-384` tokenizer at a pinned revision, special tokens included. Counting through the
 processor's defaults would pad and truncate to 64, so a description could never fail.
 
-The tokenizer loads lazily. When it isn't available, the record is **unchecked**, and an unchecked record is never
-marked as passing.
+From the command line, pass `report --count-tokens` to run it: the tokenizer loads from the local cache, offline, and
+is needed only then. Without the flag, or as a library call with no `token_counter`, a record that passes every other
+test is **unchecked**, and an unchecked record is never marked as passing.
 
 ## Reading `description-review.jsonl`
 

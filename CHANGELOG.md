@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-15
+
+### Added
+
+- `report --count-tokens` runs the gate's 64-token test with the cached SigLIP2 tokenizer, offline. Before it, the
+  command line never passed a token counter, so a record that passed every other test stayed `unchecked`.
+- Error code `DEP_TOKENIZER_MISSING` (exit 1) when `--count-tokens` can't find the tokenizer.
+
+### Fixed
+
+- `report` no longer stops when `--out` and the project are on different Windows drives: links fall back to
+  `file://` URIs where a relative path can't cross drives.
+- The tokenizer load no longer logs the bos/eos config warning, like the model load in 0.1.1.
+
+### Changed
+
+- 152 offline tests; line coverage 96%, CI floor 90.
+
 ## [0.1.1] - 2026-10-15
 
 ### Fixed

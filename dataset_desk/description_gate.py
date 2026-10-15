@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pathlib
 import re
 from typing import Callable
 
@@ -153,6 +154,17 @@ def contains_word_sequence(haystack: list[str], needle: list[str]) -> bool:
     return any(haystack[i:i + n] == needle for i in range(len(haystack) - n + 1))
 
 
+def link_target(path: str, start: str) -> str:
+    """A Markdown link target for `path`, seen from a file in `start`: relative when it can be, else a file:// URI.
+
+    On Windows a relative path can't cross drives (a project on E: and --out on C:), so the link falls back to the
+    absolute file URI."""
+    try:
+        return os.path.relpath(path, start).replace("\\", "/").replace(" ", "%20")
+    except ValueError:
+        return pathlib.Path(os.path.abspath(path)).as_uri()
+
+
 def wraps_canon_subject(description: str | None, canon_subject: str | None) -> bool:
     """Return True if description contains canon.subject as a contiguous run of words (4+ words)."""
     cw = words(canon_subject)
@@ -195,11 +207,12 @@ def load_siglip2_tokenizer():
     from transformers import AutoTokenizer
     from dataset_desk import backends
 
-    return AutoTokenizer.from_pretrained(
-        backends.SIGLIP2_REPO,
-        revision=backends.SIGLIP2_REVISION,
-        local_files_only=True,
-    )
+    with backends.transformers_warnings_off():  # the same harmless bos/eos config warning as the model's
+        return AutoTokenizer.from_pretrained(
+            backends.SIGLIP2_REPO,
+            revision=backends.SIGLIP2_REVISION,
+            local_files_only=True,
+        )
 
 
 def siglip2_token_count(s: str, tokenizer=None) -> int:
@@ -774,8 +787,7 @@ def write_review_files(
     def _fmt_link(asset: str) -> str:
         if not asset:
             return "(no image path)"
-        rel = os.path.relpath(os.path.join(project, asset), out_dir).replace("\\", "/")
-        return f"[{asset}]({rel.replace(' ', '%20')})"
+        return f"[{asset}]({link_target(os.path.join(project, asset), out_dir)})"
 
     ws_path = os.path.join(out_dir, "description-worksheet.md")
     lines = [

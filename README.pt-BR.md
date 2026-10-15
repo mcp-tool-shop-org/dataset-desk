@@ -52,7 +52,7 @@ O **canal de aparência** é composto por 30 números por imagem (paleta, tom e 
 ## Instalação
 
 ```bash
-pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
+pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.2"
 ```
 
 Isso fornece a **versão lite**: apenas numpy e Pillow, sem torch. As verificações de duplicatas, o canal de aparência, o filtro de descrição e o relatório funcionam nela (`--backend none`).
@@ -60,7 +60,7 @@ Isso fornece a **versão lite**: apenas numpy e Pillow, sem torch. As verificaç
 Para o índice de incorporação (pesquisa, cobertura, duplicatas semânticas, a verificação de ajuste da descrição), adicione as bibliotecas do modelo:
 
 ```bash
-pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
+pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.2"
 ```
 
 Os modelos são obtidos do Hugging Face em revisões fixas na primeira vez que são usados e, em seguida, são carregados do seu cache: [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) (`--backend eg2`) ou [SigLIP2 so400m](https://huggingface.co/google/siglip2-so400m-patch14-384) (`--backend siglip2`). Defina `HF_HUB_OFFLINE=1` para proibir downloads. O rascunhista plain-sight é sempre offline: ele nunca faz download.
@@ -107,7 +107,7 @@ Relate uma vulnerabilidade conforme descrito em [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.1.1, um protótipo público.** O código é testado offline (145 testes, 96% de cobertura de linha, com substituições pequenas para as bibliotecas de modelo), mas ainda não foi calibrado em dados reais: os limites de quase duplicatas e semânticas são pontos de partida. Espere que a linha de comando mude antes da versão 1.0.
+**v0.1.2, um protótipo público.** O código é testado offline (152 testes, 96% de cobertura de linha, com substituições pequenas para as bibliotecas de modelo), mas ainda não foi calibrado em dados reais: os limites de quase duplicatas e semânticas são pontos de partida. Espere que a linha de comando mude antes da versão 1.0.
 
 O registo de design, a sua base de investigação e o histórico de revisões encontram-se na biblioteca de investigação do estúdio: [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).
 

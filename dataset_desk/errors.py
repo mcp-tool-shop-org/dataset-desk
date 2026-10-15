@@ -20,6 +20,7 @@ CODES = {
     "PERM_GPU_NEEDS_GRANT": "pass --grant <id> from whoever schedules the GPU, or run on --device cpu",
     "PERM_LOCKED_POOL": "pass --images-only (or --backend none), or --allow-multimodal-pool once the benchmark's "
                         "counted run is finished",
+    "DEP_TOKENIZER_MISSING": "install the models extra and cache the tokenizer once, or run without --count-tokens",
     "STATE_NO_INDEX": "run `dataset-desk index` with the same --project, --backend and --out first",
     "RUNTIME_UNEXPECTED": "rerun with --debug for the stack trace, and report it if it persists",
 }
