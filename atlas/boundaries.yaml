@@ -1,0 +1,22 @@
+summary: "dataset-desk: a review desk for visual datasets — duplicates, outliers, search, and a model-free description gate."
+boundaries:
+  - name: .github
+    globs:
+      - .github/**
+    role: config
+  - name: dataset_desk
+    globs:
+      - dataset_desk/**
+    role: code
+  - name: root
+    globs:
+      - "*"
+    role: config
+  - name: site
+    globs:
+      - site/**
+    role: site
+  - name: tests
+    globs:
+      - tests/**
+    role: test
