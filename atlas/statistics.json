@@ -1,0 +1,369 @@
+{
+  "authorship": {
+    "parts": [],
+    "places": []
+  },
+  "boundaries": [
+    {
+      "breakage": {
+        "coChangesOnly": [],
+        "collapsed": false,
+        "confidence": "low",
+        "importsAndCoChanges": [],
+        "importsOnly": []
+      },
+      "cohesion": null,
+      "cohesionDropped": false,
+      "confidence": "low",
+      "highWater": null,
+      "name": ".github",
+      "qualifyingSourceCommits": 0,
+      "rebaseline": null
+    },
+    {
+      "breakage": {
+        "coChangesOnly": [],
+        "collapsed": false,
+        "confidence": "low",
+        "importsAndCoChanges": [],
+        "importsOnly": [
+          "tests"
+        ]
+      },
+      "cohesion": null,
+      "cohesionDropped": false,
+      "confidence": "low",
+      "highWater": null,
+      "name": "dataset_desk",
+      "qualifyingSourceCommits": 2,
+      "rebaseline": null
+    },
+    {
+      "breakage": {
+        "coChangesOnly": [],
+        "collapsed": false,
+        "confidence": "low",
+        "importsAndCoChanges": [],
+        "importsOnly": []
+      },
+      "cohesion": null,
+      "cohesionDropped": false,
+      "confidence": "low",
+      "highWater": null,
+      "name": "root",
+      "qualifyingSourceCommits": 0,
+      "rebaseline": null
+    },
+    {
+      "breakage": {
+        "coChangesOnly": [],
+        "collapsed": false,
+        "confidence": "low",
+        "importsAndCoChanges": [],
+        "importsOnly": []
+      },
+      "cohesion": null,
+      "cohesionDropped": false,
+      "confidence": "low",
+      "highWater": null,
+      "name": "site",
+      "qualifyingSourceCommits": 0,
+      "rebaseline": null
+    },
+    {
+      "breakage": {
+        "coChangesOnly": [],
+        "collapsed": false,
+        "confidence": "low",
+        "importsAndCoChanges": [],
+        "importsOnly": []
+      },
+      "cohesion": null,
+      "cohesionDropped": false,
+      "confidence": "low",
+      "highWater": null,
+      "name": "tests",
+      "qualifyingSourceCommits": 2,
+      "rebaseline": null
+    }
+  ],
+  "churn": {
+    "definition": "commits is how many commits in the window touch the file, including merges and commits dropped from coupling. lines is added plus deleted in those commits.",
+    "files": [
+      {
+        "commits": 1,
+        "lines": 4,
+        "path": ".gitattributes"
+      },
+      {
+        "commits": 1,
+        "lines": 82,
+        "path": ".github/workflows/ci.yml"
+      },
+      {
+        "commits": 1,
+        "lines": 50,
+        "path": ".github/workflows/pages.yml"
+      },
+      {
+        "commits": 1,
+        "lines": 16,
+        "path": ".gitignore"
+      },
+      {
+        "commits": 1,
+        "lines": 29,
+        "path": "CHANGELOG.md"
+      },
+      {
+        "commits": 1,
+        "lines": 21,
+        "path": "LICENSE"
+      },
+      {
+        "commits": 1,
+        "lines": 127,
+        "path": "README.md"
+      },
+      {
+        "commits": 1,
+        "lines": 45,
+        "path": "SCORECARD.md"
+      },
+      {
+        "commits": 1,
+        "lines": 41,
+        "path": "SECURITY.md"
+      },
+      {
+        "commits": 1,
+        "lines": 85,
+        "path": "SHIP_GATE.md"
+      },
+      {
+        "commits": 1,
+        "lines": 12,
+        "path": "codecov.yml"
+      },
+      {
+        "commits": 1,
+        "lines": 3,
+        "path": "dataset_desk/__init__.py"
+      },
+      {
+        "commits": 1,
+        "lines": 5,
+        "path": "dataset_desk/__main__.py"
+      },
+      {
+        "commits": 3,
+        "lines": 583,
+        "path": "dataset_desk/backends.py"
+      },
+      {
+        "commits": 1,
+        "lines": 821,
+        "path": "dataset_desk/description_gate.py"
+      },
+      {
+        "commits": 3,
+        "lines": 1344,
+        "path": "dataset_desk/desk.py"
+      },
+      {
+        "commits": 1,
+        "lines": 56,
+        "path": "dataset_desk/errors.py"
+      },
+      {
+        "commits": 1,
+        "lines": 212,
+        "path": "dataset_desk/stopwords.txt"
+      },
+      {
+        "commits": 2,
+        "lines": 952,
+        "path": "docs/design.md"
+      },
+      {
+        "commits": 1,
+        "lines": 55,
+        "path": "pyproject.toml"
+      },
+      {
+        "commits": 1,
+        "lines": 36,
+        "path": "site/astro.config.mjs"
+      },
+      {
+        "commits": 1,
+        "lines": 5676,
+        "path": "site/package-lock.json"
+      },
+      {
+        "commits": 1,
+        "lines": 18,
+        "path": "site/package.json"
+      },
+      {
+        "commits": 1,
+        "lines": 5,
+        "path": "site/public/favicon.svg"
+      },
+      {
+        "commits": 1,
+        "lines": 0,
+        "path": "site/src/assets/logo.png"
+      },
+      {
+        "commits": 1,
+        "lines": 7,
+        "path": "site/src/content.config.ts"
+      },
+      {
+        "commits": 1,
+        "lines": 56,
+        "path": "site/src/content/docs/handbook/architecture.md"
+      },
+      {
+        "commits": 1,
+        "lines": 67,
+        "path": "site/src/content/docs/handbook/description-gate.md"
+      },
+      {
+        "commits": 1,
+        "lines": 87,
+        "path": "site/src/content/docs/handbook/getting-started.md"
+      },
+      {
+        "commits": 1,
+        "lines": 48,
+        "path": "site/src/content/docs/handbook/index.md"
+      },
+      {
+        "commits": 1,
+        "lines": 99,
+        "path": "site/src/content/docs/handbook/reference.md"
+      },
+      {
+        "commits": 1,
+        "lines": 33,
+        "path": "site/src/content/docs/handbook/security.md"
+      },
+      {
+        "commits": 1,
+        "lines": 83,
+        "path": "site/src/content/docs/handbook/usage.md"
+      },
+      {
+        "commits": 1,
+        "lines": 35,
+        "path": "site/src/pages/index.astro"
+      },
+      {
+        "commits": 1,
+        "lines": 111,
+        "path": "site/src/site-config.ts"
+      },
+      {
+        "commits": 1,
+        "lines": 3,
+        "path": "site/src/styles/global.css"
+      },
+      {
+        "commits": 1,
+        "lines": 5,
+        "path": "site/src/styles/starlight-custom.css"
+      },
+      {
+        "commits": 1,
+        "lines": 5,
+        "path": "site/tsconfig.json"
+      },
+      {
+        "commits": 1,
+        "lines": 196,
+        "path": "tests/fakes.py"
+      },
+      {
+        "commits": 1,
+        "lines": 575,
+        "path": "tests/test_backends.py"
+      },
+      {
+        "commits": 1,
+        "lines": 306,
+        "path": "tests/test_cli.py"
+      },
+      {
+        "commits": 2,
+        "lines": 1013,
+        "path": "tests/test_desk.py"
+      },
+      {
+        "commits": 1,
+        "lines": 392,
+        "path": "tests/test_gate_edges.py"
+      },
+      {
+        "commits": 1,
+        "lines": 1763,
+        "path": "uv.lock"
+      },
+      {
+        "commits": 1,
+        "lines": 21,
+        "path": "verify.sh"
+      }
+    ]
+  },
+  "confidence": {
+    "level": "low",
+    "reason": "fewer than 30 qualifying commits in the window, and fewer than 20 source files reach 10 revisions"
+  },
+  "generatedAt": "2026-10-15T22:54:35.483Z",
+  "generatedFrom": {
+    "commit": "1f622476982c8e582703452756aec8f7fb92d9b2"
+  },
+  "pairs": [],
+  "parameters": {
+    "appliedChangesetLimit": 12.75,
+    "changeset": 50,
+    "changesetFraction": 0.25,
+    "cohesionDrop": 0.2,
+    "couplingPopulation": "source",
+    "fallenShared": 3,
+    "floor": "fallen",
+    "floorHeld": false,
+    "floorTrigger": "both",
+    "headDate": "2026-10-15T18:49:38-04:00",
+    "inScopeFiles": 51,
+    "pinnedStart": null,
+    "priorFloor": null,
+    "qualifyingCommits": 3,
+    "qualifyingMinimum": 30,
+    "revisions": 5,
+    "shared": 10,
+    "sharedFloorUsed": 3,
+    "since": "2026-04-18T22:49:38.000Z",
+    "sourceExtensions": [
+      ".js",
+      ".mjs",
+      ".cjs",
+      ".jsx",
+      ".ts",
+      ".tsx",
+      ".mts",
+      ".cts",
+      ".py",
+      ".rs",
+      ".gd"
+    ],
+    "sourceFileReach": 20,
+    "sourceFileRise": 25,
+    "sourceFilesReachingStrongFloor": 0,
+    "strength": 0.5,
+    "windowDays": 180
+  },
+  "strengthDefinition": "strength is the shared qualifying commits divided by either. either is the number of qualifying commits that touch either file."
+}
