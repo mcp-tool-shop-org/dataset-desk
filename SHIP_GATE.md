@@ -58,10 +58,10 @@ version floor, a clean wheel and sdist) are checked because CI builds and checks
 
 ## E. Identity (soft gate — does not block ship)
 
-- [ ] `[all]` Logo in README header
-- [ ] `[all]` Translations (polyglot-mcp, 8 languages)
-- [ ] `[org]` Landing page (@mcptoolshop/site-theme)
-- [ ] `[all]` GitHub repo metadata: description, homepage, topics
+- [x] `[all]` Logo in README header — brand/logos/dataset-desk/readme.png (2026-10-15)
+- [x] `[all]` Translations (polyglot-mcp, 8 languages) — English plus 7, TranslateGemma 27B, local (2026-10-15)
+- [x] `[org]` Landing page (@mcptoolshop/site-theme) — live with the Starlight handbook and Pagefind search (2026-10-15)
+- [x] `[all]` GitHub repo metadata: description, homepage, topics (2026-10-15)
 
 ---
 
