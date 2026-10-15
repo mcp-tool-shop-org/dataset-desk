@@ -39,7 +39,7 @@
       "files": [
         {
           "constantOnly": true,
-          "hash": "2671ad5cdc5e941cde7bd89ea77f6aa9ebea4afb44441c1a625a8f3b2b8f2072",
+          "hash": "c570b7175d1136f5c6fd20974853835a7b3445e7ec404777d1861142cb11cba7",
           "path": "dataset_desk/__init__.py"
         },
         {
@@ -56,126 +56,132 @@
             "enter_torch_region",
             "make",
             "make_drafter",
+            "transformers_warnings_off",
             "unit_rows"
           ],
           "failurePaths": [
             {
               "in": "_argv_threads",
               "kind": "except",
-              "line": 23
+              "line": 24
             },
             {
               "in": "_argv_threads",
               "kind": "except",
-              "line": 28
+              "line": 29
             },
             {
               "in": "enter_torch_region",
               "kind": "except",
-              "line": 86
+              "line": 87
             },
             {
               "in": "unit_rows",
               "kind": "raise",
-              "line": 96
+              "line": 97
             },
             {
               "in": "check_device",
               "kind": "raise",
-              "line": 103
+              "line": 104
             },
             {
               "in": "texts",
               "kind": "raise",
-              "line": 139
+              "line": 140
             },
             {
               "in": "multimodal",
               "kind": "raise",
-              "line": 149
+              "line": 150
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 176
+              "line": 177
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 178
+              "line": 179
             },
             {
               "in": "__init__",
               "kind": "raise",
-              "line": 180
+              "line": 181
             },
             {
               "in": "texts",
               "kind": "raise",
-              "line": 247
+              "line": 248
             },
             {
               "in": "multimodal",
               "kind": "raise",
-              "line": 254
+              "line": 255
+            },
+            {
+              "in": "transformers_warnings_off",
+              "kind": "except",
+              "line": 285
             },
             {
               "in": "draft",
               "kind": "raise",
-              "line": 356
+              "line": 377
             },
             {
               "in": "draft",
               "kind": "except",
-              "line": 369
+              "line": 390
             },
             {
               "in": "_ensure_model",
               "kind": "except",
-              "line": 422
+              "line": 443
             },
             {
               "in": "_ensure_model",
               "kind": "except",
-              "line": 436
+              "line": 457
             },
             {
               "in": "_ensure_model",
               "kind": "raise",
-              "line": 437
+              "line": 458
             },
             {
               "in": "_ensure_model",
               "kind": "except",
-              "line": 473
+              "line": 494
             },
             {
               "in": "_ensure_model",
               "kind": "except",
-              "line": 482
+              "line": 503
             },
             {
               "in": "_ensure_model",
               "kind": "raise",
-              "line": 486
+              "line": 507
             },
             {
               "in": "draft",
               "kind": "raise",
-              "line": 511
+              "line": 532
             },
             {
               "in": "make_drafter",
               "kind": "raise",
-              "line": 550
+              "line": 571
             },
             {
               "in": "make",
               "kind": "raise",
-              "line": 564
+              "line": 585
             }
           ],
-          "hash": "f0f034154ada0cf9e320578b8f83a7ade58f8410cd7784bc36ba92976689f412",
+          "hash": "6e551c2a1419c9d278753b539a19a9643857157e6ba2a04e72e93af05f944e42",
           "importsFiles": [
             "dataset_desk/errors.py"
           ],
@@ -1091,7 +1097,7 @@
           "path": ".gitignore"
         },
         {
-          "hash": "d97b3566f5d8c815215af9d02697279bef79b18b8a0c7e8153fa836205e244c3",
+          "hash": "29eac1171290bff44aff059cb04c8d13988ad9b0e24ae848eed2b7311e038d47",
           "path": "CHANGELOG.md"
         },
         {
@@ -1099,35 +1105,35 @@
           "path": "LICENSE"
         },
         {
-          "hash": "be2ff29323f5604cd8653e784c95d350d0c2580f1cffc7da1d527ecec536af5a",
+          "hash": "ee880ea9615de30a57a2c35f4e0f9067823dc14e1e231d2eb38d6f8f9bccc75e",
           "path": "README.es.md"
         },
         {
-          "hash": "a35f9bac3cf11fb43084c99567ad43d991d70d6d8acaee1de5cced327530ad57",
+          "hash": "4b41e2823641387b0dbe0713224eaa00af956e56cb61dab024a18b2766df3400",
           "path": "README.fr.md"
         },
         {
-          "hash": "8c0ac2e95706fb513922be245aefd58c502db363ce53f866d443143b2bf45e0d",
+          "hash": "4339e04ad9d5e69308ffb139a2b21701e4e388ed56e57fc896bf0d9449c97d63",
           "path": "README.hi.md"
         },
         {
-          "hash": "801ff158915bcc2f76f203e9fd0ffef154ce643f35ec4f28188ea29fefb59ecf",
+          "hash": "1b32999e234f906292744f751942b44da9771bcb66c9d3e8aa6068d2156c37e0",
           "path": "README.it.md"
         },
         {
-          "hash": "628d2471d31a3f9b51c91f047741ac5e1a9d007d6f41445adea68b6ddfd034a3",
+          "hash": "5dd7f9edf2e098f55c113e111e40d9cea7acc3bf677e6aae433dbf0bf1708dbc",
           "path": "README.ja.md"
         },
         {
-          "hash": "170d74027a77680f88788450645fd429929664af92daf134587f402764c41d3b",
+          "hash": "c28b3d8979b30b1581c30c248f7963c0d43367c75e77746aa2852c07d140d721",
           "path": "README.md"
         },
         {
-          "hash": "aa46dfdc4f62bf9dfdc69b42e48b52d015f6a50d9afd1ff6277e9f4504200b66",
+          "hash": "0cc46c94ee9dcc4e4e8ae30124116eebaab51a6fe043b3527722819ad8248992",
           "path": "README.pt-BR.md"
         },
         {
-          "hash": "9bf761297018abaacd908f8ea43dc4e4d0cd66a62d6482c0ad604cd7ebb3daeb",
+          "hash": "db4f45c1d77f74eea316cb6d521d3fc865439647b36a54192dc79883d61a161e",
           "path": "README.zh.md"
         },
         {
@@ -1139,7 +1145,7 @@
           "path": "SECURITY.md"
         },
         {
-          "hash": "68bb76d235678761b79656642b899a24e2957f28ca56c680b6dfabe16488bed2",
+          "hash": "046923c19e264e155cedddd15cf179a626dbb9249eda2e62ee8d755dfa07a35e",
           "path": "SHIP_GATE.md"
         },
         {
@@ -1147,11 +1153,11 @@
           "path": "codecov.yml"
         },
         {
-          "hash": "909e210d07dc08b8624859de849ed920f073e9af2f597e23ef13707bb18639c3",
+          "hash": "09666304844a7925836cf87d676c496f1cdb6582a1dad83e485c8803e898d2cd",
           "path": "pyproject.toml"
         },
         {
-          "hash": "8e094dbbfbbfbdf1893f9c1ef7d5449342e4557de2e23e9f4bb986d3465f1166",
+          "hash": "2ff8fc95c5cc7a9291acf4a5a374ed896b7858945738e6218f4c7202fb55c4cd",
           "path": "uv.lock"
         },
         {
@@ -1211,11 +1217,11 @@
           "path": "site/src/content/docs/handbook/description-gate.md"
         },
         {
-          "hash": "3ab786192124806011256b473450ad36368a2f8d0750266474b3a65a30d4d464",
+          "hash": "cb3048661be3b955b6c7cbca6ac74eda2f22cb69be0aae9301c22e9dd362b726",
           "path": "site/src/content/docs/handbook/getting-started.md"
         },
         {
-          "hash": "07c12161b2386387c50069be5c78812727852522c75e73bfc95f52b9f2f5496a",
+          "hash": "2c8cd11940814c68ae6f0ed111e5ed2c1de7feb93f3caa6f97d840a4065510a0",
           "path": "site/src/content/docs/handbook/index.md"
         },
         {
@@ -1244,7 +1250,7 @@
         },
         {
           "constantOnly": true,
-          "hash": "816c6fffd8435930e516e1fb1bd55e2d301d58c42382de18e066667fb81c9ce0",
+          "hash": "12d6d6c76cb81e355723d4efbf99372ce15267a0a2941ea28ab37bad20b8345f",
           "path": "site/src/site-config.ts"
         },
         {
@@ -1293,7 +1299,7 @@
           "exports": [
             "png"
           ],
-          "hash": "f5b6a3448275441b8f842c1f9ff068a1996d0cd5b206510d040bfe474e8f6b48",
+          "hash": "85e1623c6809e3b515b98c8ae2d6c34b76f9ea723bccd91e1a70061f91804fec",
           "importOrder": [
             "tests/fakes.py",
             "dataset_desk/__init__.py",
@@ -1788,7 +1794,7 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "1f622476982c8e582703452756aec8f7fb92d9b2",
+    "commit": "ae916ec41378596eac95e9a64ecc8d8424b97db6",
     "tracked": 51
   },
   "landings": [

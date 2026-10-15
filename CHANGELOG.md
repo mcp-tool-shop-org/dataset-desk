@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-15
+
+### Fixed
+
+- Model loads pass `dtype` instead of the deprecated `torch_dtype` (SigLIP2, and EmbeddingGemma 2's `model_kwargs`).
+- SigLIP2 loads no longer log transformers' bos/eos token-id warning. Its published config sets those ids outside
+  the text vocabulary, and the desk never uses them. Errors still show.
+
+### Changed
+
+- The `models` extra now needs `transformers>=4.56` (the first with `dtype`) and `sentence-transformers>=5`.
+- 145 offline tests; line coverage 96%, CI floor 90.
+
 ## [0.1.0] - 2026-10-15
 
 The first public release: a prototype, tested offline and not yet calibrated on real data.

@@ -7,6 +7,7 @@ the desk records in its cache. The 'none' backend needs no torch and powers the 
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 
@@ -209,7 +210,7 @@ class EG2Embedder:
             revision=EG2_REVISION,
             device=self.device,
             config_kwargs={"audio_config": None},
-            model_kwargs={"torch_dtype": torch_dtype},
+            model_kwargs={"dtype": torch_dtype},
             processor_kwargs=dict(self.processor_kwargs),
         )
         if len(self.model) > 0:
@@ -273,6 +274,25 @@ class EG2Embedder:
         return self._encode(payloads)
 
 
+@contextlib.contextmanager
+def transformers_warnings_off():
+    """Hold transformers' log at error level while a model loads, then restore it.
+
+    SigLIP2's published config sets bos/eos token ids outside its text vocabulary, and transformers logs a warning on
+    every load. The desk never uses those ids, so the warning only adds noise. Errors still show."""
+    try:
+        from transformers.utils import logging as tf_logging
+    except ImportError:
+        yield
+        return
+    previous = tf_logging.get_verbosity()
+    tf_logging.set_verbosity_error()
+    try:
+        yield
+    finally:
+        tf_logging.set_verbosity(previous)
+
+
 class SigLIP2Embedder:
     """SigLIP2 so400m/384, the model ai-eyes runs, with its trained padding of 64 text tokens."""
 
@@ -293,9 +313,10 @@ class SigLIP2Embedder:
         from transformers import AutoModel, AutoProcessor
 
         self.torch = torch
-        self.processor = AutoProcessor.from_pretrained(SIGLIP2_REPO, revision=SIGLIP2_REVISION)
-        self.model = AutoModel.from_pretrained(SIGLIP2_REPO, revision=SIGLIP2_REVISION,
-                                               torch_dtype=torch.float32).to(self.device).eval()
+        with transformers_warnings_off():
+            self.processor = AutoProcessor.from_pretrained(SIGLIP2_REPO, revision=SIGLIP2_REVISION)
+            self.model = AutoModel.from_pretrained(SIGLIP2_REPO, revision=SIGLIP2_REVISION,
+                                                   dtype=torch.float32).to(self.device).eval()
         self.params = sum(p.numel() for p in self.model.parameters())
 
     def _pooled(self, out) -> np.ndarray:

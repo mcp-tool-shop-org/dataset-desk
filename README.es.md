@@ -52,7 +52,7 @@ Los registros marcados se envían a `description-review.jsonl` y a una **hoja de
 ## Instalación
 
 ```bash
-pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.0"
+pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
 ```
 
 Eso proporciona la **capa ligera**: solo numpy y Pillow, sin torch. Las comprobaciones de duplicados, el canal de apariencia, la puerta de enlace de la descripción y el informe funcionan en ella (`--backend none`).
@@ -60,7 +60,7 @@ Eso proporciona la **capa ligera**: solo numpy y Pillow, sin torch. Las comproba
 Para el índice de incrustación (búsqueda, cobertura, duplicados semánticos, la comprobación de ajuste de la descripción), agregue las bibliotecas del modelo:
 
 ```bash
-pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.0"
+pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
 ```
 
 Los modelos se obtienen de Hugging Face en las revisiones fijadas la primera vez que se utilizan y, a continuación, se cargan desde su caché: [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) (`--backend eg2`) o [SigLIP2 so400m](https://huggingface.co/google/siglip2-so400m-patch14-384) (`--backend siglip2`). Establezca `HF_HUB_OFFLINE=1` para prohibir las descargas. El redactor de plain-sight siempre está desconectado: nunca descarga.
@@ -107,7 +107,7 @@ Informe una vulnerabilidad según lo descrito en [SECURITY.md](SECURITY.md).
 
 ## Estado
 
-**v0.1.0, un prototipo público.** El código se prueba sin conexión (142 pruebas, 96 % de cobertura de líneas, con pequeños sustitutos para las bibliotecas del modelo), pero aún no se ha calibrado con datos reales: los umbrales de duplicados cercanos y semánticos son puntos de partida. Espere que la línea de comandos cambie antes de la versión 1.0.
+**v0.1.1, un prototipo público.** El código se prueba sin conexión (145 pruebas, 96 % de cobertura de líneas, con pequeños sustitutos para las bibliotecas del modelo), pero aún no se ha calibrado con datos reales: los umbrales de duplicados cercanos y semánticos son puntos de partida. Espere que la línea de comandos cambie antes de la versión 1.0.
 
 El registro de diseño, la base de investigación y el historial de revisiones se encuentran en la biblioteca de investigación del estudio: [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).
 

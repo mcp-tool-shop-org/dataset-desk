@@ -11,7 +11,7 @@ export const config: SiteConfig = {
     'MIT Licensed — built by <a href="https://mcp-tool-shop.github.io/" style="color:var(--color-muted);text-decoration:underline">MCP Tool Shop</a>',
 
   hero: {
-    badge: 'v0.1.0 · prototype',
+    badge: 'v0.1.1 · prototype',
     headline: 'A desk for your dataset,',
     headlineAccent: 'before it trains anything.',
     description:
@@ -19,7 +19,7 @@ export const config: SiteConfig = {
     primaryCta: { href: '#usage', label: 'Get started' },
     secondaryCta: { href: 'handbook/', label: 'Read the Handbook' },
     previews: [
-      { label: 'Install', code: 'pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.0"' },
+      { label: 'Install', code: 'pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"' },
       { label: 'Index', code: 'dataset-desk index --project art/ --backend none --out desk-out/art' },
       { label: 'Report', code: 'dataset-desk report --project art/ --backend none --out desk-out/art' },
     ],
@@ -70,7 +70,7 @@ export const config: SiteConfig = {
         },
         {
           title: 'With an embedding index',
-          code: 'pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.0"\ndataset-desk index  --project art/ --backend siglip2 --out desk-out/art\ndataset-desk search --project art/ --backend siglip2 --out desk-out/art \\\n  --text "a squat bog creature"',
+          code: 'pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"\ndataset-desk index  --project art/ --backend siglip2 --out desk-out/art\ndataset-desk search --project art/ --backend siglip2 --out desk-out/art \\\n  --text "a squat bog creature"',
         },
         {
           title: 'Duplicates as JSON',

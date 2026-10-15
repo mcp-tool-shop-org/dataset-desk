@@ -52,7 +52,7 @@ dataset-deskは、プロジェクトフォルダ内でこれら2つを検出し�
 ## インストール
 
 ```bash
-pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.0"
+pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
 ```
 
 これにより、**ライトティア**が提供されます。numpyとPillowのみを使用し、torchは使用しません。重複チェック、ルックチャネル、説明ゲート、およびレポートはすべて、この環境で動作します（`--backend none`）。
@@ -60,7 +60,7 @@ pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-des
 埋め込みインデックス（検索、カバレッジ、意味的な重複、説明の適合性チェック）を使用するには、モデルライブラリを追加します。
 
 ```bash
-pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.0"
+pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
 ```
 
 モデルは、最初にそれらが使用されるときに、Hugging Faceから固定されたリビジョンで取得され、その後はキャッシュからロードされます。例：[EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2)（`--backend eg2`）または[SigLIP2 so400m](https://huggingface.co/google/siglip2-so400m-patch14-384)（`--backend siglip2`）。ダウンロードを禁止するには、`HF_HUB_OFFLINE=1`を設定します。plain-sightドラフターは常にオフラインで動作します。ダウンロードは行われません。
@@ -107,7 +107,7 @@ project/
 
 ## ステータス
 
-**v0.1.0、パブリックプロトタイプ。** コードはオフラインでテストされています（142個のテスト、96％の行カバレッジ。モデルライブラリの小さな代替品を使用）。ただし、まだ実際のデータで調整されていません。ほぼ同一のコピーと意味的な重複のしきい値は、開始点です。1.0になる前に、コマンドラインが変更される可能性があります。
+**v0.1.1、パブリックプロトタイプ。** コードはオフラインでテストされています（145個のテスト、96％の行カバレッジ。モデルライブラリの小さな代替品を使用）。ただし、まだ実際のデータで調整されていません。ほぼ同一のコピーと意味的な重複のしきい値は、開始点です。1.0になる前に、コマンドラインが変更される可能性があります。
 
 デザイン記録、その研究の根拠、およびレビュー履歴は、スタジオの研究ライブラリに保存されています：[rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk)。
 

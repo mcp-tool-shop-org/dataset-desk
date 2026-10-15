@@ -45,7 +45,7 @@ version floor, a clean wheel and sdist) are checked because CI builds and checks
 ## D. Shipping Hygiene
 
 - [x] `[all]` `verify` script exists (test + build + smoke in one command) — `verify.sh`: lint, tests, lite-mode smoke; CI adds build + twine check + install smoke (2026-10-15)
-- [x] `[all]` Version in manifest matches git tag — executed by `npx @mcptoolshop/shipcheck manifest`; 0.1.0 in `pyproject.toml` and `dataset_desk.__version__`, tag `v0.1.0` (2026-10-15)
+- [x] `[all]` Version in manifest matches git tag — executed by `npx @mcptoolshop/shipcheck manifest`; 0.1.1 in `pyproject.toml` and `dataset_desk.__version__`, tag `v0.1.1` (2026-10-15)
 - [x] `[all]` Dependency scanning runs in CI (ecosystem-appropriate) — executed by `npx @mcptoolshop/shipcheck ci` (pip-audit) (2026-10-15)
 - [x] `[all]` No known high/critical vulnerabilities in any dependency tree, and Dependabot alerts are enabled — `pip-audit --strict .` reports none; Dependabot alerts enabled on the repo (2026-10-15)
 - [ ] `[all]` SKIP: no automated update bot, by the org rule (Dependabot PRs only on request); pip-audit in CI and Dependabot alerts cover the security outcome

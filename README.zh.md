@@ -52,7 +52,7 @@ dataset-desk 会在项目文件夹中找到这些问题，而无需更改文件�
 ## 安装
 
 ```bash
-pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.0"
+pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
 ```
 
 这提供了**精简版本**：仅使用 numpy 和 Pillow，不使用 torch。重复检查、外观通道、描述筛选器和报告都可以在其中工作（`--backend none`）。
@@ -60,7 +60,7 @@ pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-des
 对于嵌入索引（搜索、覆盖率、语义重复项、描述拟合检查），添加模型库：
 
 ```bash
-pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.0"
+pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.1"
 ```
 
 模型会在第一次使用时从 Hugging Face 获取固定版本的权重，然后从你的缓存中加载：[EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2)（`--backend eg2`）或 [SigLIP2 so400m](https://huggingface.co/google/siglip2-so400m-patch14-384)（`--backend siglip2`）。将 `HF_HUB_OFFLINE=1` 设置为禁止下载。plain-sight 草稿编写器始终处于离线状态：它绝不会下载。
@@ -107,7 +107,7 @@ project/
 
 ## 状态
 
-**v0.1.0，一个公共原型。**该代码已在离线环境中进行了测试（142 个测试，96% 的行覆盖率，并使用小型替代模型库），但尚未在真实数据上进行校准：近重复项和语义阈值是起点。预计在 1.0 之前，命令行会发生变化。
+**v0.1.1，一个公共原型。**该代码已在离线环境中进行了测试（145 个测试，96% 的行覆盖率，并使用小型替代模型库），但尚未在真实数据上进行校准：近重复项和语义阈值是起点。预计在 1.0 之前，命令行会发生变化。
 
 设计记录、研究依据以及审查历史都保存在工作室的研究库中：[rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk)。
 

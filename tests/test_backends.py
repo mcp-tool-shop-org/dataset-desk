@@ -207,7 +207,7 @@ class EG2Tests(TmpCase):
         self.assertEqual(st.kw["revision"], backends.EG2_REVISION)
         self.assertEqual(st.kw["processor_kwargs"], {"image_seq_length": 140})
         self.assertEqual(st.kw["config_kwargs"], {"audio_config": None})
-        self.assertEqual(st.kw["model_kwargs"], {"torch_dtype": "float32"})
+        self.assertEqual(st.kw["model_kwargs"], {"dtype": "float32"})
         sent, kw = st.encoded[0]
         self.assertEqual(sent, [backends.EG2_PREFIX["document"] + "alpha", backends.EG2_PREFIX["document"] + "beta"])
         self.assertEqual((kw["batch_size"], kw["truncate_dim"], kw["normalize_embeddings"]), (2, 256, True))
@@ -242,7 +242,7 @@ class EG2Tests(TmpCase):
             e = backends.EG2Embedder(device="cuda:0", dtype="auto")
             e.texts(["x"])
             self.assertEqual(e.dtype_name, "bfloat16")
-            self.assertEqual(fakes.FakeSentenceTransformer.instances[0].kw["model_kwargs"]["torch_dtype"], "bfloat16")
+            self.assertEqual(fakes.FakeSentenceTransformer.instances[0].kw["model_kwargs"]["dtype"], "bfloat16")
         with self.mods(bf16=False):
             e = backends.EG2Embedder(device="cuda:0", dtype="auto")
             e.texts(["x"])
@@ -357,7 +357,7 @@ class SigLIP2Tests(TmpCase):
         self.assertEqual(kinds, ["processor", "model"])  # loaded once
         self.assertEqual(tf.calls[0][1:], (backends.SIGLIP2_REPO, {"revision": backends.SIGLIP2_REVISION}))
         self.assertEqual(tf.calls[1][2]["revision"], backends.SIGLIP2_REVISION)
-        self.assertEqual(tf.calls[1][2]["torch_dtype"], "float32")
+        self.assertEqual(tf.calls[1][2]["dtype"], "float32")
         self.assertEqual(out.shape, (3, 4))
         np.testing.assert_allclose(np.linalg.norm(out, axis=1), 1.0, atol=1e-5)
         self.assertEqual([len(c["images"]) for c in tf.processor.calls[:2]], [2, 1])
@@ -380,6 +380,60 @@ class SigLIP2Tests(TmpCase):
         self.assertEqual([len(c["text"]) for c in calls], [16, 4])
         for c in calls:
             self.assertEqual((c["padding"], c["max_length"], c["truncation"]), ("max_length", 64, True))
+
+
+class TransformersWarningsOff(TmpCase):
+    def _logging(self):
+        log = types.ModuleType("transformers.utils.logging")
+        log.level, log.history = 30, []
+        log.get_verbosity = lambda: log.level
+
+        def set_verbosity(v):
+            log.level = v
+            log.history.append(v)
+
+        log.set_verbosity = set_verbosity
+        log.set_verbosity_error = lambda: set_verbosity(40)
+        utils = types.ModuleType("transformers.utils")
+        utils.logging = log
+        return log, utils
+
+    def test_holds_error_level_during_the_block_and_restores_it(self):
+        log, utils = self._logging()
+        tf = fakes.make_transformers()
+        tf.utils = utils
+        with fakes.fake_modules(transformers=tf, **{"transformers.utils": utils,
+                                                    "transformers.utils.logging": log}):
+            with backends.transformers_warnings_off():
+                self.assertEqual(log.level, 40)
+            self.assertEqual(log.level, 30)
+            with self.assertRaises(RuntimeError):
+                with backends.transformers_warnings_off():
+                    raise RuntimeError("load failed")
+            self.assertEqual(log.level, 30)  # restored even when the load raises
+
+    def test_no_transformers_logging_is_a_no_op(self):
+        with mock.patch.dict(sys.modules, {"transformers.utils": None}):
+            with backends.transformers_warnings_off():
+                pass
+
+    def test_siglip2_loads_inside_it(self):
+        log, utils = self._logging()
+        levels = []
+        tf = fakes.make_transformers()
+        tf.utils = utils
+        real = tf.AutoModel.from_pretrained
+
+        def watched(repo, **kw):
+            levels.append(log.level)
+            return real(repo, **kw)
+
+        tf.AutoModel.from_pretrained = staticmethod(watched)
+        with fakes.fake_modules(torch=fakes.make_torch(), transformers=tf,
+                                **{"transformers.utils": utils, "transformers.utils.logging": log}):
+            backends.SigLIP2Embedder().images([png(self.tmp, "a.png")])
+        self.assertEqual(levels, [40])
+        self.assertEqual(log.level, 30)
 
 
 class PlainSightNativePath(TmpCase):

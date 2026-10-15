@@ -1,6 +1,6 @@
 # dataset-desk: how it works
 
-Mapped at 2026-10-15 from commit 1f62247 by Atlas 1.24.0.
+Mapped at 2026-10-15 from commit ae916ec by Atlas 1.24.0.
 
 ## What this is
 
@@ -8,9 +8,9 @@ dataset-desk: a review desk for visual datasets — duplicates, outliers, search
 
 5 parts, mostly Python (11 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 3 doors; the busiest is CI, which reaches 3 parts. It deploys a site to GitHub Pages. People run dataset-desk.
 
-## What changed since the last map
+## What changed since 2026-10-15 (1f62247)
 
-This is the first map.
+Nothing structural changed since 2026-10-15; 18 files changed content.
 
 ## What comes in
 
@@ -74,6 +74,6 @@ Read those in order to follow one run of dataset-desk end to end. This path foll
 - 1 read uses a path built at run time and is not named here.
 - 5 writes and 13 reads go to a path their caller passes, not to this repository.
 - 4 writes and 2 reads go to the directory the command is run in (desk-out/), not to this repository.
-- Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 20 source files reach 10 revisions.
+- Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions.
 
 Regenerate with `npx --yes @dogfood-lab/atlas map`.
