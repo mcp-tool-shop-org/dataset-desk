@@ -43,6 +43,6 @@ model.
 
 ## Status
 
-v0.1.2 is a public prototype. It is tested offline (152 tests, 96% line coverage) and not yet calibrated on real data,
-so its thresholds are starting points. The design record and its review history are in the studio's research library:
+v0.1.3 is a public prototype. It is tested offline (152 tests, 96% line coverage). A first calibration on the studio's own data
+ranked the models by task, but its thresholds aren't pinned yet: they are still starting points. The design record and its review history are in the studio's research library:
 [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-20
+
+### Fixed
+
+- `dataset-desk[models]` now installs `sentence-transformers[image]`. Without it, a fresh install couldn't load
+  EmbeddingGemma 2's processor (found by the studio's calibration run on 2026-10-20).
+
+### Changed
+
+- Install from PyPI: `pip install dataset-desk`, or `pip install "dataset-desk[models]"`.
+
 ### Added
 
 - `release.yml`: publishing a GitHub release builds the wheel and sdist, checks them with `twine check`, and publishes
