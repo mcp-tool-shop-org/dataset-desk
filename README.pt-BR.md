@@ -26,7 +26,7 @@ Um estilo LoRA aprende com suas imagens de treinamento e suas legendas. Dois def
 - **Repetições.** A mesma imagem salva duas vezes, ou duas renderizações com apenas alguns pixels de diferença, ensinam a mesma imagem duas vezes.
 - **Descrições que não são descrições.** Uma legenda copiada do prompt de geração ou uma regra colada em 54 imagens não diz nada ao modelo sobre a imagem. Pior ainda, se esse texto for usado posteriormente para testar a pesquisa, ele mede a recuperação do prompt, e não a compreensão da imagem.
 
-O dataset-desk encontra ambos em uma pasta de projeto, sem alterá-la. Ele gera um relatório e uma fila de revisão para que uma pessoa possa agir. **Nada é removido automaticamente.**
+O dataset-desk encontra ambos em uma pasta de projeto, sem alterá-la. Ele gera um relatório e uma fila de revisão para que alguém possa agir. **Nada é removido automaticamente.**
 
 ## O que ele faz
 
@@ -34,7 +34,7 @@ O dataset-desk encontra ambos em uma pasta de projeto, sem alterá-la. Ele gera 
 |---|---|
 | `index` | Examina o projeto (registros, metadados de onda, dados de geração PNG) e incorpora cada imagem exclusiva em um cache em `--out` |
 | `dupes` | Cópias byte a byte (sha256), quase duplicatas (256 bits dHash dentro de 10 bits) e duplicatas semânticas (cosseno de incorporação), em formato JSON |
-| `search` | As imagens mais próximas de uma descrição (`--text`), uma imagem (`--image`) ou ambas juntas |
+| `search` | As imagens mais próximas de uma descrição (`--text`), uma imagem (`--image`) ou ambas |
 | `coverage` | As melhores imagens para cada assunto em uma lista de assuntos desejados, para que as lacunas fiquem visíveis |
 | `report` | Um relatório em Markdown: duplicatas, as imagens aprovadas menos típicas por conteúdo e aparência, a auditoria da descrição e se cada descrição encontra sua própria imagem |
 
@@ -42,25 +42,25 @@ O **filtro de descrição** é executado sem nenhum modelo. Uma descrição é s
 - ecoa seu prompt: é igual ao prompt ou está dentro dele, compartilha uma sequência de 6 ou mais palavras com ele, ou 90% ou mais de suas palavras (80% ou mais de suas palavras de conteúdo) aparecem nele;
 - envolve a linha de assunto do registro: uma sequência contígua de 4 ou mais palavras `canon.subject` aparece;
 - é muito curta: menos de 8 palavras ou menos de 5 palavras de conteúdo;
-- duplica outra descrição no conjunto: idêntica após a remoção da pontuação ou um índice de Jaccard de palavras de conteúdo de 0,85 ou mais;
+- duplica outra descrição no conjunto: idêntica após a remoção da pontuação, ou um índice de Jaccard de palavras de conteúdo de 0,85 ou mais;
 - é muito longa para o SigLIP2: mais de 64 tokens (o único teste que requer um tokenizador; os registros não verificados nunca são marcados como aprovados).
 
-Os registros sinalizados são enviados para `description-review.jsonl` e para uma **planilha de trabalho anônima**: cada imagem sinalizada ao lado de 3 a 5 imagens visualmente mais próximas, sem prompt, sem linha de assunto e sem texto antigo visível, para que a pessoa que a reescreva descreva a imagem. Um rascunhista opcional ([plain-sight](https://github.com/mcp-tool-shop-org/plain-sight), Florence-2) pode escrever um primeiro rascunho apenas com os pixels; os rascunhos são registrados como `captioner_assisted`, e uma pessoa os edita.
+Os registros sinalizados vão para `description-review.jsonl` e para uma **planilha de trabalho anônima**: cada imagem sinalizada ao lado de 3 a 5 imagens visualmente mais próximas, sem prompt, sem linha de assunto e sem texto antigo visível, para que a pessoa que a reescreva descreva a imagem. Um rascunhista opcional ([plain-sight](https://github.com/mcp-tool-shop-org/plain-sight), Florence-2) pode escrever um primeiro rascunho apenas com os pixels; os rascunhos são registrados como `captioner_assisted`, e uma pessoa os edita.
 
-O **canal de aparência** é composto por 30 números por imagem (paleta, tom e textura na resolução nativa), para que "a renderização desta imagem está errada" seja exibida separadamente de "o assunto desta imagem é estranho".
+O **canal de aparência** é composto por 30 números por imagem (paleta, tom e textura na resolução nativa), para que "a renderização desta imagem está errada" seja mostrada separadamente de "o assunto desta imagem é estranho".
 
 ## Instalação
 
 ```bash
-pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.2"
+pip install dataset-desk
 ```
 
 Isso fornece a **versão lite**: apenas numpy e Pillow, sem torch. As verificações de duplicatas, o canal de aparência, o filtro de descrição e o relatório funcionam nela (`--backend none`).
 
-Para o índice de incorporação (pesquisa, cobertura, duplicatas semânticas, a verificação de ajuste da descrição), adicione as bibliotecas do modelo:
+Para o índice de incorporação (pesquisa, cobertura, duplicatas semânticas, verificação de ajuste da descrição), adicione as bibliotecas do modelo:
 
 ```bash
-pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.2"
+pip install "dataset-desk[models]"
 ```
 
 Os modelos são obtidos do Hugging Face em revisões fixas na primeira vez que são usados e, em seguida, são carregados do seu cache: [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) (`--backend eg2`) ou [SigLIP2 so400m](https://huggingface.co/google/siglip2-so400m-patch14-384) (`--backend siglip2`). Defina `HF_HUB_OFFLINE=1` para proibir downloads. O rascunhista plain-sight é sempre offline: ele nunca faz download.
@@ -96,8 +96,8 @@ Um projeto sem `records/` também funciona, desde que as imagens estejam em past
 ## Modelo de ameaças e confiança
 
 - **O que ele lê:** a pasta do projeto que você nomeia com `--project`: imagens, `records/*.json`, metadados de onda e os dados de geração incorporados em arquivos PNG.
-- **O que ele grava:** apenas em `--out`: seu cache de digitalização, caches de incorporação, o relatório, `description-review.jsonl` e a planilha de trabalho. Ele recusa um `--out` dentro do projeto (`PERM_OUT_INSIDE_PROJECT`), para que um projeto nunca seja modificado.
-- **O que ele nunca toca:** qualquer coisa fora dessas duas pastas. Ele não exclui nada, em nenhum lugar.
+- **O que ele grava:** apenas em `--out`: seu cache de digitalização, caches de incorporação, o relatório, `description-review.jsonl` e a planilha de trabalho. Ele se recusa a gravar em um `--out` dentro do projeto (`PERM_OUT_INSIDE_PROJECT`), para que um projeto nunca seja modificado.
+- **O que ele nunca toca:** qualquer coisa fora dessas duas pastas. Ele não exclui nada, em lugar nenhum.
 - **Rede:** a versão lite nunca a usa. Um backend de modelo obtém seus pesos fixos do Hugging Face na primeira vez que são usados, a menos que `HF_HUB_OFFLINE=1` seja definido; o rascunhista é carregado com `HF_HUB_OFFLINE=1` e `local_files_only=True` toda vez. Nenhum modelo executa código remoto.
 - **Permissões:** uma conta de usuário comum. Uma GPU precisa de `--device` mais um ID `--grant`, para que uma placa compartilhada não seja usada por engano.
 - **Segredos e telemetria:** ele não lê credenciais e não coleta nem envia telemetria.
@@ -107,7 +107,7 @@ Relate uma vulnerabilidade conforme descrito em [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.1.2, um protótipo público.** O código é testado offline (152 testes, 96% de cobertura de linha, com substituições pequenas para as bibliotecas de modelo), mas ainda não foi calibrado em dados reais: os limites de quase duplicatas e semânticas são pontos de partida. Espere que a linha de comando mude antes da versão 1.0.
+**v0.1.3, um protótipo público.** O código é testado offline (152 testes, 96% de cobertura de linha, com substituições pequenas para as bibliotecas de modelo), e uma primeira calibração nos dados do próprio estúdio classificou os modelos por tarefa, mas ainda não definiu os limites: os limites de quase duplicatas e semânticas ainda são apenas pontos de partida. Espere que a linha de comando mude antes da versão 1.0.
 
 O registo de design, a sua base de investigação e o histórico de revisões encontram-se na biblioteca de investigação do estúdio: [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).
 

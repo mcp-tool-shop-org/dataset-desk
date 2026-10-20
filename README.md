@@ -52,7 +52,7 @@ Flagged records go to `description-review.jsonl` and to a **blind worksheet**: e
 ## Install
 
 ```bash
-pip install "dataset-desk @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.2"
+pip install dataset-desk
 ```
 
 That gives the **lite tier**: numpy and Pillow only, no torch. The duplicate checks, the look channel, the description gate and the report all work in it (`--backend none`).
@@ -60,7 +60,7 @@ That gives the **lite tier**: numpy and Pillow only, no torch. The duplicate che
 For the embedding index (search, coverage, semantic duplicates, the description fit check), add the model libraries:
 
 ```bash
-pip install "dataset-desk[models] @ git+https://github.com/mcp-tool-shop-org/dataset-desk@v0.1.2"
+pip install "dataset-desk[models]"
 ```
 
 The models are fetched from Hugging Face at pinned revisions the first time they're used, then load from your cache: [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) (`--backend eg2`) or [SigLIP2 so400m](https://huggingface.co/google/siglip2-so400m-patch14-384) (`--backend siglip2`). Set `HF_HUB_OFFLINE=1` to forbid downloads. The plain-sight drafter is always offline: it never downloads.
@@ -107,7 +107,7 @@ Report a vulnerability as described in [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.1.2, a public prototype.** The code is tested offline (152 tests, 96% line coverage, with small stand-ins for the model libraries), but it hasn't been calibrated on real data yet: the near-duplicate and semantic thresholds are starting points. Expect the command line to change before 1.0.
+**v0.1.3, a public prototype.** The code is tested offline (152 tests, 96% line coverage, with small stand-ins for the model libraries), and a first calibration on the studio's own data has ranked the models by task, but it hasn't pinned the thresholds yet: the near-duplicate and semantic thresholds are still starting points. Expect the command line to change before 1.0.
 
 The design record, its research grounding and its review history live in the studio's research library: [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).
 
