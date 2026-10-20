@@ -4,6 +4,7 @@ Run from the repository root: python -W error -m unittest discover -s tests"""
 import json
 import os
 import tempfile
+import time
 import tracemalloc
 import unittest
 from unittest import mock
@@ -191,6 +192,86 @@ def swap_check_reference(items, img, txt, seed=0):
 def unit_vectors(n, d=32, seed=1):
     v = np.random.default_rng(seed).standard_normal((n, d)).astype(np.float32)
     return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+
+def lineage_020(items, vecs, k=5):
+    """0.2.0's lineage (d3fa354a), verbatim: every pair in Python, then sort and slice."""
+    has_vecs = vecs.ndim == 2 and vecs.shape[1] > 0
+    by_name: dict[str, list[dict]] = {}
+    for idx, it in enumerate(items):
+        occs = it.occurrences or [
+            {"path": p, "run_id": it.run_id, "name": os.path.basename(p), "suffix": it.suffix, "outcome": it.outcome}
+            for p in it.paths
+        ]
+        for occ in occs:
+            ext = (occ.get("suffix") or os.path.splitext(occ.get("name") or "")[1]).lower()
+            if ext not in desk.CODE_EXT:
+                continue
+            fname = occ.get("name") or os.path.basename(occ["path"])
+            by_name.setdefault(fname, []).append({**occ, "item_idx": idx})
+
+    files_out: dict[str, list[dict]] = {}
+    all_pairs: list[dict] = []
+    for fname in sorted(by_name):
+        occs = by_name[fname]
+        if len(occs) < 2:
+            continue
+        file_pairs: list[dict] = []
+        for i in range(len(occs)):
+            for j in range(i + 1, len(occs)):
+                oa, ob = occs[i], occs[j]
+                if oa["run_id"] is not None and ob["run_id"] is not None and oa["run_id"] == ob["run_id"]:
+                    continue
+                if oa["path"] == ob["path"]:
+                    continue
+                if oa["item_idx"] == ob["item_idx"]:
+                    cos = 1.0
+                elif has_vecs:
+                    cos = float(vecs[oa["item_idx"]] @ vecs[ob["item_idx"]])
+                else:
+                    cos = 0.0
+                entry = {
+                    "name": fname,
+                    "a": oa["path"],
+                    "b": ob["path"],
+                    "run_a": oa["run_id"],
+                    "run_b": ob["run_id"],
+                    "outcome_a": oa["outcome"],
+                    "outcome_b": ob["outcome"],
+                    "cosine": round(cos, 4),
+                }
+                file_pairs.append(entry)
+        file_pairs.sort(key=lambda r: (-r["cosine"], r["a"], r["b"]))
+        if file_pairs:
+            files_out[fname] = file_pairs[:k]
+            all_pairs.extend(file_pairs[:k])
+
+    all_pairs.sort(key=lambda r: (-r["cosine"], r["name"], r["a"], r["b"]))
+    return {"files": files_out, "pairs": all_pairs}
+
+
+def make_lineage_fixture(seed, n_items=40):
+    """Code items whose vectors are dyadic (every float32 dot product is exact, so a blocked matrix product and a
+    single-pair dot agree), with tied 4-decimal cosines, same-run, same-path, same-item and run-less occurrences."""
+    rng = np.random.default_rng(seed)
+    vecs = (rng.integers(-4, 5, (n_items, 4)) / 8).astype(np.float32)
+    runs = [f"r{j}" for j in range(6)] + [None, None]
+    items = []
+    for i in range(n_items):
+        occs = []
+        for _ in range(int(rng.integers(1, 4))):    # several occurrences of one item: same item_idx, cosine 1.0
+            run = runs[int(rng.integers(0, len(runs)))]
+            sub = "ab"[int(rng.integers(0, 2))]     # a small path space, so occurrences share paths
+            name = "gate.py" if rng.random() < 0.85 else "util.py"
+            occs.append({"path": f"runs/{run or 'loose'}/{sub}/{name}", "run_id": run, "name": name,
+                         "suffix": ".py", "outcome": "pass" if i % 2 else "fail"})
+        if i % 13 == 5:
+            occs.append({"path": f"runs/r0/notes{i}.txt", "run_id": "r0", "name": f"notes{i}.txt",
+                         "suffix": ".txt", "outcome": None})
+        items.append(desk.TextItem(sha256=f"{i:064x}", paths=[o["path"] for o in occs], name=occs[0]["name"],
+                                   suffix=".py", run_id=occs[0]["run_id"], outcome=occs[0]["outcome"],
+                                   occurrences=occs))
+    return items, vecs
 
 
 class ManyImagePaths(unittest.TestCase):
@@ -749,6 +830,85 @@ class ManyImagePaths(unittest.TestCase):
         qv = unit_vectors(2, d=8, seed=33)
         cov_empty = desk.coverage(items_unapproved, vecs[:4], ["s1", "s2"], qv)
         self.assertEqual([r["top"] for r in cov_empty], [[], []])
+
+    def test_lineage_top_k_matches_020_on_ties_and_blocks_and_scales(self):
+        no_vecs = np.zeros((40, 0), dtype=np.float32)
+        tied_names = 0
+        none_pairs = 0
+        for seed in range(6):
+            items, vecs = make_lineage_fixture(seed)
+            m_gate = sum(o["name"] == "gate.py" for it in items for o in it.occurrences)
+            # One row per few: BLOCK_BYTES this small forces several blocks over the gate.py occurrences.
+            small = m_gate * 8 * 4
+            for v in (vecs, no_vecs):
+                for k in (1, 5, 10**6):
+                    ref = lineage_020(items, v, k=k)
+                    self.assertGreater(len(ref["pairs"]), 0)
+                    for block_bytes in (desk.BLOCK_BYTES, small):
+                        with mock.patch.object(desk, "BLOCK_BYTES", block_bytes):
+                            if block_bytes == small:
+                                self.assertLess(desk._block_rows(m_gate, 8), m_gate // 3)
+                            got = desk.lineage(items, v, k=k)
+                        self.assertEqual(got, ref, f"seed={seed} k={k} vecs={v.shape} block_bytes={block_bytes}")
+                    if k == 10**6:
+                        for pairs in ref["files"].values():
+                            cos = [p["cosine"] for p in pairs]
+                            tied_names += len(cos) != len(set(cos))
+                            none_pairs += sum(p["run_a"] is None and p["run_b"] is None for p in pairs)
+        self.assertGreater(tied_names, 0)   # ties are broken by (a, b), not by the order pairs were met
+        self.assertGreater(none_pairs, 0)   # two None run ids are not a same-run pair
+
+        # Scale: one script byte-identical across 5,000 runs, so every pair is cos = 1.0 and every pair ties.
+        m = 5000
+        occs = [{"path": f"runs/run{j:04d}/gate.py", "run_id": f"run{j:04d}", "name": "gate.py", "suffix": ".py",
+                 "outcome": "pass"} for j in range(m)]
+        big = [desk.TextItem(sha256="0" * 64, paths=[o["path"] for o in occs], name="gate.py", suffix=".py",
+                             run_id="run0000", outcome="pass", occurrences=occs)]
+        t0 = time.perf_counter()
+        res = desk.lineage(big, np.ones((1, 4), dtype=np.float32) / 2, k=5)
+        elapsed = time.perf_counter() - t0
+        self.assertLess(elapsed, 5.0, f"lineage took {elapsed:.2f} s on {m} identical occurrences")
+        got = [(p["a"], p["b"]) for p in res["files"]["gate.py"]]
+        self.assertEqual(got, [("runs/run0000/gate.py", f"runs/run{j:04d}/gate.py") for j in range(1, 6)])
+        self.assertTrue(all(p["cosine"] == 1.0 for p in res["pairs"]))
+
+    def test_rank_descriptions_ties_identical_across_block_sizes(self):
+        n_img, m, d = 103, 17, 768
+        img = unit_vectors(n_img, d=d, seed=41)
+        img[50] = img[0]
+        img[102] = img[0]   # three byte-identical images
+        T = unit_vectors(m, d=d, seed=42)
+        rng = np.random.default_rng(43)
+        own_idx = rng.integers(0, n_img, size=m)
+        own_idx[0], own_idx[5], own_idx[11] = 0, 50, 102
+        second_idx = rng.integers(0, n_img, size=m)
+        second_idx[3] = 50
+        sibling_groups = [[int(o)] for o in own_idx]
+        sibling_groups[0] = [0, 7]
+        sibling_groups[5] = [50, 102, 9]
+
+        results = []
+        for block_bytes in (1, n_img * img.itemsize * 4):
+            with mock.patch.object(desk, "BLOCK_BYTES", block_bytes):
+                rows = desk._block_rows(n_img, img.itemsize)
+                if block_bytes == 1:
+                    self.assertEqual(rows, 1)
+                else:
+                    self.assertTrue(1 < rows < m)
+                own_r, _, sec_r, grp_r = desk._rank_descriptions(
+                    img, T, own_idx, second_idx=second_idx, sibling_groups=sibling_groups)
+            results.append((own_r, sec_r, grp_r))
+        # Ranks only: own cosines may differ in the last bit between block sizes by design.
+        for a, b in zip(results[0], results[1], strict=True):
+            np.testing.assert_array_equal(a, b)
+
+        # An identical-vector image gets half-tie credit: 1 + above + 0.5 * (ties - 1), with ties = 3.
+        own_r = results[0][0]
+        img64 = img.astype(np.float64)
+        for k in (0, 5, 11):
+            sims = img64 @ T[k].astype(np.float64)
+            above = int((sims > sims[own_idx[k]]).sum())
+            self.assertEqual(own_r[k], 1 + above + 0.5 * (3 - 1))
 
 
 if __name__ == "__main__":

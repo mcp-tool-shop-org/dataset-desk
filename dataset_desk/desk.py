@@ -31,6 +31,7 @@ import argparse
 import concurrent.futures
 import functools
 import hashlib
+import heapq
 import json
 import os
 import pathlib
@@ -2215,6 +2216,70 @@ def text_search(items: list[TextItem], vecs: np.ndarray, q: np.ndarray, k: int =
     ]
 
 
+def _lineage_top_k(occs: list[dict], vecs: np.ndarray | None, k: int) -> tuple[list[tuple], bool]:
+    """The k best pairs of one file name's occurrences, in bounded memory and bounded Python work.
+
+    Returns (heap, any_pair). Each heap entry is (rcos, -path_rank_a, -path_rank_b, -a, -b) with a < b occurrence
+    indices, so heap[0] is the worst pair kept and the order matches 0.2.0's stable sort on (-cosine, a, b). Rows are
+    pruned against heap[0] before Python touches a cell, and a surviving row offers at most k cells."""
+    m = len(occs)
+    item_indices = np.array([o["item_idx"] for o in occs], dtype=np.int64)
+    _, path_rank = np.unique([o["path"] for o in occs], return_inverse=True)
+    path_rank = path_rank.reshape(-1).astype(np.int64)
+    run_codes: dict = {}
+    run_int = np.array(
+        [-1 if o["run_id"] is None else run_codes.setdefault(o["run_id"], len(run_codes)) for o in occs],
+        dtype=np.int64,
+    )
+    V_occ = vecs[item_indices] if vecs is not None else None
+    col_idx = np.arange(m)
+    heap: list[tuple] = []
+    any_pair = False
+    rows = _block_rows(m, 8)
+    for i in range(0, m, rows):
+        ie = min(m, i + rows)
+        if V_occ is not None:
+            sims = np.round((V_occ[i:ie] @ V_occ.T).astype(np.float64), 4)
+        else:
+            sims = np.zeros((ie - i, m), dtype=np.float64)
+        sims[item_indices[i:ie, None] == item_indices[None, :]] = 1.0
+        blocked = col_idx[None, :] <= col_idx[i:ie, None]
+        blocked |= (run_int[i:ie, None] >= 0) & (run_int[i:ie, None] == run_int[None, :])
+        blocked |= path_rank[i:ie, None] == path_rank[None, :]
+        sims[blocked] = -np.inf
+        del blocked
+        row_max = sims.max(axis=1)
+        for r in np.lexsort((np.arange(ie - i), path_rank[i:ie], -row_max)):
+            rmax = row_max[r]
+            if rmax == -np.inf:
+                continue
+            any_pair = True
+            a = i + int(r)
+            pa = int(path_rank[a])
+            row = sims[r]
+            if len(heap) < k:
+                cols = np.flatnonzero(row > -np.inf)
+            else:
+                if k < 1:
+                    continue
+                floor = heap[0][0]
+                max_pa_rank = -heap[0][1]
+                if rmax < floor or (rmax == floor and pa > max_pa_rank):
+                    continue
+                cols = np.flatnonzero(row > floor) if pa > max_pa_rank else np.flatnonzero(row >= floor)
+            cols = cols[np.lexsort((cols, path_rank[cols], -row[cols]))[:k]]
+            for b in cols:
+                b = int(b)
+                cand = (float(row[b]), -pa, -int(path_rank[b]), -a, -b)
+                if len(heap) < k:
+                    heapq.heappush(heap, cand)
+                elif cand > heap[0]:
+                    heapq.heapreplace(heap, cand)
+                else:
+                    break  # the row's cells come best first, so none after this one can enter
+    return heap, any_pair
+
+
 def lineage(items: list[TextItem], vecs: np.ndarray, k: int = 5) -> dict:
     """For code files, find the nearest same-name versions across runs (paths, scores, and labels only)."""
     has_vecs = vecs.ndim == 2 and vecs.shape[1] > 0
@@ -2238,42 +2303,23 @@ def lineage(items: list[TextItem], vecs: np.ndarray, k: int = 5) -> dict:
         m = len(occs)
         if m < 2:
             continue
-        item_indices = np.array([o["item_idx"] for o in occs], dtype=np.int64)
-        V_occ = vecs[item_indices] if has_vecs else None
-        rows = _block_rows(m, V_occ.itemsize) if V_occ is not None else m
-        file_pairs: list[dict] = []
-        for i in range(0, m, rows):
-            j_end = min(m, i + rows)
-            if V_occ is not None:
-                sims_block = np.round(V_occ[i:j_end] @ V_occ.T, 4)
-            else:
-                sims_block = np.zeros((j_end - i, m), dtype=np.float32)
-            same_item = item_indices[i:j_end, None] == item_indices[None, :]
-            sims_block = np.where(same_item, 1.0, sims_block)
-            for ra in range(j_end - i):
-                idx_a = i + ra
-                oa = occs[idx_a]
-                for idx_b in range(idx_a + 1, m):
-                    ob = occs[idx_b]
-                    if oa["run_id"] is not None and ob["run_id"] is not None and oa["run_id"] == ob["run_id"]:
-                        continue
-                    if oa["path"] == ob["path"]:
-                        continue
-                    entry = {
-                        "name": fname,
-                        "a": oa["path"],
-                        "b": ob["path"],
-                        "run_a": oa["run_id"],
-                        "run_b": ob["run_id"],
-                        "outcome_a": oa["outcome"],
-                        "outcome_b": ob["outcome"],
-                        "cosine": round(float(sims_block[ra, idx_b]), 4),
-                    }
-                    file_pairs.append(entry)
-        file_pairs.sort(key=lambda r: (-r["cosine"], r["a"], r["b"]))
-        if file_pairs:
-            files_out[fname] = file_pairs[:k]
-            all_pairs.extend(file_pairs[:k])
+        heap, any_pair = _lineage_top_k(occs, vecs if has_vecs else None, k)
+        if any_pair:
+            top_k = [
+                {
+                    "name": fname,
+                    "a": occs[-na]["path"],
+                    "b": occs[-nb]["path"],
+                    "run_a": occs[-na]["run_id"],
+                    "run_b": occs[-nb]["run_id"],
+                    "outcome_a": occs[-na]["outcome"],
+                    "outcome_b": occs[-nb]["outcome"],
+                    "cosine": rcos,
+                }
+                for rcos, _, _, na, nb in sorted(heap, reverse=True)
+            ]
+            files_out[fname] = top_k
+            all_pairs.extend(top_k)
 
     all_pairs.sort(key=lambda r: (-r["cosine"], r["name"], r["a"], r["b"]))
     return {"files": files_out, "pairs": all_pairs}
