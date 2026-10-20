@@ -1600,5 +1600,344 @@ class TextAndCodeInputTests(unittest.TestCase):
         self.assertEqual(re_img_meta["embedded_now"], 1)
 
 
+def _bit_reverse_invert_dhash(h: str, size: int = 16) -> str:
+    """Bit-reverse each `size`-bit row and invert (~) as a naive shortcut for dhash_flip."""
+    val = int(h, 16)
+    mask = (1 << size) - 1
+    out = 0
+    for row in range(size):
+        row_bits = (val >> ((size - 1 - row) * size)) & mask
+        rev = 0
+        for b in range(size):
+            if not (row_bits & (1 << b)):
+                rev |= 1 << (size - 1 - b)
+        out = (out << size) | rev
+    return f"{out:0{size * size // 4}x}"
+
+
+class D2DupesTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="dd_d2_")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _make_asymmetric_fixture(self, path: str, flip: bool = False):
+        from PIL import Image
+        im = Image.new("RGB", (67, 53))
+        px = im.load()
+        for y in range(53):
+            for x in range(67):
+                # Asymmetric horizontal + vertical gradient with off-centre L-shape and diagonal band
+                r = int((x * 230) / 66)
+                g = int((y * 180) / 52)
+                b = int(((x * 3 + y * 5) % 256))
+                if 9 <= x <= 24 and 7 <= y <= 38:
+                    r, g, b = 250, 30, 15
+                elif 24 < x <= 41 and 28 <= y <= 38:
+                    r, g, b = 20, 240, 60
+                elif (x - 48) ** 2 + (y - 16) ** 2 <= 36:
+                    r, g, b = 15, 35, 245
+                px[x, y] = (r, g, b)
+        if flip:
+            im = im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+        im.save(path)
+
+    def test_mirror_dhash_and_scan_v2_invalidation(self):
+        orig_path = os.path.join(self.tmp, "orig.png")
+        flip_path = os.path.join(self.tmp, "flipped.png")
+        self._make_asymmetric_fixture(orig_path, flip=False)
+        self._make_asymmetric_fixture(flip_path, flip=True)
+
+        dh_orig = desk.dhash(orig_path)
+        dh_flip_orig = desk.dhash_flip(orig_path)
+        dh_flipped_file = desk.dhash(flip_path)
+        dh_flip_flipped_file = desk.dhash_flip(flip_path)
+
+        # Plain hamming between orig and flipped copy is large (> NEAR_BITS), while flip_hamming is within NEAR_BITS (in fact 0)
+        self.assertGreater(desk.hamming(dh_orig, dh_flipped_file), desk.NEAR_BITS)
+        it_orig = desk.Item("orig", [orig_path], ["w1"], dh_orig, dhash_flip=dh_flip_orig)
+        it_flip = desk.Item("flip", [flip_path], ["w1"], dh_flipped_file, dhash_flip=dh_flip_flipped_file)
+        self.assertEqual(desk.flip_hamming(it_orig, it_flip), 0)
+        self.assertLessEqual(desk.flip_hamming(it_orig, it_flip), desk.NEAR_BITS)
+
+        # Fallback when dhash_flip is empty on in-memory test items
+        it_plain_a = desk.Item("a", [orig_path], ["w1"], dh_orig)
+        it_plain_b = desk.Item("b", [flip_path], ["w1"], dh_flipped_file)
+        self.assertEqual(desk.flip_hamming(it_plain_a, it_plain_b), desk.hamming(dh_orig, dh_flipped_file))
+
+        # The fixture's dhash_flip differs from bit-reversed, inverted dhash (because LANCZOS 9x8 is asymmetric on 67px width)
+        self.assertNotEqual(dh_flip_orig, _bit_reverse_invert_dhash(dh_orig))
+
+        # Scan cache stamps scan_v == 2 and recomputes rows with missing scan_v or scan_v == 1
+        proj = os.path.join(self.tmp, "proj")
+        out = os.path.join(self.tmp, "out")
+        os.makedirs(out, exist_ok=True)
+        wdir = os.path.join(proj, "outputs", "w1")
+        os.makedirs(wdir, exist_ok=True)
+        shutil.copyfile(orig_path, os.path.join(wdir, "orig.png"))
+        shutil.copyfile(flip_path, os.path.join(wdir, "flipped.png"))
+
+        scan_file = os.path.join(out, "scan.jsonl")
+        items1, _ = desk.scan(proj, out=out)
+        self.assertEqual(len(items1), 2)
+        for it in items1:
+            self.assertEqual(len(it.dhash_flip), 64)
+
+        with open(scan_file, encoding="utf-8") as f:
+            rows = [json.loads(line) for line in f if line.strip()]
+        self.assertEqual(len(rows), 2)
+        for r in rows:
+            self.assertEqual(r["scan_v"], desk.SCAN_V)
+            self.assertEqual(len(r["dhash_flip"]), 64)
+
+        # Mutate row 0 to have no scan_v (and bogus dhash_flip) and row 1 to have scan_v: 1 (and bogus dhash_flip)
+        rows[0].pop("scan_v", None)
+        rows[0]["dhash_flip"] = "0" * 64
+        rows[1]["scan_v"] = 1
+        rows[1]["dhash_flip"] = "f" * 64
+        with open(scan_file, "w", encoding="utf-8") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+
+        # _load_scan_cache rejects stale rows and scan() recomputes them
+        self.assertEqual(desk._load_scan_cache(out), {})
+        items2, _ = desk.scan(proj, out=out)
+        by_path = {os.path.basename(it.paths[0]): it for it in items2}
+        self.assertEqual(by_path["orig.png"].dhash_flip, dh_flip_orig)
+        self.assertEqual(by_path["flipped.png"].dhash_flip, dh_flip_flipped_file)
+
+        # Second scan hits fresh v2 cache
+        cached_map = desk._load_scan_cache(out)
+        self.assertEqual(len(cached_map), 2)
+        items3, _ = desk.scan(proj, out=out)
+        self.assertEqual(len(items3), 2)
+
+    def test_dinov2_two_signal_rule_and_buckets_and_missing_index(self):
+        # 4 items to test both branches and rejection:
+        # Pair (0, 1): cos = 0.95 (>= 0.94, < 0.985) and flip_hamming = 12 (<= 44) -> ACCEPTED by branch 1
+        # Pair (0, 2): cos = 0.99 (>= 0.985) and flip_hamming = 60 (> 44) -> ACCEPTED by branch 2
+        # Pair (0, 3): cos = 0.96 (>= 0.94, < 0.985) and flip_hamming = 52 (> 44) -> REJECTED
+        dh0 = "0" * 64
+        dh1 = "0" * 61 + "fff"
+        dh2 = "f" * 15 + "0" * 49
+        dh3 = "0" * 15 + "f" * 13 + "0" * 36
+        it0 = desk.Item("h0", ["a.png"], ["w"], dh0, dhash_flip=dh0)
+        it1 = desk.Item("h1", ["b.png"], ["w"], dh1, dhash_flip="f" * 64)  # 12 bits from it0
+        it2 = desk.Item("h2", ["c.png"], ["w"], dh2, dhash_flip=dh2)       # 60 bits from it0
+        it3 = desk.Item("h3", ["d.png"], ["w"], dh3, dhash_flip=dh3)       # 52 bits from it0, 112 bits from it2
+        items = [it0, it1, it2, it3]
+
+        # Construct 4D orthonormal basis vectors so we can set exact cosines with it0 = [1, 0, 0, 0]
+        v0 = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        v1 = np.array([0.95, np.sqrt(1.0 - 0.95**2), 0.0, 0.0], dtype=np.float32)
+        v2 = np.array([0.99, 0.0, np.sqrt(1.0 - 0.99**2), 0.0], dtype=np.float32)
+        v3 = np.array([0.96, 0.0, 0.0, np.sqrt(1.0 - 0.96**2)], dtype=np.float32)
+        img = np.stack([v0, v1, v2, v3], axis=0)
+
+        d_dino = desk.dupes(items, img, semantic=None, backend="dinov2")
+        self.assertEqual(d_dino["rule"], "dinov2-two-signal")
+        self.assertEqual(d_dino["near"], [])
+        sem_pairs = {(i, j) for i, j, _ in d_dino["semantic"]}
+        self.assertIn((0, 1), sem_pairs)
+        self.assertIn((0, 2), sem_pairs)
+        self.assertNotIn((0, 3), sem_pairs)
+        self.assertEqual(
+            d_dino["thresholds"],
+            {
+                "near_bits": 44,
+                "semantic_cosine": 0.94,
+                "dinov2_cos_low": 0.94,
+                "dinov2_cos_high": 0.985,
+                "two_signal_bits": 44,
+            },
+        )
+
+        # Passing explicit semantic threshold on dinov2 uses near+cosine rule
+        d_dino_override = desk.dupes(items, img, semantic=0.955, backend="dinov2")
+        self.assertEqual(d_dino_override["rule"], "near+cosine")
+        self.assertEqual([(i, j) for i, j, _ in d_dino_override["near"]], [(0, 1)])
+        sem_over_pairs = {(i, j) for i, j, _ in d_dino_override["semantic"]}
+        self.assertIn((0, 2), sem_over_pairs)
+        self.assertIn((0, 3), sem_over_pairs)
+        self.assertNotIn((0, 1), sem_over_pairs)  # already in near
+
+        # A siglip2 cache gets the near+cosine rule
+        d_sig = desk.dupes(items, img, semantic=None, backend="siglip2")
+        self.assertEqual(d_sig["rule"], "near+cosine")
+        self.assertEqual([(i, j) for i, j, _ in d_sig["near"]], [(0, 1)])
+        self.assertEqual(d_sig["thresholds"], {"near_bits": 26, "semantic_cosine": 0.95})
+
+        # CLI dupes defaults to dinov2 and missing dinov2 index names dataset-desk index --project <p> --backend dinov2
+        self.assertEqual(desk.command_task("dupes"), "dupes")
+        proj = os.path.join(self.tmp, "myproj")
+        out = os.path.join(self.tmp, "myout")
+        os.makedirs(os.path.join(proj, "outputs"), exist_ok=True)
+        with self.assertRaises(DeskError) as cm:
+            desk.main(["dupes", "--project", proj, "--out", out])
+        self.assertEqual(cm.exception.code, "STATE_NO_INDEX")
+        self.assertIn(f"dataset-desk index --project {proj} --backend dinov2", cm.exception.message)
+
+    def test_view_check_record_and_stem_fallback(self):
+        # Two records of one asset with different render_id are never paired in near or semantic;
+        # two records with the same render_id are still paired.
+        rec_v1 = {"id": "r1", "asset_id": "hero_ship", "render_id": "y0_e15"}
+        rec_v2 = {"id": "r2", "asset_id": "hero_ship", "render_id": "y90_e15"}
+        rec_v1_dup = {"id": "r3", "asset_id": "hero_ship", "render_id": "y0_e15"}
+
+        it_v1 = desk.Item("h1", ["/p/a.png"], ["w"], "0000000000000000", dhash_flip="0000000000000000", record=rec_v1)
+        it_v2 = desk.Item("h2", ["/p/b.png"], ["w"], "0000000000000001", dhash_flip="0000000000000001", record=rec_v2)
+        it_v1_dup = desk.Item("h3", ["/p/c.png"], ["w"], "0000000000000003", dhash_flip="0000000000000003", record=rec_v1_dup)
+
+        # All 3 have identical vectors (cos = 1.0) and dhash within 2 bits (would hit both near and semantic)
+        vecs3 = np.array([[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+
+        # Under near+cosine (e.g. siglip2): (0, 1) and (1, 2) are different views of hero_ship;
+        # each is dropped from both near and semantic and counted ONCE in view_pairs_skipped (= 2).
+        # Pair (0, 2) has the same asset_id and same render_id, so it is still paired!
+        d_sig = desk.dupes([it_v1, it_v2, it_v1_dup], vecs3, semantic=None, backend="siglip2")
+        self.assertEqual([(i, j) for i, j, _ in d_sig["near"]], [(0, 2)])
+        self.assertEqual(d_sig["semantic"], [])
+        self.assertEqual(d_sig["view_pairs_skipped"], 2)
+
+        # Under dinov2-two-signal: (0, 1) and (1, 2) are also skipped and (0, 2) is kept
+        d_dino = desk.dupes([it_v1, it_v2, it_v1_dup], vecs3, semantic=None, backend="dinov2")
+        self.assertEqual([(i, j) for i, j, _ in d_dino["semantic"]], [(0, 2)])
+        self.assertEqual(d_dino["view_pairs_skipped"], 2)
+
+        # File-stem fallback when no record exists: ^(.+)__(y-?\d+_e-?\d+(?:_.*)?)$
+        it_stem1 = desk.Item("s1", ["/p/turret_mk2__y-45_e30_front.png"], ["w"], "0000000000000000")
+        it_stem2 = desk.Item("s2", ["/p/turret_mk2__y45_e-15.png"], ["w"], "0000000000000001")
+        self.assertEqual(desk._asset_view(it_stem1), ("turret_mk2", "y-45_e30_front"))
+        self.assertEqual(desk._asset_view(it_stem2), ("turret_mk2", "y45_e-15"))
+        d_stem = desk.dupes([it_stem1, it_stem2], vecs3[:2], semantic=None, backend="siglip2")
+        self.assertEqual(d_stem["near"], [])
+        self.assertEqual(d_stem["semantic"], [])
+        self.assertEqual(d_stem["view_pairs_skipped"], 1)
+
+        # Record with asset_id but no render_id takes the view from the stem
+        rec_partial = {"id": "p1", "asset_id": "canonical_turret", "render_id": None}
+        it_part1 = desk.Item("p1", ["/p/ignored_stem__y0_e0.png"], ["w"], "0000000000000000", record=rec_partial)
+        it_part2 = desk.Item("p2", ["/p/ignored_stem__y180_e0.png"], ["w"], "0000000000000001", record=rec_partial)
+        self.assertEqual(desk._asset_view(it_part1), ("canonical_turret", "y0_e0"))
+        self.assertEqual(desk._asset_view(it_part2), ("canonical_turret", "y180_e0"))
+        d_part = desk.dupes([it_part1, it_part2], vecs3[:2], semantic=None, backend="dinov2")
+        self.assertEqual(d_part["semantic"], [])
+        self.assertEqual(d_part["view_pairs_skipped"], 1)
+
+        # load_records populates asset_id and render_id from provenance (or None when absent)
+        proj = os.path.join(self.tmp, "proj_rec")
+        rdir = os.path.join(proj, "records")
+        os.makedirs(rdir, exist_ok=True)
+        with open(os.path.join(rdir, "one.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "id": "one",
+                "asset_path": "outputs/w/one.png",
+                "provenance": {"asset_id": "crate_01", "render_id": "y30_e20"},
+            }, f)
+        with open(os.path.join(rdir, "two.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "id": "two",
+                "asset_path": "outputs/w/two.png",
+                "provenance": {},
+            }, f)
+        recs_by_path, _ = desk.load_records(proj)
+        self.assertEqual(recs_by_path["outputs/w/one.png"]["asset_id"], "crate_01")
+        self.assertEqual(recs_by_path["outputs/w/one.png"]["render_id"], "y30_e20")
+        self.assertIsNone(recs_by_path["outputs/w/two.png"]["asset_id"])
+        self.assertIsNone(recs_by_path["outputs/w/two.png"]["render_id"])
+
+    def test_text_dupes_code_filter_thresholds_backend_guard_and_percentiles(self):
+        t_items = [
+            desk.TextItem("c1", ["src/a.py"], "a.py", ".py"),
+            desk.TextItem("c2", ["src/b.sh"], "b.sh", ".sh"),
+            desk.TextItem("j1", ["data/c.json"], "c.json", ".json"),
+            desk.TextItem("l1", ["logs/d.log"], "d.log", ".log"),
+        ]
+        # Make c1 & c2 cosine = 0.96 (>= 0.95 for code, < 0.98 for text)
+        # Make j1 & l1 cosine = 0.99 (identical or near-identical, should be dropped under task="code")
+        vc1 = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        vc2 = np.array([0.96, np.sqrt(1.0 - 0.96**2), 0.0], dtype=np.float32)
+        vj1 = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        vl1 = np.array([0.0, np.sqrt(1.0 - 0.99**2), 0.99], dtype=np.float32)
+        t_vecs = np.stack([vc1, vc2, vj1, vl1], axis=0)
+
+        # --task code drops .json and .log items and defaults to 0.95 on eg2
+        res_code = desk.text_dupes(t_items, t_vecs, semantic=None, task="code", backend="eg2")
+        self.assertEqual(res_code["threshold"], 0.95)
+        self.assertEqual([p[:2] for p in res_code["semantic"]], [("src/a.py", "src/b.sh")])
+        self.assertIn("top1_percentiles", res_code)
+        self.assertIn("p50", res_code["top1_percentiles"])
+
+        # task="text" defaults to 0.98 on bge-m3 (so 0.96 pair is below 0.98, 0.99 pair is included)
+        res_text = desk.text_dupes(t_items, t_vecs, semantic=None, task="text", backend="bge-m3")
+        self.assertEqual(res_text["threshold"], 0.98)
+        self.assertEqual([p[:2] for p in res_text["semantic"]], [("data/c.json", "logs/d.log")])
+        self.assertIn("top1_percentiles", res_text)
+
+        # --semantic overrides both (and bypasses the backend guard)
+        res_override_code = desk.text_dupes(t_items, t_vecs, semantic=0.97, task="code", backend="qwen3-emb-0.6b")
+        self.assertEqual(res_override_code["threshold"], 0.97)
+        self.assertEqual(res_override_code["semantic"], [])
+
+        res_override_text = desk.text_dupes(t_items, t_vecs, semantic=0.95, task="text", backend="gte-modernbert")
+        self.assertEqual(res_override_text["threshold"], 0.95)
+        self.assertEqual(len(res_override_text["semantic"]), 2)
+
+        # Backend guard: qwen3-emb-0.6b or gte-modernbert (or wrong task-backend combo) with no --semantic refuses with INPUT_BAD_ARGUMENT
+        for bad_backend, task in (
+            ("qwen3-emb-0.6b", "text"),
+            ("gte-modernbert", "text"),
+            ("qwen3-emb-0.6b", "code"),
+            ("gte-modernbert", "code"),
+            ("bge-m3", "code"),
+            ("eg2", "text"),
+            ("fake", "text"),
+        ):
+            with self.assertRaises(DeskError) as cm:
+                desk.text_dupes(t_items, t_vecs, semantic=None, task=task, backend=bad_backend)
+            self.assertEqual(cm.exception.code, "INPUT_BAD_ARGUMENT")
+            self.assertIn("--semantic", cm.exception.message)
+
+        # CLI text-dupes wiring test for --task code and refusal on uncalibrated backend
+        src = os.path.join(self.tmp, "tsrc")
+        os.makedirs(src, exist_ok=True)
+        with open(os.path.join(src, "m1.py"), "w", encoding="utf-8") as f:
+            f.write("def alpha():\n    return 42\n")
+        with open(os.path.join(src, "m2.py"), "w", encoding="utf-8") as f:
+            f.write("def alpha():\n    return 42\n")
+        with open(os.path.join(src, "ignore.json"), "w", encoding="utf-8") as f:
+            f.write('{"same": true}\n')
+        with open(os.path.join(src, "ignore.log"), "w", encoding="utf-8") as f:
+            f.write('{"same": true}\n')
+
+        class _EG2Stub(backends.FakeEmbedder):
+            def __init__(self):
+                super().__init__(dim=768)
+                self.name = "eg2"
+                self.revision = desk.registry.REGISTRY["eg2"].revision
+                self.tokenizer = desk._FALLBACK_TOKENIZER
+
+        out_eg2 = os.path.join(self.tmp, "out_eg2")
+        desk.text_index(out_eg2, _EG2Stub(), source=src, log=lambda *a: None)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            desk.main(["text-dupes", "--out", out_eg2, "--task", "code"])
+        cli_code = json.loads(buf.getvalue())
+        self.assertEqual(cli_code["threshold"], 0.95)
+        self.assertIn("top1_percentiles", cli_code)
+        # Only .py files should appear in exact/semantic under --task code
+        for grp in cli_code["exact"]:
+            for p in grp:
+                self.assertTrue(p.endswith(".py"))
+
+        # Refusal from CLI when running text-dupes without --semantic on fake cache
+        out_fake = os.path.join(self.tmp, "out_fake")
+        desk.text_index(out_fake, backends.FakeEmbedder(), source=src, log=lambda *a: None)
+        with self.assertRaises(DeskError) as cm_cli:
+            desk.main(["text-dupes", "--out", out_fake, "--backend", "fake"])
+        self.assertEqual(cm_cli.exception.code, "INPUT_BAD_ARGUMENT")
+
+
 if __name__ == "__main__":
     unittest.main()

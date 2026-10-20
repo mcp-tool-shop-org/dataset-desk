@@ -151,7 +151,10 @@ class MainWiring(unittest.TestCase):
                                   os.path.join(self.proj, "outputs", "approved", "blue1.png"), "-k", "1")
         self.assertIn("blue1.png", out)
         rc, out, _ = self.run_cli("dupes", "--backend", "fake")
-        self.assertEqual(sorted(json.loads(out)), ["exact", "near", "semantic", "thresholds", "top1_percentiles"])
+        self.assertEqual(
+            sorted(json.loads(out)),
+            ["exact", "near", "rule", "semantic", "thresholds", "top1_percentiles", "view_pairs_skipped"],
+        )
 
     def test_missing_index_is_a_structured_user_error(self):
         rc, _, err = self.run_cli("dupes", "--backend", "fake")
