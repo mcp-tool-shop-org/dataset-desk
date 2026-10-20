@@ -31,9 +31,10 @@ import argparse
 import hashlib
 import json
 import os
+import pathlib
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from dataset_desk import backends  # noqa: E402 — must run before numpy imports so BLAS thread env vars are capped
 
@@ -41,11 +42,16 @@ from dataset_desk import backends  # noqa: E402 — must run before numpy import
 backends.cap_threads(backends._argv_threads())
 
 import numpy as np  # noqa: E402
-from dataset_desk import description_gate  # noqa: E402
+from dataset_desk import description_gate, registry  # noqa: E402
 from dataset_desk.errors import EXIT_RUNTIME, DeskError  # noqa: E402
 from dataset_desk import __version__  # noqa: E402
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+TEXT_EXT = frozenset({".md", ".txt", ".json", ".jsonl", ".log", ".out", ".py", ".sh", ".toml", ".yml", ".yaml", ""})
+CODE_EXT = frozenset({".py", ".sh", ".toml", ".yml", ".yaml"})
+TEXT_CHUNK_CHARS = 6000
+TEXT_MAX_CHUNKS = 8
+NUL_PROBE_BYTES = 4096
 NEAR_BITS = 10        # dHash Hamming distance (of 256 bits) for a near-duplicate, as in the multimodal design
 # The cosine at which a pair is flagged for review as a semantic duplicate. SemDeDup's band was 0.93-0.97 in CLIP
 # space; it belongs to that embedder, so recalibrate it for each one from the top-1 neighbour percentiles in the
@@ -697,8 +703,10 @@ def index(project: str, out: str, emb, limit: int | None = None, grant: str | No
             old_img[it.sha256] = v
     t_img = time.time() - t0
 
+    can_text = "text" in getattr(emb, "modalities", ("text", "image"))
+    eff_images_only = bool(images_only or emb.name == "none" or not can_text)
     described = []
-    if not images_only and emb.name != "none":
+    if not eff_images_only:
         described = [
             it for it in items
             if it.status == "approved" and (it.record or {}).get("explanation") and it.sha256 not in old_txt
@@ -714,7 +722,7 @@ def index(project: str, out: str, emb, limit: int | None = None, grant: str | No
     img = np.vstack([old_img[it.sha256] for it in items]) if (items and dim > 0) else np.zeros((len(items), dim), np.float32)
     keep = (
         {it.sha256 for it in items if it.status == "approved" and (it.record or {}).get("explanation")}
-        if (not images_only and emb.name != "none")
+        if not eff_images_only
         else set()
     )
     txt = {s: v for s, v in old_txt.items() if s in keep}
@@ -725,7 +733,7 @@ def index(project: str, out: str, emb, limit: int | None = None, grant: str | No
         "dim": int(img.shape[1]) if items else 0,
         "vision_tokens": vtokens,
         "dtype": getattr(emb, "dtype_name", "float32"),
-        "images_only": bool(images_only or emb.name == "none"),
+        "images_only": eff_images_only,
         "project": os.path.abspath(project),
         "grant": grant,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -1190,6 +1198,451 @@ def report(project: str, out: str, items: list[Item], img: np.ndarray, txt: dict
     return path
 
 
+# ---- text and code input: --source and --rnd-data ---------------------------------------------------------------
+
+@dataclass
+class TextItem:
+    sha256: str
+    paths: list[str]
+    name: str = ""
+    suffix: str = ""
+    run_id: str | None = None
+    outcome: str | None = None
+    occurrences: list[dict] = field(default_factory=list)
+    chunks: int = 1
+
+
+def _has_nul_first_4kb(path: str) -> bool:
+    with open(path, "rb") as f:
+        return b"\x00" in f.read(NUL_PROBE_BYTES)
+
+
+def chunk_text(text: str, chunk_chars: int = TEXT_CHUNK_CHARS, max_chunks: int = TEXT_MAX_CHUNKS) -> list[str]:
+    """Split text into chunks of about 6,000 characters, at most 8 chunks per file."""
+    if not text:
+        return [""]
+    chunks: list[str] = []
+    pos = 0
+    n = len(text)
+    while pos < n and len(chunks) < max_chunks:
+        end = min(pos + chunk_chars, n)
+        chunks.append(text[pos:end])
+        pos = end
+    return chunks
+
+
+def embed_file_chunks(emb, chunks: list[str], role: str = "query") -> np.ndarray:
+    """Embed a file's chunks and return their unit-normalized mean vector."""
+    if not chunks:
+        chunks = [""]
+    vecs = emb.texts(chunks, role)
+    if vecs.ndim != 2 or vecs.shape[1] == 0:
+        return np.zeros((0,), np.float32)
+    return backends.unit_rows(vecs.mean(axis=0))[0]
+
+
+def _check_not_private_path(path: str) -> None:
+    for candidate in (os.path.abspath(path), os.path.realpath(os.path.abspath(path))):
+        parts = [p.lower() for p in pathlib.Path(candidate).parts]
+        if "rnd-data-private" in parts or "blobs" in parts:
+            raise DeskError("PERM_PRIVATE_SOURCE", f"REFUSED: {path!r} names a private or blob store")
+
+
+def _check_out_not_inside(source_dir: str, out_dir: str) -> None:
+    try:
+        inside = os.path.commonpath([os.path.abspath(source_dir), os.path.abspath(out_dir)]) == os.path.abspath(source_dir)
+    except ValueError:
+        inside = False
+    if inside:
+        raise DeskError("PERM_OUT_INSIDE_PROJECT", "REFUSED: --out is inside the source folder; the desk never writes into a source")
+
+
+def scan_text_source(source: str) -> tuple[list[TextItem], dict]:
+    """Scan every file under `source` whose suffix is in TEXT_EXT, skipping NUL-containing files, distinct by sha256."""
+    _check_not_private_path(source)
+    src_abs = os.path.realpath(os.path.abspath(source))
+    if not os.path.isdir(src_abs):
+        raise DeskError("INPUT_BAD_ARGUMENT", f"source folder {source!r} does not exist")
+    by_sha: dict[str, TextItem] = {}
+    seen_files = 0
+    nul_skipped = 0
+    for root, dirs, files in os.walk(src_abs):
+        dirs[:] = sorted(d for d in dirs if d != ".git")
+        for fname in sorted(files):
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in TEXT_EXT:
+                continue
+            full = os.path.join(root, fname)
+            real = os.path.realpath(full)
+            try:
+                in_root = os.path.commonpath([src_abs, real]) == src_abs
+            except ValueError:
+                in_root = False
+            if not in_root:
+                raise DeskError("PERM_PRIVATE_SOURCE", f"REFUSED: path {fname!r} resolves outside source folder")
+            if _has_nul_first_4kb(real):
+                nul_skipped += 1
+                continue
+            seen_files += 1
+            rel = os.path.relpath(full, src_abs).replace("\\", "/")
+            sha = sha256_file(real)
+            it = by_sha.get(sha)
+            if it is None:
+                it = TextItem(sha256=sha, paths=[], name=fname, suffix=ext)
+                by_sha[sha] = it
+            it.paths.append(rel)
+            it.occurrences.append({"path": rel, "run_id": None, "name": fname, "suffix": ext, "outcome": None})
+    return list(by_sha.values()), {"files": seen_files, "unique": len(by_sha), "nul_skipped": nul_skipped}
+
+
+def _read_run_outcome(run_dir: str) -> str | None:
+    outcome_path = os.path.join(run_dir, "files", "outcome.json")
+    if not os.path.isfile(outcome_path):
+        return None
+    try:
+        with open(outcome_path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    run_sub = obj.get("run")
+    if isinstance(run_sub, dict) and run_sub.get("outcome") is not None:
+        return str(run_sub["outcome"])
+    if obj.get("outcome") is not None:
+        return str(obj["outcome"])
+    return None
+
+
+def scan_rnd_data(checkout: str) -> tuple[list[TextItem], dict]:
+    """Read rnd-data's public files from runs/*/manifest.json copies whose store is 'rnd-data'."""
+    _check_not_private_path(checkout)
+    checkout_abs = os.path.realpath(os.path.abspath(checkout))
+    runs_dir = os.path.join(checkout_abs, "runs")
+    if not os.path.isdir(runs_dir):
+        raise DeskError("PERM_PRIVATE_SOURCE", f"REFUSED: {checkout!r} has no runs/ directory")
+
+    by_sha: dict[str, TextItem] = {}
+    seen_files = 0
+    nul_skipped = 0
+    runs_seen = 0
+
+    for run_folder in sorted(os.listdir(runs_dir)):
+        rdir = os.path.join(runs_dir, run_folder)
+        if not os.path.isdir(rdir):
+            continue
+        mpath = os.path.join(rdir, "manifest.json")
+        if not os.path.isfile(mpath):
+            continue
+        try:
+            with open(mpath, encoding="utf-8") as f:
+                manifest = json.load(f)
+        except (OSError, json.JSONDecodeError) as err:
+            raise DeskError("INPUT_BAD_ARGUMENT", f"invalid manifest {mpath}", cause=err) from err
+
+        if not isinstance(manifest, dict):
+            continue
+        runs_seen += 1
+        run_id = str(manifest.get("id") or run_folder)
+        if "rnd-data-private" in str(manifest.get("source") or "").lower():
+            raise DeskError("PERM_PRIVATE_SOURCE", f"REFUSED: manifest {run_id!r} names rnd-data-private")
+
+        outcome = _read_run_outcome(rdir)
+        for copy in manifest.get("copies") or []:
+            if not isinstance(copy, dict):
+                continue
+            store = str(copy.get("store") or "")
+            raw_loc = str(copy.get("location") or "")
+            loc = raw_loc.replace("\\", "/")
+
+            if "rnd-data-private" in store.lower() or "private" in store.lower() or "rnd-data-private" in loc.lower():
+                raise DeskError(
+                    "PERM_PRIVATE_SOURCE",
+                    f"REFUSED: manifest {run_id!r} names private store or path ({store!r}, {raw_loc!r})",
+                )
+            if os.path.isabs(raw_loc) or os.path.isabs(loc) or ".." in loc.split("/"):
+                raise DeskError(
+                    "PERM_PRIVATE_SOURCE",
+                    f"REFUSED: manifest {run_id!r} location {raw_loc!r} is outside the checkout",
+                )
+            if store != "rnd-data":
+                continue
+            if not loc.startswith("runs/"):
+                raise DeskError(
+                    "PERM_PRIVATE_SOURCE",
+                    f"REFUSED: manifest {run_id!r} rnd-data copy {raw_loc!r} is outside runs/",
+                )
+            candidate = os.path.join(checkout_abs, loc)
+            real = os.path.realpath(os.path.abspath(candidate))
+            try:
+                in_runs = os.path.commonpath([runs_dir, real]) == runs_dir
+            except ValueError:
+                in_runs = False
+            if not in_runs:
+                raise DeskError(
+                    "PERM_PRIVATE_SOURCE",
+                    f"REFUSED: manifest {run_id!r} copy {raw_loc!r} escapes checkout runs/",
+                )
+            if not os.path.isfile(real):
+                raise DeskError(
+                    "PERM_PRIVATE_SOURCE",
+                    f"REFUSED: manifest {run_id!r} copy {raw_loc!r} is missing from checkout",
+                )
+            fname = os.path.basename(loc)
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in TEXT_EXT:
+                continue
+            if _has_nul_first_4kb(real):
+                nul_skipped += 1
+                continue
+            seen_files += 1
+            sha = sha256_file(real)
+            it = by_sha.get(sha)
+            if it is None:
+                it = TextItem(sha256=sha, paths=[], name=fname, suffix=ext, run_id=run_id, outcome=outcome)
+                by_sha[sha] = it
+            it.paths.append(loc)
+            it.occurrences.append({
+                "path": loc,
+                "run_id": run_id,
+                "name": fname,
+                "suffix": ext,
+                "outcome": outcome,
+            })
+
+    return list(by_sha.values()), {
+        "files": seen_files,
+        "unique": len(by_sha),
+        "runs": runs_seen,
+        "nul_skipped": nul_skipped,
+    }
+
+
+def text_cache_dir(out: str, backend: str) -> str:
+    return os.path.join(out, backend, "text")
+
+
+def save_text_cache(out: str, backend: str, items: list[TextItem], vecs: np.ndarray, meta: dict) -> None:
+    d = text_cache_dir(out, backend)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "items.jsonl"), "w", encoding="utf-8") as f:
+        for it in items:
+            f.write(json.dumps(asdict(it), ensure_ascii=False) + "\n")
+    np.save(os.path.join(d, "texts.npy"), vecs)
+    with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=1)
+
+
+def load_text_cache(out: str, backend: str) -> tuple[list[TextItem], np.ndarray, dict]:
+    d = text_cache_dir(out, backend)
+    try:
+        with open(os.path.join(d, "meta.json"), encoding="utf-8") as f:
+            meta = json.load(f)
+        with open(os.path.join(d, "items.jsonl"), encoding="utf-8") as f:
+            items = [TextItem(**json.loads(line)) for line in f if line.strip()]
+        vecs = np.load(os.path.join(d, "texts.npy"))
+    except OSError as err:
+        raise DeskError(
+            "STATE_NO_INDEX",
+            f"no {backend} text index under {d}; run: dataset-desk text-index --backend {backend}",
+            cause=err,
+        ) from err
+    return items, vecs, meta
+
+
+def text_index(
+    out: str,
+    emb,
+    *,
+    source: str | None = None,
+    rnd_data: str | None = None,
+    limit: int | None = None,
+    grant: str | None = None,
+    log=print,
+) -> dict:
+    """Embed text/code files from --source or --rnd-data into <out>/<backend>/text/, reusing cached vectors by sha256
+    and revision."""
+    if bool(source) == bool(rnd_data):
+        raise DeskError("INPUT_BAD_ARGUMENT", "text-index needs either --source <folder> or --rnd-data <checkout>")
+    root_dir = os.path.realpath(os.path.abspath(source or rnd_data))
+    _check_out_not_inside(root_dir, out)
+    items, stats = scan_text_source(root_dir) if source else scan_rnd_data(root_dir)
+    if limit:
+        items = items[:limit]
+
+    old_vecs: dict[str, np.ndarray] = {}
+    old_chunks: dict[str, int] = {}
+    try:
+        o_items, o_vecs, o_meta = load_text_cache(out, emb.name)
+        if o_meta.get("revision") == emb.revision:
+            old_vecs = dict(zip((it.sha256 for it in o_items), o_vecs, strict=True))
+            old_chunks = {it.sha256: it.chunks for it in o_items}
+    except SystemExit:
+        pass
+
+    t0 = time.time()
+    todo = [it for it in items if it.sha256 not in old_vecs]
+    for it in items:
+        if it.sha256 in old_chunks:
+            it.chunks = old_chunks[it.sha256]
+
+    if todo and emb.name != "none":
+        for it in todo:
+            full = os.path.join(root_dir, it.paths[0])
+            with open(full, encoding="utf-8", errors="replace") as f:
+                raw = f.read(TEXT_CHUNK_CHARS * TEXT_MAX_CHUNKS + 1024)
+            ch = chunk_text(raw)
+            it.chunks = len(ch)
+            old_vecs[it.sha256] = embed_file_chunks(emb, ch, role="document")
+
+    t_sec = time.time() - t0
+    dim = getattr(emb, "dim", 0)
+    if items and emb.name != "none" and old_vecs:
+        vecs = np.vstack([old_vecs[it.sha256] for it in items])
+        dim = int(vecs.shape[1])
+    else:
+        vecs = np.zeros((len(items), dim), np.float32)
+
+    meta = {
+        "backend": emb.name,
+        "revision": emb.revision,
+        "dim": dim,
+        "dtype": getattr(emb, "dtype_name", "float32"),
+        "mode": "source" if source else "rnd-data",
+        "grant": grant,
+        "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "embedded_now": len(todo),
+        "text_seconds": round(t_sec, 2),
+        **stats,
+    }
+    save_text_cache(out, emb.name, items, vecs, meta)
+    log(
+        f"indexed {len(items)} unique text files ({len(todo)} new, {t_sec:.1f} s) "
+        f"with {emb.name}; cache: {text_cache_dir(out, emb.name)}"
+    )
+    return meta
+
+
+def text_dupes(items: list[TextItem], vecs: np.ndarray, semantic: float = DESC_CLUSTER_COSINE) -> dict:
+    """Exact and semantic duplicates at or above `semantic` (default DESC_CLUSTER_COSINE); paths, scores and labels only."""
+    exact = [it.paths for it in items if len(it.paths) > 1]
+    has_vecs = vecs.ndim == 2 and vecs.shape[1] > 0
+    sem_raw = list(pairs_at_least(vecs, semantic)) if has_vecs else []
+    pairs = [
+        {
+            "a": items[a].paths[0],
+            "b": items[b].paths[0],
+            "cosine": round(s, 4),
+            "run_a": items[a].run_id,
+            "run_b": items[b].run_id,
+            "outcome_a": items[a].outcome,
+            "outcome_b": items[b].outcome,
+        }
+        for a, b, s in sem_raw
+    ]
+    semantic_tuples = [(items[a].paths[0], items[b].paths[0], round(s, 4)) for a, b, s in sem_raw]
+    sem_groups = [
+        [items[i].paths[0] for i in g]
+        for g in clusters(len(items), [(a, b) for a, b, _ in sem_raw])
+    ]
+    return {
+        "exact": exact,
+        "pairs": pairs,
+        "semantic": semantic_tuples,
+        "semantic_groups": sem_groups,
+        "threshold": semantic,
+    }
+
+
+def text_search(items: list[TextItem], vecs: np.ndarray, q: np.ndarray, k: int = 10) -> list[dict]:
+    """Nearest text/code files to query vector `q`; returns paths, scores, and outcome labels only."""
+    hits = search(vecs, q, k=k)
+    return [
+        {
+            "item": i,
+            "path": items[i].paths[0],
+            "name": items[i].name,
+            "suffix": items[i].suffix,
+            "run_id": items[i].run_id,
+            "outcome": items[i].outcome,
+            "cosine": round(score, 4),
+        }
+        for i, score in hits
+    ]
+
+
+def lineage(items: list[TextItem], vecs: np.ndarray, k: int = 5) -> dict:
+    """For code files, find the nearest same-name versions across runs (paths, scores, and labels only)."""
+    has_vecs = vecs.ndim == 2 and vecs.shape[1] > 0
+    by_name: dict[str, list[dict]] = {}
+    for idx, it in enumerate(items):
+        occs = it.occurrences or [
+            {"path": p, "run_id": it.run_id, "name": os.path.basename(p), "suffix": it.suffix, "outcome": it.outcome}
+            for p in it.paths
+        ]
+        for occ in occs:
+            ext = (occ.get("suffix") or os.path.splitext(occ.get("name") or "")[1]).lower()
+            if ext not in CODE_EXT:
+                continue
+            fname = occ.get("name") or os.path.basename(occ["path"])
+            by_name.setdefault(fname, []).append({**occ, "item_idx": idx})
+
+    files_out: dict[str, list[dict]] = {}
+    all_pairs: list[dict] = []
+    for fname in sorted(by_name):
+        occs = by_name[fname]
+        if len(occs) < 2:
+            continue
+        file_pairs: list[dict] = []
+        for i in range(len(occs)):
+            for j in range(i + 1, len(occs)):
+                oa, ob = occs[i], occs[j]
+                if oa["run_id"] is not None and ob["run_id"] is not None and oa["run_id"] == ob["run_id"]:
+                    continue
+                if oa["path"] == ob["path"]:
+                    continue
+                if oa["item_idx"] == ob["item_idx"]:
+                    cos = 1.0
+                elif has_vecs:
+                    cos = float(vecs[oa["item_idx"]] @ vecs[ob["item_idx"]])
+                else:
+                    cos = 0.0
+                entry = {
+                    "name": fname,
+                    "a": oa["path"],
+                    "b": ob["path"],
+                    "run_a": oa["run_id"],
+                    "run_b": ob["run_id"],
+                    "outcome_a": oa["outcome"],
+                    "outcome_b": ob["outcome"],
+                    "cosine": round(cos, 4),
+                }
+                file_pairs.append(entry)
+        file_pairs.sort(key=lambda r: (-r["cosine"], r["a"], r["b"]))
+        if file_pairs:
+            files_out[fname] = file_pairs[:k]
+            all_pairs.extend(file_pairs[:k])
+
+    all_pairs.sort(key=lambda r: (-r["cosine"], r["name"], r["a"], r["b"]))
+    return {"files": files_out, "pairs": all_pairs}
+
+
+def command_task(command: str, task: str | None = None) -> str:
+    """Return the task name for a CLI command unless overridden by `--task`."""
+    if task:
+        return task
+    if command == "lineage":
+        return "code"
+    if command in ("text-index", "text-dupes", "text-search"):
+        return "text"
+    return "images"
+
+
+def command_backend(command: str, backend: str | None = None, task: str | None = None) -> str:
+    """Resolve the embedder backend for `command`: `--backend` overrides the task's default."""
+    return registry.resolve_backend(backend, command_task(command, task))
+
+
 # ---- the command line ---------------------------------------------------------------------------------------------
 
 def lower_priority() -> None:
@@ -1214,26 +1667,45 @@ def _token_counter():
 
 
 def main(argv: list[str] | None = None, make=backends.make) -> int:
+    image_cmds = ("index", "dupes", "search", "coverage", "report")
+    text_cmds = ("text-index", "text-dupes", "text-search", "lineage")
+    all_cmds = [*image_cmds, *text_cmds]
+    all_backends = [*registry.REGISTRY, "none", "fake"]
+
     ap = argparse.ArgumentParser(
         prog="dataset-desk", description=__doc__.split("\n\n")[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=("commands:\n"
-                "  index     scan the project and embed its images (and descriptions) into the cache under --out\n"
-                "  dupes     exact, near and semantic duplicates, as JSON\n"
-                "  search    the nearest images to --text, --image, or both\n"
-                "  coverage  the best images for each subject in --subjects\n"
-                "  report    the Markdown report: duplicates, outliers, descriptions, coverage\n\n"
+                "  index        scan the project and embed its images (and descriptions) into the cache under --out\n"
+                "  dupes        exact, near and semantic duplicates, as JSON\n"
+                "  search       the nearest images to --text, --image, or both\n"
+                "  coverage     the best images for each subject in --subjects\n"
+                "  report       the Markdown report: duplicates, outliers, descriptions, coverage\n"
+                "  text-index   scan --source or --rnd-data and embed text/code files into <out>/<backend>/text/\n"
+                "  text-dupes   text pairs at or above --semantic, as JSON\n"
+                "  text-search  the nearest text/code files to --text\n"
+                "  lineage      for code files, the nearest same-name versions across runs\n\n"
                 "exit codes: 0 ok, 1 user error or refusal, 2 unexpected error"))
-    ap.add_argument("command", choices=["index", "dupes", "search", "coverage", "report"], help="what to do")
+    ap.add_argument("command", choices=all_cmds, help="what to do")
     ap.add_argument("--version", action="version", version=f"dataset-desk {__version__}")
-    ap.add_argument("--project", required=True, help="a style-dataset-lab project folder (read only)")
-    ap.add_argument("--backend", default="eg2", choices=["eg2", "siglip2", "none", "fake"],
-                    help="the index: EmbeddingGemma 2, SigLIP2, none (model-free lite mode), or fake (tests)")
-    ap.add_argument("--out", help="where the cache and report go (default: desk-out/<project> here)")
+    ap.add_argument("--project", help="a style-dataset-lab project folder (read only)")
+    ap.add_argument("--source", help="a folder of text and code files (read only)")
+    ap.add_argument("--rnd-data", dest="rnd_data", help="an rnd-data checkout folder (reads public rnd-data copies only)")
+    ap.add_argument("--task", choices=list(registry.TASK_DEFAULTS),
+                    help="task whose default backend to use when --backend is omitted")
+    ap.add_argument("--backend", default=None, choices=all_backends,
+                    help="embedder backend (defaults to the command/task default in registry.TASK_DEFAULTS)")
+    ap.add_argument("--out", help="where the cache and report go (default: desk-out/<name> here)")
     ap.add_argument("--threads", type=int, default=4, help="CPU threads (on a shared machine, half the cores at most)")
     ap.add_argument("--device", default="cpu", help="cpu (default) or a torch device such as cuda; needs --grant")
     ap.add_argument("--grant", help="a GPU grant id from whoever schedules the card; required for any device but cpu")
-    ap.add_argument("--limit", type=int, help="index only the first N unique images (a smoke test)")
+    ap.add_argument("--vram-budget", type=int, default=backends.DEFAULT_VRAM_BUDGET_MIB,
+                    help=f"VRAM ceiling in MiB (default: {backends.DEFAULT_VRAM_BUDGET_MIB})")
+    ap.add_argument("--wait", type=float, default=0.0,
+                    help="seconds to poll (every 10 s) for free VRAM before refusing with PERM_GPU_BUSY")
+    ap.add_argument("--semantic", type=float, default=None,
+                    help="cosine threshold for semantic duplicates (default: 0.90 for text-dupes, 0.95 for dupes)")
+    ap.add_argument("--limit", type=int, help="index only the first N unique items (a smoke test)")
     ap.add_argument("--strict", action="store_true", help="halt immediately on an unreadable image file")
     ap.add_argument("--count-tokens", action="store_true",
                     help="report: run the gate's 64-token test with the cached SigLIP2 tokenizer (offline; needs the "
@@ -1245,12 +1717,62 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
                          f"({', '.join(sorted(MULTIMODAL_POOL))}) once its counted run is done")
     ap.add_argument("--draft", default="none", choices=["none", "fake", "plain-sight", "florence2"],
                     help="report: draft flagged descriptions blind from image pixels via plain-sight (or fake)")
-    ap.add_argument("--text", help="search: a description (combine with --image on eg2/fake for multimodal search)")
+    ap.add_argument("--text", help="search/text-search: a query string (combine with --image on eg2/fake)")
     ap.add_argument("--image", help="search: an image file")
     ap.add_argument("--subjects", help="coverage/report: a file with one wanted subject per line")
     ap.add_argument("-k", type=int, default=10, help="search: how many results")
     ap.add_argument("--debug", action="store_true", help="show stack traces for unexpected errors")
     a = ap.parse_args(argv)
+
+    backend = command_backend(a.command, a.backend, a.task)
+    backends.check_device(a.device, a.grant)
+    backends.cap_threads(a.threads)
+
+    make_kw: dict = {"device": a.device, "threads": a.threads, "grant": a.grant}
+    if a.vram_budget != backends.DEFAULT_VRAM_BUDGET_MIB:
+        make_kw["vram_budget"] = a.vram_budget
+    if a.wait:
+        make_kw["wait"] = a.wait
+
+    if a.command in text_cmds:
+        if a.source and a.rnd_data:
+            raise DeskError("INPUT_BAD_ARGUMENT", "pass either --source or --rnd-data, not both")
+        src_root = os.path.abspath(a.source or a.rnd_data) if (a.source or a.rnd_data) else None
+        if src_root:
+            _check_not_private_path(src_root)
+        if not a.out and not src_root:
+            raise DeskError("INPUT_BAD_ARGUMENT", f"{a.command} needs --out (or --source / --rnd-data)")
+        out = os.path.abspath(a.out or os.path.join("desk-out", os.path.basename(src_root)))
+        if src_root:
+            _check_out_not_inside(src_root, out)
+        if backend == "none" and a.command == "text-search":
+            raise DeskError("INPUT_BAD_ARGUMENT", "text-search requires an embedding backend, not 'none'")
+        needs_text_model = a.command in ("text-index", "text-search")
+        emb = None
+        if needs_text_model:
+            if backend not in ("fake", "none"):
+                lower_priority()
+            emb = make(backend, **make_kw)
+        if a.command == "text-index":
+            text_index(out, emb, source=a.source, rnd_data=a.rnd_data, limit=a.limit, grant=a.grant)
+            return 0
+        t_items, t_vecs, _t_meta = load_text_cache(out, backend)
+        if a.command == "text-dupes":
+            sem_thr = DESC_CLUSTER_COSINE if a.semantic is None else a.semantic
+            print(json.dumps(text_dupes(t_items, t_vecs, semantic=sem_thr), indent=1))
+        elif a.command == "text-search":
+            if not a.text:
+                raise DeskError("INPUT_BAD_ARGUMENT", "text-search needs --text")
+            q = emb.texts([a.text], "query")[0]
+            for hit in text_search(t_items, t_vecs, q, k=a.k):
+                label = hit["outcome"] or hit["run_id"] or "unrecorded"
+                print(f"{hit['cosine']:.4f}  {label:12s}  {hit['path']}")
+        elif a.command == "lineage":
+            print(json.dumps(lineage(t_items, t_vecs, k=a.k), indent=1))
+        return 0
+
+    if not a.project:
+        ap.error("the following arguments are required: --project")
     project = os.path.abspath(a.project)
     out = os.path.abspath(a.out or os.path.join("desk-out", os.path.basename(project)))
     try:
@@ -1259,31 +1781,30 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         out_inside = False
     if out_inside:
         raise DeskError("PERM_OUT_INSIDE_PROJECT", "REFUSED: --out is inside the project; the desk never writes into a project")
-    backends.check_device(a.device, a.grant)
-    backends.cap_threads(a.threads)
     if a.command in ("index", "report"):
-        check_multimodal_pool(project, a.backend, images_only=a.images_only,
+        check_multimodal_pool(project, backend, images_only=a.images_only or backend == "dinov2",
                               allow_multimodal_pool=a.allow_multimodal_pool)
-    if a.backend == "none" and a.command in ("search", "coverage"):
+    if backend == "none" and a.command in ("search", "coverage"):
         raise DeskError("INPUT_BAD_ARGUMENT",
                         f"command {a.command!r} requires an embedding backend (eg2, siglip2, or fake), not 'none'")
     needs_model = a.command in ("index", "search", "coverage") or (a.command == "report" and a.subjects)
     emb = None
     if needs_model:
-        if a.backend not in ("fake", "none"):
+        if backend not in ("fake", "none"):
             lower_priority()
-        emb = make(a.backend, device=a.device, threads=a.threads, grant=a.grant)
+        emb = make(backend, **make_kw)
     if a.command == "index":
         index(project, out, emb, limit=a.limit, grant=a.grant, strict=a.strict,
               images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool)
         return 0
-    items, img, txt, meta = load_cache(out, a.backend)
+    items, img, txt, meta = load_cache(out, backend)
     subjects = None
     if a.subjects:
         with open(a.subjects, encoding="utf-8") as f:
             subjects = [s.strip() for s in f if s.strip() and not s.startswith("#")]
     if a.command == "dupes":
-        d = dupes(items, img)
+        sem_cut = SEMANTIC if a.semantic is None else a.semantic
+        d = dupes(items, img, semantic=sem_cut)
         print(json.dumps({"exact": [it.paths for it in d["exact"]],
                           "near": [(items[x].paths[0], items[y].paths[0], h) for x, y, h in d["near"]],
                           "semantic": [(items[x].paths[0], items[y].paths[0], round(s, 4)) for x, y, s in d["semantic"]],
@@ -1294,7 +1815,7 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         if a.text and a.image:
             if not hasattr(emb, "multimodal"):
                 raise DeskError("INPUT_BAD_ARGUMENT",
-                                f"backend {a.backend!r} does not support joint --text + --image search; use eg2")
+                                f"backend {backend!r} does not support joint --text + --image search; use eg2")
             q = emb.multimodal([{"text": a.text, "images": [a.image]}], role="query")[0]
         elif a.text:
             q = emb.texts([a.text], "query")[0]
@@ -1308,7 +1829,7 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         for row in coverage(items, img, subjects, emb.texts(subjects, "query"), k=3):
             print(f"{row['subject']}: " + "; ".join(f"{items[i].paths[0]} {s:.3f}" for i, s in row["top"]))
     elif a.command == "report":
-        cov = coverage(items, img, subjects, emb.texts(subjects, "query")) if (subjects and a.backend != "none") else None
+        cov = coverage(items, img, subjects, emb.texts(subjects, "query")) if (subjects and backend != "none") else None
         drafter = backends.make_drafter(a.draft, device=a.device, threads=a.threads, grant=a.grant)
         print(report(project, out, items, img, txt, meta, cov,
                      images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool, drafter=drafter,

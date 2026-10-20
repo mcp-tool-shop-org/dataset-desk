@@ -14,10 +14,12 @@ EXIT_OK, EXIT_USER, EXIT_RUNTIME = 0, 1, 2
 # The registry. Codes are stable once released.
 CODES = {
     "INPUT_BAD_ARGUMENT": "check the command's --help",
-    "INPUT_UNKNOWN_BACKEND": "use one of: eg2, siglip2, none, fake",
+    "INPUT_UNKNOWN_BACKEND": "use one of: eg2, siglip2, bge-m3, qwen3-emb-0.6b, gte-modernbert, dinov2, none, fake",
     "INPUT_UNKNOWN_DRAFTER": "use one of: plain-sight, fake, none",
     "PERM_OUT_INSIDE_PROJECT": "point --out outside the project folder; the desk never writes into a project",
+    "PERM_PRIVATE_SOURCE": "pass only public rnd-data checkouts and manifest-listed rnd-data copies",
     "PERM_GPU_NEEDS_GRANT": "pass --grant <id> from whoever schedules the GPU, or run on --device cpu",
+    "PERM_GPU_BUSY": "wait for the current GPU holder to finish (or pass --wait <seconds>), or run on --device cpu",
     "PERM_LOCKED_POOL": "pass --images-only (or --backend none), or --allow-multimodal-pool once the benchmark's "
                         "counted run is finished",
     "DEP_TOKENIZER_MISSING": "install the models extra and cache the tokenizer once, or run without --count-tokens",

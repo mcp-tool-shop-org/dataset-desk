@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
+import time
 
 DEFAULT_THREADS = 4
 _TORCH_INTEROP_SET = False
@@ -47,9 +48,22 @@ cap_threads(_argv_threads())
 import numpy as np  # noqa: E402
 
 from dataset_desk.errors import DeskError  # noqa: E402
+from dataset_desk.registry import REGISTRY, EmbedderSpec  # noqa: E402
 
-EG2_REPO, EG2_REVISION = "google/embeddinggemma-2", "914f7f89142e33e77833254d9c9b90c3cef7303b"
-SIGLIP2_REPO, SIGLIP2_REVISION = "google/siglip2-so400m-patch14-384", "e8e487298228002f3d8a82e0cd5c8ea9c567f57f"
+EG2_REPO, EG2_REVISION = REGISTRY["eg2"].repo, REGISTRY["eg2"].revision
+SIGLIP2_REPO, SIGLIP2_REVISION = REGISTRY["siglip2"].repo, REGISTRY["siglip2"].revision
+BGE_M3_REPO, BGE_M3_REVISION = REGISTRY["bge-m3"].repo, REGISTRY["bge-m3"].revision
+QWEN3_EMB_REPO, QWEN3_EMB_REVISION = REGISTRY["qwen3-emb-0.6b"].repo, REGISTRY["qwen3-emb-0.6b"].revision
+GTE_MODERNBERT_REPO, GTE_MODERNBERT_REVISION = (
+    REGISTRY["gte-modernbert"].repo,
+    REGISTRY["gte-modernbert"].revision,
+)
+DINOV2_REPO, DINOV2_REVISION = REGISTRY["dinov2"].repo, REGISTRY["dinov2"].revision
+
+VRAM_MARGIN_MIB = 1024
+DEFAULT_VRAM_BUDGET_MIB = 26624
+VRAM_POLL_SECONDS = 10.0
+TEXT_MAX_SEQ_LENGTH = 2048
 
 # EmbeddingGemma 2's official task prefixes from its model card. Images take no prefix.
 EG2_PREFIX = {
@@ -102,6 +116,85 @@ def unit_rows(a) -> np.ndarray:
 def check_device(device: str, grant: str | None) -> None:
     if device != "cpu" and not grant:
         raise DeskError("PERM_GPU_NEEDS_GRANT", f"REFUSED: device {device!r} needs a grant id (--grant); the GPU is shared")
+
+
+def _to_mib(free_val: int, total_val: int) -> int:
+    return free_val // (1 << 20) if max(free_val, total_val) >= (1 << 20) else free_val
+
+
+def _free_vram_mib(device: str = "cuda") -> int:
+    """Read free CUDA memory in MiB via torch.cuda.mem_get_info(), or cuda.core if torch isn't loaded yet."""
+    dev_idx = 0
+    if ":" in device:
+        with contextlib.suppress(ValueError):
+            dev_idx = int(device.split(":", 1)[1])
+
+    torch_mod = sys.modules.get("torch")
+    if torch_mod is None:
+        dev_cls = None
+        try:
+            from cuda.core import Device as dev_cls  # type: ignore[import-not-found]
+        except ImportError:
+            with contextlib.suppress(ImportError):
+                from cuda.core.experimental import Device as dev_cls  # type: ignore[import-not-found]
+        if dev_cls is not None:
+            dev = dev_cls(dev_idx)
+            mem = getattr(dev, "memory_info", None)
+            if callable(mem):
+                mem = mem()
+            if isinstance(mem, tuple) and len(mem) >= 2:
+                return _to_mib(int(mem[0]), int(mem[1]))
+            if mem is not None and hasattr(mem, "free"):
+                return _to_mib(int(mem.free), int(getattr(mem, "total", mem.free)))
+        import torch as torch_mod  # type: ignore[no-redef]
+
+    mem_fn = getattr(getattr(torch_mod, "cuda", None), "mem_get_info", None)
+    if mem_fn is None:
+        raise RuntimeError("torch.cuda.mem_get_info is not available")
+    try:
+        free_val, total_val = mem_fn(device) if ":" in device else mem_fn()
+    except TypeError:
+        free_val, total_val = mem_fn()
+    return _to_mib(int(free_val), int(total_val))
+
+
+def check_vram(
+    device: str,
+    budget_mib: int,
+    *,
+    vram_budget: int = DEFAULT_VRAM_BUDGET_MIB,
+    wait: float = 0.0,
+    name: str = "model",
+) -> int:
+    """Wait or refuse before loading a model on CUDA; never evict, signal, or stop another process."""
+    if device == "cpu" or not device.startswith("cuda"):
+        return 0
+    need_mib = int(budget_mib) + VRAM_MARGIN_MIB
+    ceiling_mib = int(vram_budget)
+    wait_limit = max(0.0, float(wait or 0.0))
+    waited = 0.0
+
+    while True:
+        free_mib = _free_vram_mib(device)
+        if need_mib > ceiling_mib:
+            raise DeskError(
+                "PERM_GPU_BUSY",
+                f"REFUSED: {name} needs {need_mib} MiB ({budget_mib} MiB + {VRAM_MARGIN_MIB} MiB margin), "
+                f"exceeding --vram-budget {ceiling_mib} MiB ({free_mib} MiB free on {device})",
+                retryable=False,
+            )
+        if free_mib >= need_mib:
+            return free_mib
+        if waited >= wait_limit:
+            raise DeskError(
+                "PERM_GPU_BUSY",
+                f"REFUSED: GPU {device} busy ({free_mib} MiB free, need {need_mib} MiB for {name}: "
+                f"{budget_mib} MiB + {VRAM_MARGIN_MIB} MiB margin)",
+                retryable=True,
+            )
+        step = min(VRAM_POLL_SECONDS, wait_limit - waited)
+        time.sleep(step)
+        waited += step
 
 
 class NoneEmbedder:
@@ -170,9 +263,11 @@ class EG2Embedder:
     - Interleaved text + image inputs share one 8,192-token window via <|image|> placeholders."""
 
     name, revision = "eg2", EG2_REVISION
+    vram_mib = REGISTRY["eg2"].vram_mib
 
     def __init__(self, device: str = "cpu", threads: int = DEFAULT_THREADS, dim: int = 768, batch: int = 4,
-                 vision_tokens: int = 280, dtype: str = "auto"):
+                 vision_tokens: int = 280, dtype: str = "auto",
+                 vram_budget: int = DEFAULT_VRAM_BUDGET_MIB, wait: float = 0.0):
         if dim not in EG2_VALID_DIMS:
             raise ValueError(f"REFUSED: EG2 dim={dim} not in {EG2_VALID_DIMS} (128d degrades multimodal quality)")
         if vision_tokens not in EG2_VISION_TOKENS:
@@ -183,6 +278,8 @@ class EG2Embedder:
         self.device = device
         self.threads = threads
         self.dim, self.batch, self.vision_tokens = dim, batch, vision_tokens
+        self.vram_budget, self.wait = vram_budget, wait
+        self._vram_checked = False
         self._requested_dtype = dtype
         self.dtype_name = "bfloat16" if dtype == "bfloat16" else "float32"
         self.processor_kwargs = {"image_seq_length": vision_tokens}
@@ -193,6 +290,9 @@ class EG2Embedder:
     def _ensure_model(self) -> None:
         if self.model is not None:
             return
+        if self.device != "cpu" and not self._vram_checked:
+            check_vram(self.device, self.vram_mib, vram_budget=self.vram_budget, wait=self.wait, name=self.name)
+            self._vram_checked = True
         enter_torch_region(self.threads)
         import torch
         from sentence_transformers import SentenceTransformer
@@ -297,9 +397,13 @@ class SigLIP2Embedder:
     """SigLIP2 so400m/384, the model ai-eyes runs, with its trained padding of 64 text tokens."""
 
     name, revision, dim, vision_tokens, dtype_name = "siglip2", SIGLIP2_REVISION, 1152, 729, "float32"
+    vram_mib = REGISTRY["siglip2"].vram_mib
 
-    def __init__(self, device: str = "cpu", threads: int = DEFAULT_THREADS, batch: int = 4):
+    def __init__(self, device: str = "cpu", threads: int = DEFAULT_THREADS, batch: int = 4,
+                 vram_budget: int = DEFAULT_VRAM_BUDGET_MIB, wait: float = 0.0):
         self.device, self.threads, self.batch = device, threads, batch
+        self.vram_budget, self.wait = vram_budget, wait
+        self._vram_checked = False
         self.torch = None
         self.processor = None
         self.model = None
@@ -308,6 +412,9 @@ class SigLIP2Embedder:
     def _ensure_model(self) -> None:
         if self.model is not None:
             return
+        if self.device != "cpu" and not self._vram_checked:
+            check_vram(self.device, self.vram_mib, vram_budget=self.vram_budget, wait=self.wait, name=self.name)
+            self._vram_checked = True
         enter_torch_region(self.threads)
         import torch
         from transformers import AutoModel, AutoProcessor
@@ -352,6 +459,160 @@ class SigLIP2Embedder:
             with self.torch.no_grad():
                 rows.append(self._pooled(self.model.get_text_features(**inputs)))
         return np.vstack(rows) if rows else np.zeros((0, 1152), np.float32)
+
+
+class SentenceTransformerTextEmbedder:
+    """Text-only embedder loaded through SentenceTransformer(repo, revision=...) with bf16 on CUDA, fp32 on CPU,
+    max_seq_length=2048, and unit-normalized output."""
+
+    vision_tokens = 0
+    max_seq_length = TEXT_MAX_SEQ_LENGTH
+
+    def __init__(
+        self,
+        spec: EmbedderSpec,
+        device: str = "cpu",
+        threads: int = DEFAULT_THREADS,
+        batch: int = 8,
+        vram_budget: int = DEFAULT_VRAM_BUDGET_MIB,
+        wait: float = 0.0,
+    ):
+        self.spec = spec
+        self.name = spec.name
+        self.repo = spec.repo
+        self.revision = spec.revision
+        self.licence = spec.licence
+        self.modalities = spec.modalities
+        self.vram_mib = spec.vram_mib
+        self.dim = spec.dim
+        self.device, self.threads, self.batch = device, threads, batch
+        self.vram_budget, self.wait = vram_budget, wait
+        self._vram_checked = False
+        self.dtype_name = "bfloat16" if device.startswith("cuda") else "float32"
+        self.model = None
+        self.params: int | None = None
+
+    def _ensure_model(self) -> None:
+        if self.model is not None:
+            return
+        if self.device != "cpu" and not self._vram_checked:
+            check_vram(self.device, self.vram_mib, vram_budget=self.vram_budget, wait=self.wait, name=self.name)
+            self._vram_checked = True
+        enter_torch_region(self.threads)
+        import torch
+        from sentence_transformers import SentenceTransformer
+
+        if self.device.startswith("cuda"):
+            torch_dtype = torch.bfloat16
+            self.dtype_name = "bfloat16"
+        else:
+            torch_dtype = torch.float32
+            self.dtype_name = "float32"
+
+        self.model = SentenceTransformer(
+            self.repo,
+            revision=self.revision,
+            device=self.device,
+            model_kwargs={"dtype": torch_dtype},
+        )
+        self.model.max_seq_length = self.max_seq_length
+        self.params = sum(p.numel() for p in self.model.parameters())
+
+    def texts(self, texts: list[str], role: str = "query") -> np.ndarray:
+        if not texts:
+            return np.zeros((0, self.dim), np.float32)
+        self._ensure_model()
+        out = self.model.encode(
+            texts,
+            batch_size=self.batch,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
+        res = unit_rows(out)
+        if res.ndim == 2 and res.shape[1] > 0:
+            self.dim = int(res.shape[1])
+        return res
+
+    def images(self, paths: list[str]) -> np.ndarray:
+        raise DeskError("INPUT_BAD_ARGUMENT", f"backend {self.name!r} is text-only and cannot embed images")
+
+
+class DINOv2Embedder:
+    """DINOv2 vision embedder loaded through AutoImageProcessor and AutoModel at its pinned revision, pooled and
+    unit-normalized."""
+
+    vision_tokens = 256
+    dtype_name = "float32"
+
+    def __init__(
+        self,
+        spec: EmbedderSpec = REGISTRY["dinov2"],
+        device: str = "cpu",
+        threads: int = DEFAULT_THREADS,
+        batch: int = 8,
+        vram_budget: int = DEFAULT_VRAM_BUDGET_MIB,
+        wait: float = 0.0,
+    ):
+        self.spec = spec
+        self.name = spec.name
+        self.repo = spec.repo
+        self.revision = spec.revision
+        self.licence = spec.licence
+        self.modalities = spec.modalities
+        self.vram_mib = spec.vram_mib
+        self.dim = spec.dim
+        self.device, self.threads, self.batch = device, threads, batch
+        self.vram_budget, self.wait = vram_budget, wait
+        self._vram_checked = False
+        self.torch = None
+        self.processor = None
+        self.model = None
+        self.params: int | None = None
+
+    def _ensure_model(self) -> None:
+        if self.model is not None:
+            return
+        if self.device != "cpu" and not self._vram_checked:
+            check_vram(self.device, self.vram_mib, vram_budget=self.vram_budget, wait=self.wait, name=self.name)
+            self._vram_checked = True
+        enter_torch_region(self.threads)
+        import torch
+        from transformers import AutoImageProcessor, AutoModel
+
+        self.torch = torch
+        self.processor = AutoImageProcessor.from_pretrained(self.repo, revision=self.revision)
+        self.model = AutoModel.from_pretrained(self.repo, revision=self.revision,
+                                               dtype=torch.float32).to(self.device).eval()
+        self.params = sum(p.numel() for p in self.model.parameters())
+
+    def _pooled(self, out) -> np.ndarray:
+        if not self.torch.is_tensor(out):
+            out = out.pooler_output if getattr(out, "pooler_output", None) is not None else out.last_hidden_state[:, 0]
+        return unit_rows(out.detach().cpu().numpy())
+
+    def images(self, paths: list[str]) -> np.ndarray:
+        if not paths:
+            return np.zeros((0, self.dim), np.float32)
+        self._ensure_model()
+        from PIL import Image
+
+        rows = []
+        for i in range(0, len(paths), self.batch):
+            ims = []
+            for p in paths[i:i + self.batch]:
+                with Image.open(p) as im:
+                    ims.append(im.convert("RGB"))
+            inputs = self.processor(images=ims, return_tensors="pt").to(self.device)
+            with self.torch.no_grad():
+                rows.append(self._pooled(self.model(**inputs)))
+        res = np.vstack(rows) if rows else np.zeros((0, self.dim), np.float32)
+        if res.ndim == 2 and res.shape[1] > 0:
+            self.dim = int(res.shape[1])
+        return res
+
+    def texts(self, texts: list[str], role: str = "query") -> np.ndarray:
+        raise DeskError("INPUT_BAD_ARGUMENT", f"backend {self.name!r} is image-only and cannot embed texts")
 
 
 PLAIN_SIGHT_REPO = "florence-community/Florence-2-large"
@@ -571,16 +832,56 @@ def make_drafter(name: str, device: str = "cpu", threads: int = DEFAULT_THREADS,
     raise DeskError("INPUT_UNKNOWN_DRAFTER", f"unknown drafter {name!r}: plain-sight, fake, or none")
 
 
-def make(backend: str, device: str = "cpu", threads: int = DEFAULT_THREADS, grant: str | None = None, **kwargs):
+_STANDINS = {
+    "none": lambda **_kw: NoneEmbedder(),
+    "fake": lambda **_kw: FakeEmbedder(),
+}
+
+_LOADERS = {
+    "eg2": lambda spec, **kw: EG2Embedder(**kw),
+    "siglip2": lambda spec, **kw: SigLIP2Embedder(**kw),
+    "sentence_transformer": lambda spec, **kw: SentenceTransformerTextEmbedder(spec, **kw),
+    "dinov2": lambda spec, **kw: DINOv2Embedder(spec, **kw),
+}
+
+
+def _can_probe_vram() -> bool:
+    if sys.modules.get("torch") is not None or sys.modules.get("cuda.core") is not None:
+        return True
+    import importlib.util
+
+    return importlib.util.find_spec("torch") is not None or importlib.util.find_spec("cuda") is not None
+
+
+def make(
+    backend: str,
+    device: str = "cpu",
+    threads: int = DEFAULT_THREADS,
+    grant: str | None = None,
+    *,
+    vram_budget: int = DEFAULT_VRAM_BUDGET_MIB,
+    wait: float = 0.0,
+    **kwargs,
+):
     check_device(device, grant)
     cap_threads(threads)
-    if backend == "none":
-        return NoneEmbedder()
-    if backend == "fake":
-        return FakeEmbedder()
-    if backend == "eg2":
-        return EG2Embedder(device=device, threads=threads, **kwargs)
-    if backend == "siglip2":
-        return SigLIP2Embedder(device=device, threads=threads, **kwargs)
-    raise DeskError("INPUT_UNKNOWN_BACKEND", f"unknown backend {backend!r}: eg2, siglip2, none or fake")
+    standin = _STANDINS.get(backend)
+    if standin is not None:
+        return standin(device=device, threads=threads, **kwargs)
+    spec = REGISTRY.get(backend)
+    if spec is None:
+        valid = ", ".join([*REGISTRY, *_STANDINS])
+        raise DeskError("INPUT_UNKNOWN_BACKEND", f"unknown backend {backend!r}: {valid}")
+    emb = _LOADERS[spec.loader](
+        spec,
+        device=device,
+        threads=threads,
+        vram_budget=vram_budget,
+        wait=wait,
+        **kwargs,
+    )
+    if device != "cpu" and _can_probe_vram():
+        check_vram(device, spec.vram_mib, vram_budget=vram_budget, wait=wait, name=spec.name)
+        emb._vram_checked = True
+    return emb
 

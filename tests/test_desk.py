@@ -18,6 +18,7 @@ from PIL import Image
 
 import fakes
 from dataset_desk import backends, description_gate, desk
+from dataset_desk.errors import DeskError
 
 TINT = {"red": (175, 0, 0), "green": (0, 175, 0), "blue": (0, 0, 175)}
 
@@ -993,6 +994,355 @@ class CommandLine(Project):
         with self.assertRaises(SystemExit) as cm:
             self.run_main("search")
         self.assertIn("--text or --image", str(cm.exception))
+
+
+class TextAndCodeInputTests(unittest.TestCase):
+    SENTINEL_RED = "SECRET_BODY_ALPHA_99182_RED " + ("red " * 20)
+    SENTINEL_BLUE = "SECRET_BODY_BETA_77412_BLUE " + ("blue " * 20)
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.out = os.path.join(self.tmp, "out")
+
+    def _write(self, base: str, rel: str, content: bytes | str) -> str:
+        full = os.path.join(base, *rel.split("/"))
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        mode = "wb" if isinstance(content, bytes) else "w"
+        kw = {} if isinstance(content, bytes) else {"encoding": "utf-8"}
+        with open(full, mode, **kw) as f:
+            f.write(content)
+        return full
+
+    def test_task_defaults_and_backend_override(self):
+        self.assertEqual(desk.command_backend("index"), "siglip2")
+        self.assertEqual(desk.command_backend("index", task="image-variety"), "dinov2")
+        self.assertEqual(desk.command_backend("text-index"), "bge-m3")
+        self.assertEqual(desk.command_backend("text-dupes"), "bge-m3")
+        self.assertEqual(desk.command_backend("text-search"), "bge-m3")
+        self.assertEqual(desk.command_backend("lineage"), "eg2")
+        self.assertEqual(desk.command_backend("text-index", backend="qwen3-emb-0.6b"), "qwen3-emb-0.6b")
+        self.assertEqual(desk.command_backend("lineage", backend="gte-modernbert"), "gte-modernbert")
+
+        src = os.path.join(self.tmp, "src")
+        self._write(src, "doc.md", "red text sample")
+        seen = []
+
+        def fake_make(backend, **kw):
+            seen.append((backend, kw))
+            emb = backends.FakeEmbedder()
+            emb.name = backend
+            return emb
+
+        with mock.patch.object(desk, "lower_priority"), contextlib.redirect_stdout(io.StringIO()):
+            desk.main(["text-index", "--source", src, "--out", self.out], make=fake_make)
+            desk.main(["text-index", "--source", src, "--out", self.out, "--task", "code"], make=fake_make)
+            desk.main(["text-index", "--source", src, "--out", self.out, "--backend", "gte-modernbert"], make=fake_make)
+        self.assertEqual([b for b, _ in seen], ["bge-m3", "eg2", "gte-modernbert"])
+
+    def test_suffix_filtering_nul_skipping_and_sha256_dedupe(self):
+        src = os.path.join(self.tmp, "src")
+        for idx, ext in enumerate((".md", ".txt", ".json", ".jsonl", ".log", ".out", ".py", ".sh", ".toml", ".yml", ".yaml", "")):
+            fname = f"file{idx}{ext}" if ext else "Makefile"
+            self._write(src, fname, f"unique content {idx} red")
+        # Byte-identical duplicate of file0.md
+        self._write(src, "sub/copy.md", "unique content 0 red")
+        # Disallowed suffixes
+        self._write(src, "skip.bin", "text inside bin")
+        self._write(src, "skip.png", "not a text suffix")
+        self._write(src, "skip.bak", "backup file")
+        # File with NUL in first 4 KB
+        self._write(src, "nul_file.txt", b"hello\x00world")
+
+        items, stats = desk.scan_text_source(src)
+        self.assertEqual(stats["files"], 13)
+        self.assertEqual(stats["unique"], 12)
+        self.assertEqual(stats["nul_skipped"], 1)
+        dup_item = next(it for it in items if len(it.paths) > 1)
+        self.assertEqual(sorted(dup_item.paths), ["file0.md", "sub/copy.md"])
+
+    def test_chunk_limits_and_mean_pooling_with_fake_embedder(self):
+        self.assertEqual(desk.chunk_text(""), [""])
+        long_text = "x" * 60000  # 10 chunks worth -> capped at 8 chunks of 6,000 chars
+        chunks = desk.chunk_text(long_text)
+        self.assertEqual(len(chunks), 8)
+        self.assertTrue(all(len(c) == 6000 for c in chunks))
+
+        emb = backends.FakeEmbedder()
+        c1 = ("red " * 1500)[:6000]
+        c2 = ("blue " * 1200)[:6000]
+        two_chunk_text = c1 + c2
+        split = desk.chunk_text(two_chunk_text)
+        self.assertEqual(len(split), 2)
+        expected = backends.unit_rows(emb.texts(split, "query").mean(axis=0))[0]
+        got = desk.embed_file_chunks(emb, split, role="query")
+        np.testing.assert_allclose(got, expected, atol=1e-6)
+        self.assertAlmostEqual(float(np.linalg.norm(got)), 1.0, places=5)
+
+    def test_rnd_data_reads_only_rnd_data_copies_outcomes_and_never_leaks_contents(self):
+        chk = os.path.join(self.tmp, "rnd-data")
+        # Run 1: outcome at top level; has rnd-data copy, 'd' blob copy, and unlisted file
+        self._write(chk, "runs/r1/files/outcome.json", json.dumps({"outcome": "pass"}))
+        f1 = self._write(chk, "runs/r1/files/gate.py", self.SENTINEL_RED)
+        self._write(chk, "runs/r1/files/unlisted.py", "green " * 20)
+        self._write(chk, "blobs/aa/blobfile.py", "green " * 20)
+        self._write(
+            chk,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [
+                    {"sha256": desk.sha256_file(f1), "store": "rnd-data", "location": "runs/r1/files/gate.py"},
+                    {"sha256": "deadbeef" * 8, "store": "d", "location": "blobs/aa/blobfile.py"},
+                ],
+            }),
+        )
+        # Run 2: outcome under run.outcome; same-name gate.py with near-identical red content + blue helper.sh
+        self._write(chk, "runs/r2/files/outcome.json", json.dumps({"run": {"outcome": "gate-reject"}}))
+        f2 = self._write(chk, "runs/r2/files/gate.py", self.SENTINEL_RED + " red")
+        f3 = self._write(chk, "runs/r2/files/helper.sh", self.SENTINEL_BLUE)
+        self._write(
+            chk,
+            "runs/r2/manifest.json",
+            json.dumps({
+                "id": "r2",
+                "copies": [
+                    {"sha256": desk.sha256_file(f2), "store": "rnd-data", "location": "runs/r2/files/gate.py"},
+                    {"sha256": desk.sha256_file(f3), "store": "rnd-data", "location": "runs/r2/files/helper.sh"},
+                ],
+            }),
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = desk.main(["text-index", "--rnd-data", chk, "--out", self.out, "--backend", "fake"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(os.path.isdir(os.path.join(self.out, "fake", "text")))
+
+        # Second index run reuses cached vectors by sha256 and revision
+        meta2 = desk.text_index(self.out, backends.FakeEmbedder(), rnd_data=chk, log=lambda *a: None)
+        self.assertEqual(meta2["embedded_now"], 0)
+
+        items, _vecs, _meta = desk.load_text_cache(self.out, "fake")
+        all_paths = [p for it in items for p in it.paths]
+        self.assertIn("runs/r1/files/gate.py", all_paths)
+        self.assertIn("runs/r2/files/gate.py", all_paths)
+        self.assertIn("runs/r2/files/helper.sh", all_paths)
+        self.assertNotIn("runs/r1/files/unlisted.py", all_paths)
+        self.assertFalse(any("blobfile" in p for p in all_paths))
+
+        by_path = {it.paths[0]: it for it in items}
+        self.assertEqual(by_path["runs/r1/files/gate.py"].outcome, "pass")
+        self.assertEqual(by_path["runs/r2/files/gate.py"].outcome, "gate-reject")
+
+        # text-dupes
+        dupes_buf = io.StringIO()
+        with contextlib.redirect_stdout(dupes_buf):
+            desk.main(["text-dupes", "--rnd-data", chk, "--out", self.out, "--backend", "fake", "--semantic", "0.90"])
+        dupes_out = dupes_buf.getvalue()
+        dupes_json = json.loads(dupes_out)
+        self.assertEqual(len(dupes_json["pairs"]), 1)
+        self.assertEqual(dupes_json["pairs"][0]["outcome_a"], "pass")
+        self.assertEqual(dupes_json["pairs"][0]["outcome_b"], "gate-reject")
+
+        # text-search
+        search_buf = io.StringIO()
+        with contextlib.redirect_stdout(search_buf):
+            desk.main(["text-search", "--out", self.out, "--backend", "fake", "--text", "blue", "-k", "1"])
+        search_out = search_buf.getvalue()
+        self.assertIn("runs/r2/files/helper.sh", search_out)
+        self.assertIn("gate-reject", search_out)
+
+        # lineage
+        lin_buf = io.StringIO()
+        with contextlib.redirect_stdout(lin_buf):
+            desk.main(["lineage", "--out", self.out, "--backend", "fake"])
+        lin_out = lin_buf.getvalue()
+        lin_json = json.loads(lin_out)
+        self.assertIn("gate.py", lin_json["files"])
+        self.assertNotIn("helper.sh", lin_json["files"])  # only in one run
+        pair = lin_json["files"]["gate.py"][0]
+        self.assertEqual((pair["run_a"], pair["run_b"]), ("r1", "r2"))
+        self.assertEqual((pair["outcome_a"], pair["outcome_b"]), ("pass", "gate-reject"))
+        self.assertGreater(pair["cosine"], 0.99)
+
+        # Verify NO file contents ever appear in CLI outputs or cache files
+        with open(os.path.join(self.out, "fake", "text", "items.jsonl"), encoding="utf-8") as f:
+            cache_items_raw = f.read()
+        for text_blob in (buf.getvalue(), dupes_out, search_out, lin_out, cache_items_raw):
+            self.assertNotIn("SECRET_BODY_ALPHA_99182_RED", text_blob)
+            self.assertNotIn("SECRET_BODY_BETA_77412_BLUE", text_blob)
+
+    def test_rnd_data_refuses_private_store_and_paths_outside_checkout(self):
+        # 1. Manifest naming rnd-data-private
+        chk_priv = os.path.join(self.tmp, "chk1")
+        self._write(
+            chk_priv,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [{"sha256": "00" * 32, "store": "rnd-data-private", "location": "runs/r1/files/secret.py"}],
+            }),
+        )
+        with self.assertRaises(DeskError) as cm1:
+            desk.scan_rnd_data(chk_priv)
+        self.assertTrue(cm1.exception.code.startswith("PERM_"))
+
+        # 2. Manifest with .. traversal outside checkout
+        chk_trav = os.path.join(self.tmp, "chk2")
+        self._write(chk_trav, "outside.py", "print(1)")
+        self._write(
+            chk_trav,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [{"sha256": "00" * 32, "store": "rnd-data", "location": "../outside.py"}],
+            }),
+        )
+        with self.assertRaises(DeskError) as cm2:
+            desk.scan_rnd_data(chk_trav)
+        self.assertTrue(cm2.exception.code.startswith("PERM_"))
+
+        # 3. Manifest with assembled absolute path outside checkout (no literal machine path)
+        chk_abs = os.path.join(self.tmp, "chk3")
+        abs_like = ("C" + ":/outside/file.py") if os.name == "nt" else ("/ho" + "me/user/outside.py")
+        self._write(
+            chk_abs,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [{"sha256": "00" * 32, "store": "rnd-data", "location": abs_like}],
+            }),
+        )
+        with self.assertRaises(DeskError) as cm3:
+            desk.scan_rnd_data(chk_abs)
+        self.assertTrue(cm3.exception.code.startswith("PERM_"))
+
+        # 4. --out inside --source is refused
+        src = os.path.join(self.tmp, "src_ro")
+        self._write(src, "a.py", "red")
+        with self.assertRaises(DeskError) as cm4:
+            desk.main(["text-index", "--source", src, "--out", os.path.join(src, "inside"), "--backend", "fake"])
+        self.assertEqual(cm4.exception.code, "PERM_OUT_INSIDE_PROJECT")
+
+    def test_text_and_rnd_data_edge_branches_and_cli_validations(self):
+        # Empty chunks and NoneEmbedder chunk embedding
+        self.assertEqual(desk.embed_file_chunks(backends.NoneEmbedder(), []).shape, (0,))
+        self.assertEqual(desk.embed_file_chunks(backends.FakeEmbedder(), []).shape, (4,))
+
+        # Missing source directory
+        with self.assertRaises(DeskError) as cm_miss:
+            desk.scan_text_source(os.path.join(self.tmp, "does_not_exist"))
+        self.assertEqual(cm_miss.exception.code, "INPUT_BAD_ARGUMENT")
+
+        # Private or blobs folder path refused directly
+        priv_dir = os.path.join(self.tmp, "rnd-data-private")
+        os.makedirs(priv_dir, exist_ok=True)
+        with self.assertRaises(DeskError) as cm_pdir:
+            desk.scan_text_source(priv_dir)
+        self.assertEqual(cm_pdir.exception.code, "PERM_PRIVATE_SOURCE")
+
+        # Missing runs/ directory
+        empty_chk = os.path.join(self.tmp, "empty_chk")
+        os.makedirs(empty_chk, exist_ok=True)
+        with self.assertRaises(DeskError) as cm_noruns:
+            desk.scan_rnd_data(empty_chk)
+        self.assertEqual(cm_noruns.exception.code, "PERM_PRIVATE_SOURCE")
+
+        # Manifest with source naming rnd-data-private
+        chk_src_priv = os.path.join(self.tmp, "chk_src_priv")
+        self._write(
+            chk_src_priv,
+            "runs/r1/manifest.json",
+            json.dumps({"id": "r1", "source": "rnd-data-private/secret", "copies": []}),
+        )
+        with self.assertRaises(DeskError):
+            desk.scan_rnd_data(chk_src_priv)
+
+        # Manifest with rnd-data store pointing into blobs/ (outside runs/)
+        chk_blob_loc = os.path.join(self.tmp, "chk_blob_loc")
+        self._write(
+            chk_blob_loc,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [{"sha256": "00" * 32, "store": "rnd-data", "location": "blobs/ab/file.py"}],
+            }),
+        )
+        with self.assertRaises(DeskError):
+            desk.scan_rnd_data(chk_blob_loc)
+
+        # Manifest with missing file on disk
+        chk_missing_file = os.path.join(self.tmp, "chk_missing_file")
+        self._write(
+            chk_missing_file,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [{"sha256": "00" * 32, "store": "rnd-data", "location": "runs/r1/files/gone.py"}],
+            }),
+        )
+        with self.assertRaises(DeskError):
+            desk.scan_rnd_data(chk_missing_file)
+
+        # Identical code files across two runs in lineage (cos == 1.0) + NUL skip + non-text skip in rnd-data
+        chk_lin = os.path.join(self.tmp, "chk_lin")
+        f_r1 = self._write(chk_lin, "runs/r1/files/same.py", "red green")
+        f_r2 = self._write(chk_lin, "runs/r2/files/same.py", "red green")
+        f_nul = self._write(chk_lin, "runs/r2/files/bin.py", b"a\x00b")
+        f_png = self._write(chk_lin, "runs/r2/files/pic.png", "ignored")
+        self._write(
+            chk_lin,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [{"sha256": desk.sha256_file(f_r1), "store": "rnd-data", "location": "runs/r1/files/same.py"}],
+            }),
+        )
+        self._write(
+            chk_lin,
+            "runs/r2/manifest.json",
+            json.dumps({
+                "id": "r2",
+                "copies": [
+                    {"sha256": desk.sha256_file(f_r2), "store": "rnd-data", "location": "runs/r2/files/same.py"},
+                    {"sha256": desk.sha256_file(f_nul), "store": "rnd-data", "location": "runs/r2/files/bin.py"},
+                    {"sha256": desk.sha256_file(f_png), "store": "rnd-data", "location": "runs/r2/files/pic.png"},
+                ],
+            }),
+        )
+        out_lin = os.path.join(self.tmp, "out_lin")
+        desk.text_index(out_lin, backends.FakeEmbedder(), rnd_data=chk_lin, limit=5, log=lambda *a: None)
+        t_items, t_vecs, _ = desk.load_text_cache(out_lin, "fake")
+        lin = desk.lineage(t_items, t_vecs)
+        self.assertEqual(lin["files"]["same.py"][0]["cosine"], 1.0)
+
+        # Missing text cache raises STATE_NO_INDEX
+        with self.assertRaises(DeskError) as cm_no_idx:
+            desk.load_text_cache(os.path.join(self.tmp, "no_cache"), "fake")
+        self.assertEqual(cm_no_idx.exception.code, "STATE_NO_INDEX")
+
+        # CLI argument errors on text commands
+        with self.assertRaises(DeskError):
+            desk.main(["text-index", "--out", out_lin, "--backend", "fake"])
+        with self.assertRaises(DeskError):
+            desk.main(["text-index", "--source", chk_lin, "--rnd-data", chk_lin, "--out", out_lin, "--backend", "fake"])
+        with self.assertRaises(DeskError):
+            desk.main(["text-dupes", "--backend", "fake"])
+        with self.assertRaises(DeskError):
+            desk.main(["text-search", "--out", out_lin, "--backend", "none", "--text", "red"])
+        with self.assertRaises(DeskError):
+            desk.main(["text-search", "--out", out_lin, "--backend", "fake"])
+        # --vram-budget and --wait forwarded to make()
+        seen_kw = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            desk.main(
+                ["text-search", "--out", out_lin, "--backend", "fake", "--text", "red",
+                 "--vram-budget", "20000", "--wait", "10"],
+                make=lambda b, **kw: (seen_kw.append(kw), backends.FakeEmbedder())[1],
+            )
+        self.assertEqual(seen_kw[0]["vram_budget"], 20000)
+        self.assertEqual(seen_kw[0]["wait"], 10.0)
 
 
 if __name__ == "__main__":
