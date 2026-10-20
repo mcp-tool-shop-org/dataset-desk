@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-20
+
+### Added
+
+- **Text and code input:** `text-index`, `text-dupes`, `text-search` and `lineage` read a `--source` folder or an
+  rnd-data checkout.
+  - rnd-data's private companion and blob stores are refused.
+  - Only relative paths are printed.
+- **An embedder registry** with six models, each pinned to a full commit, with its licence and VRAM figure:
+  - EmbeddingGemma 2 and SigLIP2;
+  - bge-m3, Qwen3-Embedding 0.6B and gte-modernbert;
+  - DINOv2.
+
+  Each task has a default (`--task`): bge-m3 for text, EmbeddingGemma 2 for code, DINOv2 for duplicates, SigLIP2 for
+  image search.
+- **A VRAM governor.**
+  - It refuses a load when used plus needed memory would pass `--vram-budget` (default 26,624 MiB).
+  - `--wait` polls until the load fits.
+  - Every refusal names used, free, needed and the budget.
+- **EmbeddingGemma 2 is used the way its model card says:**
+  - a task prefix for each role, with file names as document titles;
+  - text-only loading for text commands;
+  - `--dim` (768, 512 or 256), and `--vision-tokens`.
+- **Chunks counted by each model's own tokenizer:** up to the model's limit (8,000 or 8,192 tokens), at most 8 per
+  file.
+- **Duplicate output names its rule:** `dupes` reports `rule` and `view_pairs_skipped`, and `text-dupes` reports
+  `top1_percentiles`.
+- **A mirror-aware dHash:** `dhash_flip`, computed from the flipped image.
+
+### Changed
+
+- **Duplicate rules, from the studio's calibration on the RTX 5090.** Every threshold is marked provisional.
+  - On a DINOv2 index, an image pair is a duplicate when `(cos ≥ 0.94 and flip-aware dHash within 44 bits) or
+    cos ≥ 0.985`. That's recall 0.91 with no cross-project false positives on the studio's pool.
+  - Other backends use the mirror-aware dHash within 26 bits, plus cosine ≥ 0.95.
+- **Two views of one object are never duplicates.** The view comes from the record's `provenance.asset_id` and
+  `render_id`, or from a file name like `<asset>__y<yaw>_e<elev>`.
+- **`text-dupes` defaults:** 0.98 on bge-m3, and 0.95 for `--task code` on EmbeddingGemma 2. Any other backend needs
+  `--semantic`.
+- **The registered VRAM figures for the text models are long-input peaks** (bge-m3 7,488, Qwen3 14,470,
+  gte-modernbert 6,544 MiB).
+- **Caches record and check every setting that changes a vector:** revision, dim, vision tokens, max tokens, chunks,
+  role and dtype. A non-default `--dim` or `--vision-tokens` gets its own folder.
+- **`scan.jsonl` rows are versioned** (`scan_v: 2`). Older rows are recomputed.
+
 ### Fixed
 
 - **Large projects no longer run out of memory or take hours.** Measured on synthetic sets, before → after:

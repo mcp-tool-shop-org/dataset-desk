@@ -1,4 +1,4 @@
-"""dataset desk (prototype): curate a style-dataset-lab project's images with an image-text embedder.
+"""dataset desk (prototype): duplicates, outliers and gaps in image, text and code datasets, and a description gate.
 
 The roles:
 - EmbeddingGemma 2 (or SigLIP2) is the index;
