@@ -386,6 +386,7 @@ class TransformersWarningsOff(TmpCase):
     def _logging(self):
         log = types.ModuleType("transformers.utils.logging")
         log.level, log.history = 30, []
+        log.pb_enabled = True
         log.get_verbosity = lambda: log.level
 
         def set_verbosity(v):
@@ -394,11 +395,14 @@ class TransformersWarningsOff(TmpCase):
 
         log.set_verbosity = set_verbosity
         log.set_verbosity_error = lambda: set_verbosity(40)
+        log.is_progress_bar_enabled = lambda: log.pb_enabled
+        log.disable_progress_bar = lambda: setattr(log, "pb_enabled", False)
+        log.enable_progress_bar = lambda: setattr(log, "pb_enabled", True)
         utils = types.ModuleType("transformers.utils")
         utils.logging = log
         return log, utils
 
-    def test_holds_error_level_during_the_block_and_restores_it(self):
+    def test_holds_error_level_and_disables_progress_bar_during_the_block_and_restores_both(self):
         log, utils = self._logging()
         tf = fakes.make_transformers()
         tf.utils = utils
@@ -406,34 +410,78 @@ class TransformersWarningsOff(TmpCase):
                                                     "transformers.utils.logging": log}):
             with backends.transformers_warnings_off():
                 self.assertEqual(log.level, 40)
+                self.assertFalse(log.is_progress_bar_enabled())
             self.assertEqual(log.level, 30)
+            self.assertTrue(log.is_progress_bar_enabled())
             with self.assertRaises(RuntimeError):
                 with backends.transformers_warnings_off():
                     raise RuntimeError("load failed")
             self.assertEqual(log.level, 30)  # restored even when the load raises
+            self.assertTrue(log.is_progress_bar_enabled())
+            # When progress bar was already disabled before entering, it stays disabled after exit
+            log.disable_progress_bar()
+            with backends.transformers_warnings_off():
+                self.assertFalse(log.is_progress_bar_enabled())
+            self.assertFalse(log.is_progress_bar_enabled())
 
     def test_no_transformers_logging_is_a_no_op(self):
         with mock.patch.dict(sys.modules, {"transformers.utils": None}):
             with backends.transformers_warnings_off():
                 pass
 
-    def test_siglip2_loads_inside_it(self):
+    def test_all_embedders_and_drafter_load_inside_it(self):
         log, utils = self._logging()
-        levels = []
+        observed = []
         tf = fakes.make_transformers()
         tf.utils = utils
-        real = tf.AutoModel.from_pretrained
+        real_model = tf.AutoModel.from_pretrained
+        real_im2txt = tf.AutoModelForImageTextToText.from_pretrained
 
-        def watched(repo, **kw):
-            levels.append(log.level)
-            return real(repo, **kw)
+        def watched_model(repo, **kw):
+            observed.append(("tf_model", log.level, log.is_progress_bar_enabled()))
+            return real_model(repo, **kw)
 
-        tf.AutoModel.from_pretrained = staticmethod(watched)
-        with fakes.fake_modules(torch=fakes.make_torch(), transformers=tf,
-                                **{"transformers.utils": utils, "transformers.utils.logging": log}):
-            backends.SigLIP2Embedder().images([png(self.tmp, "a.png")])
-        self.assertEqual(levels, [40])
+        def watched_im2txt(repo, **kw):
+            observed.append(("tf_im2txt", log.level, log.is_progress_bar_enabled()))
+            return real_im2txt(repo, **kw)
+
+        tf.AutoModel.from_pretrained = staticmethod(watched_model)
+        tf.AutoModelForImageTextToText.from_pretrained = staticmethod(watched_im2txt)
+
+        st_mod = fakes.make_sentence_transformers()
+        orig_st = st_mod.SentenceTransformer
+
+        class WatchedST(orig_st):
+            def __init__(self, repo, **kw):
+                observed.append(("st", log.level, log.is_progress_bar_enabled()))
+                super().__init__(repo, **kw)
+
+        st_mod.SentenceTransformer = WatchedST
+
+        img_path = png(self.tmp, "a.png")
+        with fakes.fake_modules(
+            torch=fakes.make_torch(),
+            transformers=tf,
+            sentence_transformers=st_mod,
+            plain_sight=None,
+            **{
+                "plain_sight.engine": None,
+                "transformers.utils": utils,
+                "transformers.utils.logging": log,
+            },
+        ):
+            backends.SigLIP2Embedder().images([img_path])
+            backends.DINOv2Embedder().images([img_path])
+            backends.EG2Embedder().texts(["hi"])
+            backends.SentenceTransformerTextEmbedder(registry.REGISTRY["bge-m3"]).texts(["hi"])
+            backends.PlainSightDrafter().draft([img_path])
+
+        self.assertEqual(len(observed), 5)
+        for kind, lvl, pb in observed:
+            self.assertEqual(lvl, 40, f"{kind} did not load with error verbosity")
+            self.assertFalse(pb, f"{kind} did not disable progress bar during load")
         self.assertEqual(log.level, 30)
+        self.assertTrue(log.is_progress_bar_enabled())
 
 
 class PlainSightNativePath(TmpCase):
@@ -642,12 +690,12 @@ class RegistryAndNewBackendsTests(TmpCase):
             "dinov2": 0,
         }
         expected_vram_mib = {
-            "eg2": 12550,
-            "siglip2": 5340,
-            "bge-m3": 7488,
-            "qwen3-emb-0.6b": 14470,
-            "gte-modernbert": 6544,
-            "dinov2": 636,
+            "eg2": 13119,
+            "siglip2": 6207,
+            "bge-m3": 8442,
+            "qwen3-emb-0.6b": 15065,
+            "gte-modernbert": 7112,
+            "dinov2": 1272,
         }
         for name, spec in registry.REGISTRY.items():
             self.assertEqual(spec.name, name)
@@ -937,7 +985,7 @@ class VRAMGovernorTests(TmpCase):
         self.assertEqual(out.shape, (1, 768))
 
     def test_too_little_free_vram_refuses_with_perm_gpu_busy(self):
-        # eg2 needs 12550 + 1024 = 13574 MiB; give 10000 MiB free on 32768 MiB (used = 22768 MiB)
+        # eg2 needs 13119 + 1024 = 14143 MiB; give 10000 MiB free on 32768 MiB (used = 22768 MiB)
         t = fakes.make_torch(free_mib=10000, total_mib=32768)
         with fakes.fake_modules(torch=t):
             with self.assertRaises(DeskError) as cm:
@@ -948,11 +996,11 @@ class VRAMGovernorTests(TmpCase):
         msg = cm.exception.message
         self.assertIn("used 22768 MiB", msg)
         self.assertIn("free 10000 MiB", msg)
-        self.assertIn("need 13574 MiB", msg)
+        self.assertIn("need 14143 MiB", msg)
         self.assertIn("budget 26624 MiB", msg)
 
     def test_over_vram_budget_ceiling_refuses_immediately_without_polling(self):
-        # Free memory is plenty (30000 MiB, used = 2768 MiB), but --vram-budget ceiling is 12000 MiB (< 13574 MiB need)
+        # Free memory is plenty (30000 MiB, used = 2768 MiB), but --vram-budget ceiling is 12000 MiB (< 14143 MiB need)
         t = fakes.make_torch(free_mib=30000, total_mib=32768)
         sleeps = []
         with fakes.fake_modules(torch=t), \
@@ -965,13 +1013,13 @@ class VRAMGovernorTests(TmpCase):
         msg = cm.exception.message
         self.assertIn("used 2768 MiB", msg)
         self.assertIn("free 30000 MiB", msg)
-        self.assertIn("need 13574 MiB", msg)
+        self.assertIn("need 14143 MiB", msg)
         self.assertIn("budget 12000 MiB", msg)
 
     def test_used_plus_need_over_budget_refuses_and_polls_under_wait(self):
         # 18000 MiB free on 32768 MiB -> used = 14768 MiB.
-        # eg2 needs 13574 MiB -> free (18000) >= need (13574) and need (13574) <= budget (26624),
-        # YET used + need = 14768 + 13574 = 28342 > 26624 -> refused with PERM_GPU_BUSY!
+        # eg2 needs 14143 MiB -> free (18000) >= need (14143) and need (14143) <= budget (26624),
+        # YET used + need = 14768 + 14143 = 28911 > 26624 -> refused with PERM_GPU_BUSY!
         t = fakes.make_torch(free_mib=18000, total_mib=32768)
         with fakes.fake_modules(torch=t):
             with self.assertRaises(DeskError) as cm:
@@ -981,10 +1029,10 @@ class VRAMGovernorTests(TmpCase):
         msg = cm.exception.message
         self.assertIn("used 14768 MiB", msg)
         self.assertIn("free 18000 MiB", msg)
-        self.assertIn("need 13574 MiB", msg)
+        self.assertIn("need 14143 MiB", msg)
         self.assertIn("budget 26624 MiB", msg)
 
-        # Under --wait, polls until used + need <= budget (when free rises to 22000 -> used = 10768, 10768+13574=24342 <= 26624)
+        # Under --wait, polls until used + need <= budget (when free rises to 22000 -> used = 10768, 10768+14143=24911 <= 26624)
         readings = [
             (18000 * (1 << 20), 32768 * (1 << 20)),
             (22000 * (1 << 20), 32768 * (1 << 20)),
@@ -1076,6 +1124,18 @@ class VRAMGovernorTests(TmpCase):
             b = backends.SentenceTransformerTextEmbedder(registry.REGISTRY["bge-m3"], device="cuda:0")
             b.texts(["hi"])
             self.assertTrue(b._vram_checked)
+
+    def test_cpu_only_torch_on_cuda_device_raises_env_no_cuda_torch(self):
+        t = fakes.make_torch()
+        t.cuda.mem_get_info = mock.Mock(side_effect=AssertionError("Torch not compiled with CUDA enabled"))
+        with fakes.fake_modules(torch=t):
+            with self.assertRaises(DeskError) as cm:
+                backends.make("siglip2", device="cuda", grant="test")
+        self.assertEqual(cm.exception.code, "ENV_NO_CUDA_TORCH")
+        self.assertEqual(cm.exception.exit_code, 1)
+        self.assertIn("download.pytorch.org", cm.exception.hint)
+        self.assertIn("--device cpu", cm.exception.hint)
+        self.assertIsInstance(cm.exception.cause, AssertionError)
 
 
 if __name__ == "__main__":

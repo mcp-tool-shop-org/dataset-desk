@@ -28,6 +28,8 @@ Models load lazily, on the CPU with capped threads at below-normal priority; a G
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import functools
 import hashlib
 import json
 import os
@@ -95,7 +97,9 @@ def check_multimodal_pool(
             "before the counted run. Only the model-free gate and human edit may accept descriptions unless "
             "--allow-multimodal-pool is passed."
         )
-    if backend != "none" and not images_only:
+    spec = registry.REGISTRY.get(backend)
+    eff_images_only = bool(images_only or backend == "none" or (spec is not None and "text" not in spec.modalities))
+    if not eff_images_only:
         raise DeskError(
             "PERM_LOCKED_POOL",
             f"REFUSED: project {name!r} is in the multimodal experiment pool {sorted(MULTIMODAL_POOL)}; "
@@ -194,12 +198,28 @@ def _dhash_flip(im, size: int = 16) -> str:
 
 
 def _conv1d_axis0(a: np.ndarray, k: np.ndarray) -> np.ndarray:
+    a = np.ascontiguousarray(a, dtype=np.float32)
     r = len(k) // 2
     p = np.pad(a, ((r, r), (0, 0)), mode="reflect")
-    out = np.zeros_like(a, dtype=np.float32)
-    for i, w in enumerate(k):
-        out += w * p[i:i + a.shape[0]]
+    h, w = a.shape
+    out = np.empty((h, w), dtype=np.float32)
+    strip = 128
+    for s in range(0, h, strip):
+        e = min(h, s + strip)
+        acc = k[0] * p[s:e]
+        for i in range(1, len(k)):
+            acc = acc + k[i] * p[s + i:e + i]
+        out[s:e] = acc
     return out
+
+
+@functools.lru_cache(maxsize=16)
+def _fft_window_and_mask(shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+    win = np.hanning(shape[0])[:, None] * np.hanning(shape[1])[None, :]
+    cy, cx = (np.array(shape) - 1) / 2.0
+    yy, xx = np.ogrid[:shape[0], :shape[1]]
+    rad = np.hypot((yy - cy) / max(shape[0] / 2.0, 1.0), (xx - cx) / max(shape[1] / 2.0, 1.0))
+    return win, rad > 0.30
 
 
 def _gauss2d(a: np.ndarray, sigma: float) -> np.ndarray:
@@ -265,11 +285,8 @@ def _texture_stats(im) -> list[float]:
     tr = (jxx + jyy) / 2.0
     coh = 2.0 * disc / np.maximum(tr * 2.0, 1e-6)
 
-    win = np.hanning(lum.shape[0])[:, None] * np.hanning(lum.shape[1])[None, :]
+    win, rad_hi = _fft_window_and_mask(lum.shape)
     spec = np.fft.fftshift(np.abs(np.fft.fft2((lum - float(lum.mean())) * win)) ** 2)
-    cy, cx = (np.array(spec.shape) - 1) / 2.0
-    yy, xx = np.ogrid[:spec.shape[0], :spec.shape[1]]
-    rad = np.hypot((yy - cy) / max(spec.shape[0] / 2.0, 1.0), (xx - cx) / max(spec.shape[1] / 2.0, 1.0))
     tot = max(float(spec.sum()), 1e-9)
 
     hf_ratio = min(1.0, float(hp.std()) / max(lum_std, 1e-6))
@@ -277,7 +294,7 @@ def _texture_stats(im) -> list[float]:
     edge_dens = float((egrad > 12.0).mean())
     edge_hard = float(np.tanh(raw_hard / 3.0))
     flat_coh = float(coh[flat].mean()) if flat.any() else 0.0
-    band_hi = float(spec[rad > 0.30].sum() / tot)
+    band_hi = float(spec[rad_hi].sum() / tot)
     return [hf_ratio, flat_hf, edge_dens, edge_hard, flat_coh, band_hi]
 
 
@@ -381,6 +398,20 @@ def _scan_image_stats(path: str) -> tuple[str, str, list, dict]:
     with Image.open(path) as im:
         png_meta = _png_prompt_meta(im)
         return _dhash(im), _dhash_flip(im), _palette(im), png_meta
+
+
+def _init_scan_worker() -> None:
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
+
+def _scan_worker_one(full_path: str) -> tuple[tuple[str, str, list, dict] | None, str | None, float]:
+    t0 = time.perf_counter()
+    try:
+        return _scan_image_stats(full_path), None, time.perf_counter() - t0
+    except Exception as e:  # noqa: BLE001
+        return None, str(e), time.perf_counter() - t0
 
 
 def hamming(a: str, b: str) -> int:
@@ -629,7 +660,7 @@ def _save_scan_cache(out: str | None, rows: list[dict]) -> None:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def scan(project: str, strict: bool = False, out: str | None = None) -> tuple[list[Item], dict]:
+def scan(project: str, strict: bool = False, out: str | None = None, threads: int = 1) -> tuple[list[Item], dict]:
     """Every image under outputs/<folder>/, merged by content. Files at the top of outputs/ (contact sheets and
     composites) are left out, as in the multimodal design. Joins records/*.json, outputs/<wave>/generation.json,
     outputs/<wave>/_curation.json, and embedded ComfyUI PNG tEXt prompt metadata. Reuses <out>/scan.jsonl across
@@ -694,6 +725,25 @@ def scan(project: str, strict: bool = False, out: str | None = None) -> tuple[li
     cache_rows: list[dict] = []
     look_seconds = 0.0
     look_computed_now = 0
+    uncached = [it for it in by_sha.values() if it.sha256 not in scan_cache]
+    computed_by_sha: dict[str, tuple[tuple[str, str, list, dict] | None, str | None, float]] = {}
+    if threads > 1 and len(uncached) >= 8:
+        paths_to_scan = [os.path.join(project, it.paths[0]) for it in uncached]
+        main_mod = sys.modules.get("__main__")
+        main_file = getattr(main_mod, "__file__", None) if main_mod is not None else None
+        strip_main_file = isinstance(main_file, str) and not os.path.isfile(main_file)
+        if strip_main_file:
+            delattr(main_mod, "__file__")
+        try:
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=threads, initializer=_init_scan_worker
+            ) as pool:
+                for it, res in zip(uncached, pool.map(_scan_worker_one, paths_to_scan), strict=True):
+                    computed_by_sha[it.sha256] = res
+        finally:
+            if strip_main_file and main_mod is not None and main_file is not None:
+                main_mod.__file__ = main_file
+
     for it in by_sha.values():
         cached = scan_cache.get(it.sha256)
         if cached is not None:
@@ -702,6 +752,18 @@ def scan(project: str, strict: bool = False, out: str | None = None) -> tuple[li
             pal = cached["palette"]
             png_meta = cached.get("png_meta") or {}
             dt = float(cached.get("look_seconds") or 0.0)
+        elif it.sha256 in computed_by_sha:
+            stats_res, err_text, dt = computed_by_sha[it.sha256]
+            if err_text is not None:
+                if strict:
+                    _scan_image_stats(os.path.join(project, it.paths[0]))
+                    raise OSError(err_text)
+                problems.append(f"{it.paths[0]}: unreadable image ({err_text})")
+                continue
+            assert stats_res is not None
+            dh, dh_flip, pal, png_meta = stats_res
+            look_seconds += dt
+            look_computed_now += 1
         else:
             t0 = time.perf_counter()
             try:
@@ -851,11 +913,13 @@ def load_cache(
 
 def index(project: str, out: str, emb, limit: int | None = None, grant: str | None = None,
           strict: bool = False, images_only: bool = False, allow_multimodal_pool: bool = False,
-          log=print) -> dict:
+          log=print, threads: int = 1) -> dict:
     """Embed every unique image, and every approved record's description as a search query. Reuses vectors already
     cached for the same backend, revision and settings, and shares scan.jsonl across backends."""
-    check_multimodal_pool(project, emb.name, images_only=images_only, allow_multimodal_pool=allow_multimodal_pool)
-    items, stats = scan(project, strict=strict, out=out)
+    can_text = "text" in getattr(emb, "modalities", ("text", "image"))
+    eff_images_only = bool(images_only or emb.name == "none" or not can_text)
+    check_multimodal_pool(project, emb.name, images_only=eff_images_only, allow_multimodal_pool=allow_multimodal_pool)
+    items, stats = scan(project, strict=strict, out=out, threads=threads)
     if limit:
         items = items[:limit]
     old_img, old_txt, old_ctxt = {}, {}, {}
@@ -899,8 +963,6 @@ def index(project: str, out: str, emb, limit: int | None = None, grant: str | No
             old_img[it.sha256] = v
     t_img = time.time() - t0
 
-    can_text = "text" in getattr(emb, "modalities", ("text", "image"))
-    eff_images_only = bool(images_only or emb.name == "none" or not can_text)
     described = []
     if not eff_images_only:
         described = [
@@ -952,11 +1014,12 @@ def index(project: str, out: str, emb, limit: int | None = None, grant: str | No
 
 # ---- the analyses: cache only, except where a query has to be embedded --------------------------------------------
 
-def pairs_at_least(vecs: np.ndarray, thr: float, chunk: int = 1024):
+def pairs_at_least(vecs: np.ndarray, thr: float, chunk: int | None = None):
     if vecs.ndim != 2 or vecs.shape[1] == 0:
         return
-    for i in range(0, len(vecs), chunk):
-        sims = vecs[i:i + chunk] @ vecs.T
+    rows = _block_rows(len(vecs), vecs.itemsize) if chunk is None else chunk
+    for i in range(0, len(vecs), rows):
+        sims = vecs[i:i + rows] @ vecs.T
         nz_a, nz_b = np.nonzero(sims >= thr)
         for a, b in zip(nz_a, nz_b, strict=True):
             if i + a < b:
@@ -1043,13 +1106,14 @@ def dupes(
     }
 
 
-def top1_percentiles(img: np.ndarray, chunk: int = 1024) -> dict:
+def top1_percentiles(img: np.ndarray, chunk: int | None = None) -> dict:
     """Each image's cosine to its nearest other image, as percentiles: the scale to set the semantic cut on."""
     if len(img) < 2 or img.ndim != 2 or img.shape[1] == 0:
         return {}
+    rows = _block_rows(len(img), img.itemsize) if chunk is None else chunk
     best = []
-    for i in range(0, len(img), chunk):
-        sims = img[i:i + chunk] @ img.T
+    for i in range(0, len(img), rows):
+        sims = img[i:i + rows] @ img.T
         for r in range(sims.shape[0]):
             sims[r, i + r] = -np.inf
         best.append(sims.max(axis=1))
@@ -1158,10 +1222,15 @@ def reading(items: list[Item], img: np.ndarray, k: int = 5) -> list[dict]:
     return rows
 
 
+_RANK_TIE_EPS = 1e-6
+
+
 def mid_rank(sims: np.ndarray, own: int) -> float:
     """1 + the images scored above the own image + half the ties, so a tie never follows file order."""
-    s = sims[own]
-    return 1 + float((sims > s).sum()) + 0.5 * float((sims == s).sum() - 1)
+    s = float(sims[own])
+    above = int((sims > s + _RANK_TIE_EPS).sum())
+    equal = max(0, int((np.abs(sims - s) <= _RANK_TIE_EPS).sum()) - 1)
+    return 1.0 + float(above) + 0.5 * float(equal)
 
 
 def _rank_descriptions(
@@ -1189,8 +1258,8 @@ def _rank_descriptions(
             k = i + r
             sims = S[r]
             own = int(own_idx[k])
-            s = sims[own]
-            own_cosines[k] = float(s)
+            s = float(sims[own])
+            own_cosines[k] = s
             rk = mid_rank(sims, own)
             own_ranks[k] = rk
             if second_ranks is not None and second_idx is not None:
@@ -1199,9 +1268,13 @@ def _rank_descriptions(
                 sibs = sibling_groups[k]
                 if len(sibs) > 1:
                     sib_scores = sims[sibs]
-                    above = int((sims > s).sum()) - int((sib_scores > s).sum())
-                    equal = int((sims == s).sum() - 1) - (int((sib_scores == s).sum()) - 1)
-                    group_ranks[k] = 1 + float(above) + 0.5 * float(equal)
+                    above = int((sims > s + _RANK_TIE_EPS).sum()) - int((sib_scores > s + _RANK_TIE_EPS).sum())
+                    equal = max(
+                        0,
+                        (int((np.abs(sims - s) <= _RANK_TIE_EPS).sum()) - 1)
+                        - (int((np.abs(sib_scores - s) <= _RANK_TIE_EPS).sum()) - 1),
+                    )
+                    group_ranks[k] = 1.0 + float(above) + 0.5 * float(equal)
                 else:
                     group_ranks[k] = rk
     return own_ranks, own_cosines, second_ranks, group_ranks
@@ -1366,11 +1439,17 @@ def coverage(items: list[Item], img: np.ndarray, subjects: list[str], qv: np.nda
     """For each wanted subject, the closest approved images plus canon exemplar metadata (path, cosine, look_rank,
     loras). Weakest best match comes first."""
     A = approved_idx(items)
+    has_vecs = img.ndim == 2 and img.shape[1] > 0
+    XA = img[A] if (A and has_vecs) else None
     look = look_fit(items)
     look_rank = {i: r for r, (i, _) in enumerate(sorted(look.items(), key=lambda kv: -kv[1]), start=1)}
     rows = []
     for s, q in zip(subjects, qv, strict=True):
-        top = search(img, q, k, among=A) if A else []
+        if XA is not None:
+            sims = XA @ q
+            top = [(A[i], float(sims[i])) for i in np.argsort(-sims)[:k]]
+        else:
+            top = []
         exemplars = [
             {
                 "item": i,
@@ -1403,8 +1482,11 @@ def _status_label(it: Item) -> str:
 def report(project: str, out: str, items: list[Item], img: np.ndarray, txt: dict, meta: dict,
            cov: list[dict] | None = None, images_only: bool = False,
            allow_multimodal_pool: bool = False, drafter=None, token_counter=None) -> str:
-    eff_images_only = bool(images_only or meta.get("images_only") or meta.get("backend") == "none")
-    check_multimodal_pool(project, meta.get("backend", "eg2"), images_only=eff_images_only,
+    bname = meta.get("backend", "eg2")
+    spec = registry.REGISTRY.get(bname)
+    can_text = spec is None or "text" in spec.modalities
+    eff_images_only = bool(images_only or meta.get("images_only") or bname == "none" or not can_text)
+    check_multimodal_pool(project, bname, images_only=eff_images_only,
                           allow_multimodal_pool=allow_multimodal_pool)
     has_vecs = img.ndim == 2 and img.shape[1] > 0
     d = dupes(items, img, backend=meta.get("backend"))
@@ -2153,33 +2235,41 @@ def lineage(items: list[TextItem], vecs: np.ndarray, k: int = 5) -> dict:
     all_pairs: list[dict] = []
     for fname in sorted(by_name):
         occs = by_name[fname]
-        if len(occs) < 2:
+        m = len(occs)
+        if m < 2:
             continue
+        item_indices = np.array([o["item_idx"] for o in occs], dtype=np.int64)
+        V_occ = vecs[item_indices] if has_vecs else None
+        rows = _block_rows(m, V_occ.itemsize) if V_occ is not None else m
         file_pairs: list[dict] = []
-        for i in range(len(occs)):
-            for j in range(i + 1, len(occs)):
-                oa, ob = occs[i], occs[j]
-                if oa["run_id"] is not None and ob["run_id"] is not None and oa["run_id"] == ob["run_id"]:
-                    continue
-                if oa["path"] == ob["path"]:
-                    continue
-                if oa["item_idx"] == ob["item_idx"]:
-                    cos = 1.0
-                elif has_vecs:
-                    cos = float(vecs[oa["item_idx"]] @ vecs[ob["item_idx"]])
-                else:
-                    cos = 0.0
-                entry = {
-                    "name": fname,
-                    "a": oa["path"],
-                    "b": ob["path"],
-                    "run_a": oa["run_id"],
-                    "run_b": ob["run_id"],
-                    "outcome_a": oa["outcome"],
-                    "outcome_b": ob["outcome"],
-                    "cosine": round(cos, 4),
-                }
-                file_pairs.append(entry)
+        for i in range(0, m, rows):
+            j_end = min(m, i + rows)
+            if V_occ is not None:
+                sims_block = np.round(V_occ[i:j_end] @ V_occ.T, 4)
+            else:
+                sims_block = np.zeros((j_end - i, m), dtype=np.float32)
+            same_item = item_indices[i:j_end, None] == item_indices[None, :]
+            sims_block = np.where(same_item, 1.0, sims_block)
+            for ra in range(j_end - i):
+                idx_a = i + ra
+                oa = occs[idx_a]
+                for idx_b in range(idx_a + 1, m):
+                    ob = occs[idx_b]
+                    if oa["run_id"] is not None and ob["run_id"] is not None and oa["run_id"] == ob["run_id"]:
+                        continue
+                    if oa["path"] == ob["path"]:
+                        continue
+                    entry = {
+                        "name": fname,
+                        "a": oa["path"],
+                        "b": ob["path"],
+                        "run_a": oa["run_id"],
+                        "run_b": ob["run_id"],
+                        "outcome_a": oa["outcome"],
+                        "outcome_b": ob["outcome"],
+                        "cosine": round(float(sims_block[ra, idx_b]), 4),
+                    }
+                    file_pairs.append(entry)
         file_pairs.sort(key=lambda r: (-r["cosine"], r["a"], r["b"]))
         if file_pairs:
             files_out[fname] = file_pairs[:k]
@@ -2360,7 +2450,7 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
     if out_inside:
         raise DeskError("PERM_OUT_INSIDE_PROJECT", "REFUSED: --out is inside the project; the desk never writes into a project")
     if a.command in ("index", "report"):
-        check_multimodal_pool(project, backend, images_only=a.images_only or backend == "dinov2",
+        check_multimodal_pool(project, backend, images_only=a.images_only,
                               allow_multimodal_pool=a.allow_multimodal_pool)
     if backend == "none" and a.command in ("search", "coverage"):
         raise DeskError("INPUT_BAD_ARGUMENT",
@@ -2373,7 +2463,8 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         emb = make(backend, **make_kw)
     if a.command == "index":
         index(project, out, emb, limit=a.limit, grant=a.grant, strict=a.strict,
-              images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool)
+              images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool,
+              threads=a.threads)
         return 0
     items, img, txt, meta = load_cache(out, backend, dim=a.dim, vision_tokens=a.vision_tokens, project=a.project)
     subjects = None

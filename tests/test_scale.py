@@ -1,13 +1,17 @@
 """The many-image paths give the same results as the per-pair code they replaced, across block boundaries.
 Run from the repository root: python -W error -m unittest discover -s tests"""
 
+import json
+import os
+import tempfile
 import tracemalloc
 import unittest
 from unittest import mock
 
 import numpy as np
+from PIL import Image
 
-from dataset_desk import desk
+from dataset_desk import description_gate, desk
 
 
 def rand_hash(rng):
@@ -218,12 +222,15 @@ class ManyImagePaths(unittest.TestCase):
             make_items(90, seed=3, drop_flip=set(range(0, 90, 4))),   # some rows and columns without a mirror hash
             make_items(90, seed=4, drop_flip=set(range(90))),         # no mirror hashes at all
         ]
-        with self.tiny:
-            for items in cases:
-                for near in (0, 10, 26, 44):
-                    got = list(desk.near_pairs_within(items, near))
-                    self.assertEqual(got, near_reference(items, near))
-                    self.assertGreater(len(near_reference(items, 44)), 0)
+        for block_bytes in (4096, 32768):
+            for has_bw in (True, False):
+                with mock.patch.object(desk, "BLOCK_BYTES", block_bytes), \
+                        mock.patch.object(desk, "_HAS_BITWISE_COUNT", has_bw):
+                    for items in cases:
+                        for near in (0, 10, 26, 44):
+                            got = list(desk.near_pairs_within(items, near))
+                            self.assertEqual(got, near_reference(items, near))
+                            self.assertGreater(len(near_reference(items, 44)), 0)
 
     def test_dupes_unchanged(self):
         items = make_items(70, seed=7)
@@ -451,6 +458,297 @@ class ManyImagePaths(unittest.TestCase):
         self.assertIsNotNone(res)
         self.assertEqual(res["pairs"], m)
         self.assertLess(peak, bound_bytes, f"swap_check peak memory {peak} bytes exceeded bound {bound_bytes} bytes")
+
+    def test_conv1d_gauss2d_palette_and_parallel_scan_match_020_verbatim(self):
+        def conv1d_020(a: np.ndarray, k: np.ndarray) -> np.ndarray:
+            r = len(k) // 2
+            p = np.pad(a, ((r, r), (0, 0)), mode="reflect")
+            out = np.zeros_like(a, dtype=np.float32)
+            for i, w in enumerate(k):
+                out += w * p[i:i + a.shape[0]]
+            return out
+
+        def gauss2d_020(a: np.ndarray, sigma: float) -> np.ndarray:
+            r = max(1, int(round(3.0 * sigma)))
+            x = np.arange(-r, r + 1, dtype=np.float32)
+            k = np.exp(-0.5 * (x / sigma) ** 2)
+            k /= k.sum()
+            return conv1d_020(conv1d_020(a, k).T, k).T
+
+        def texture_stats_020(im) -> list[float]:
+            rgb_im = im.convert("RGB")
+            w, h = rgb_im.size
+            if w < 8 or h < 8:
+                return [0.0] * 6
+            if max(w, h) > 1344:
+                scale = 1344.0 / max(w, h)
+                rgb_im = rgb_im.resize(
+                    (max(8, int(round(w * scale))), max(8, int(round(h * scale)))),
+                    Image.Resampling.LANCZOS,
+                )
+            a = np.asarray(rgb_im, dtype=np.float32)
+            lum = 0.2126 * a[..., 0] + 0.7152 * a[..., 1] + 0.0722 * a[..., 2]
+            lum_std = float(lum.std())
+            if lum_std < 1e-6:
+                return [0.0] * 6
+
+            hp = lum - gauss2d_020(lum, 1.5)
+            struct = gauss2d_020(lum, 6.0)
+            sgx, sgy = desk._sobel(struct)
+            sgrad = np.hypot(sgx, sgy)
+            flat = sgrad <= np.percentile(sgrad, 40)
+
+            ex, ey = desk._sobel(lum)
+            egrad = np.hypot(ex, ey) / 4.0
+            blur = gauss2d_020(lum, 2.0)
+            bx, by = desk._sobel(blur)
+            bgrad = np.hypot(bx, by) / 4.0
+            strong = egrad >= np.percentile(egrad, 98)
+            raw_hard = float(egrad[strong].mean() / max(float(bgrad[strong].mean()), 1e-6)) if strong.any() else 0.0
+
+            hx, hy = desk._sobel(hp)
+            jxx = gauss2d_020(hx * hx, 4.0)
+            jyy = gauss2d_020(hy * hy, 4.0)
+            jxy = gauss2d_020(hx * hy, 4.0)
+            disc = np.sqrt(((jxx - jyy) / 2.0) ** 2 + jxy ** 2)
+            tr = (jxx + jyy) / 2.0
+            coh = 2.0 * disc / np.maximum(tr * 2.0, 1e-6)
+
+            win = np.hanning(lum.shape[0])[:, None] * np.hanning(lum.shape[1])[None, :]
+            spec = np.fft.fftshift(np.abs(np.fft.fft2((lum - float(lum.mean())) * win)) ** 2)
+            cy, cx = (np.array(spec.shape) - 1) / 2.0
+            yy, xx = np.ogrid[:spec.shape[0], :spec.shape[1]]
+            rad = np.hypot((yy - cy) / max(spec.shape[0] / 2.0, 1.0), (xx - cx) / max(spec.shape[1] / 2.0, 1.0))
+            tot = max(float(spec.sum()), 1e-9)
+
+            hf_ratio = min(1.0, float(hp.std()) / max(lum_std, 1e-6))
+            flat_hf = min(1.0, float(hp[flat].std()) / 32.0) if flat.any() else 0.0
+            edge_dens = float((egrad > 12.0).mean())
+            edge_hard = float(np.tanh(raw_hard / 3.0))
+            flat_coh = float(coh[flat].mean()) if flat.any() else 0.0
+            band_hi = float(spec[rad > 0.30].sum() / tot)
+            return [hf_ratio, flat_hf, edge_dens, edge_hard, flat_coh, band_hi]
+
+        def palette_020(im) -> list[float]:
+            hsv = np.asarray(im.convert("RGB").resize((64, 64)).convert("HSV"), dtype=np.float32) / 255.0
+            h, sat, val = hsv[..., 0].ravel(), hsv[..., 1].ravel(), hsv[..., 2].ravel()
+            hue = np.histogram(h, bins=12, range=(0, 1), weights=sat)[0]
+            hue = hue / max(float(hue.sum()), 1e-6)
+            tone = np.histogram(val, bins=8, range=(0, 1))[0] / val.size
+            tex = texture_stats_020(im)
+            vec = np.concatenate([hue, tone, [sat.mean(), sat.std(), val.mean(), val.std()], tex])
+            return [round(float(x), 5) for x in vec]
+
+        rng = np.random.default_rng(2026)
+        for shape in ((240, 1024), (300, 200), (8, 8)):
+            arr = rng.random(shape, dtype=np.float32) * 255.0
+            for sigma in (1.5, 2.0, 4.0, 6.0):
+                self.assertTrue(
+                    np.array_equal(desk._gauss2d(arr, sigma), gauss2d_020(arr, sigma)),
+                    f"_gauss2d mismatch at shape={shape}, sigma={sigma}",
+                )
+
+        for w, h in ((240, 1024), (1024, 1024), (1600, 1200), (8, 8)):
+            px = rng.integers(0, 256, size=(h, w, 3), dtype=np.uint8)
+            im = Image.fromarray(px, mode="RGB")
+            self.assertEqual(desk._palette(im), palette_020(im), f"_palette mismatch at size=({w}, {h})")
+
+        # Verify scan(threads=1) and scan(threads=4) produce identical items, problems, and scan.jsonl rows
+        with tempfile.TemporaryDirectory() as tmp:
+            proj = os.path.join(tmp, "proj")
+            wdir = os.path.join(proj, "outputs", "w1")
+            os.makedirs(wdir)
+            for i in range(10):
+                px = rng.integers(0, 256, size=(32, 32, 3), dtype=np.uint8)
+                Image.fromarray(px, mode="RGB").save(os.path.join(wdir, f"img_{i:02d}.png"))
+            with open(os.path.join(wdir, "img_05_corrupt.png"), "wb") as f:
+                f.write(b"not a valid png")
+
+            out1 = os.path.join(tmp, "out1")
+            out4 = os.path.join(tmp, "out4")
+            items1, stats1 = desk.scan(proj, strict=False, out=out1, threads=1)
+            items4, stats4 = desk.scan(proj, strict=False, out=out4, threads=4)
+            self.assertEqual(items1, items4)
+            self.assertEqual(stats1["problems"], stats4["problems"])
+            self.assertEqual(len(stats1["problems"]), 1)
+            self.assertEqual(stats1["look_computed_now"], 10)
+            self.assertEqual(stats4["look_computed_now"], 10)
+
+            with open(os.path.join(out1, "scan.jsonl"), encoding="utf-8") as f1, \
+                    open(os.path.join(out4, "scan.jsonl"), encoding="utf-8") as f4:
+                rows1 = [{k: v for k, v in json.loads(line).items() if k != "look_seconds"} for line in f1]
+                rows4 = [{k: v for k, v in json.loads(line).items() if k != "look_seconds"} for line in f4]
+            self.assertEqual(rows1, rows4)
+
+            with self.assertRaises((OSError, ValueError, SyntaxError)):
+                desk.scan(proj, strict=True, threads=4)
+
+            # Worker initializer sets single-thread BLAS env vars
+            with mock.patch.dict(os.environ):
+                desk._init_scan_worker()
+                self.assertEqual(os.environ["OMP_NUM_THREADS"], "1")
+                self.assertEqual(os.environ["MKL_NUM_THREADS"], "1")
+                self.assertEqual(os.environ["OPENBLAS_NUM_THREADS"], "1")
+
+    def test_description_gate_prefix_filter_matches_bruteforce_on_600_records(self):
+        rng = np.random.default_rng(777)
+        vocab = [f"word{i:04d}" for i in range(400)]
+        recs = []
+
+        def add_rec(rid: str, text: str):
+            recs.append({
+                "id": rid,
+                "asset_path": f"outputs/w/{rid}.png",
+                "judgment": {"status": "approved", "explanation": text},
+                "provenance": {"prompt": "unrelated prompt words here"},
+            })
+
+        # 1) 440 random descriptions with varying lengths (8 to 28 content words)
+        for i in range(440):
+            k = int(rng.integers(8, 29))
+            chosen = rng.choice(vocab, size=k, replace=False)
+            add_rec(f"u_{i:03d}", " ".join(chosen))
+
+        # 2) 30 near-miss pairs around 0.80 - 0.8421 (e.g. 16 shared / 19 union = 0.8421, 13/16 = 0.8125, 17/21 = 0.8095)
+        for i in range(30):
+            base = [f"miss_{i}_{w}" for w in range(16)]
+            add_rec(f"miss_a_{i:02d}", " ".join([*base, f"ma1_{i}", f"ma2_{i}"]))
+            add_rec(f"miss_b_{i:02d}", " ".join([*base, f"mb1_{i}"]))
+
+        # 3) 20 boundary pairs at exact 0.85 (17 shared / 20 union = 0.85)
+        for i in range(20):
+            base = [f"bnd_{i}_{w}" for w in range(17)]
+            add_rec(f"bnd_a_{i:02d}", " ".join([*base, f"ba1_{i}", f"ba2_{i}"]))
+            add_rec(f"bnd_b_{i:02d}", " ".join([*base, f"bb1_{i}"]))
+
+        # 4) 15 high-similarity near-duplicate pairs (0.90 to 0.96) + triples where one record has multiple near partners
+        for i in range(15):
+            base = [f"hi_{i}_{w}" for w in range(20)]
+            add_rec(f"hi_a_{i:02d}", " ".join([*base, f"ha_{i}"]))                 # shares 20/21 = 0.9524 with hi_b, 19/21 = 0.9048 with hi_c
+            add_rec(f"hi_b_{i:02d}", " ".join(base))                                # shares 20/21 with hi_a, 19/20 = 0.95 with hi_c
+            add_rec(f"hi_c_{i:02d}", " ".join([*base[:19], f"hc_{i}"]))
+
+        # 5) Two 5-record exact-duplicate clusters (including punctuation variations)
+        for c in range(2):
+            for m in range(5):
+                sep = "-" if m % 2 else " "
+                add_rec(
+                    f"exact_{c}_{m}",
+                    f"lantern{sep}courtyard stone pillar bronze archway mist harbour {c}",
+                )
+
+        # 6) 5 stopword-only records
+        for s in range(5):
+            add_rec(f"stop_{s}", "the of and to in with by on from")
+
+        self.assertEqual(len(recs), 600)
+        audit = description_gate.audit_records(recs)
+
+        # Brute-force O(n^2) reference over the same target_list and exact_keys
+        ids_ordered = [r["id"] for r in audit["records"]]
+        cword_sets = {r["id"]: description_gate.content_word_set(r["text"]) for r in audit["records"]}
+        exact_keys: dict[str, set[tuple[str, str]]] = {}
+        for g in audit["exact_groups"]:
+            for rid in g["ids"]:
+                exact_keys.setdefault(rid, set()).add((g["source"], g["normalized"]))
+
+        ref_near_pairs: list[tuple[str, str, float]] = []
+        ref_max_jac: dict[str, float | None] = {rid: None for rid in ids_ordered}
+        eps = description_gate._EPS
+        thr = description_gate.MAX_CONTENT_JACCARD
+        for i in range(len(ids_ordered)):
+            ia = ids_ordered[i]
+            ca = cword_sets[ia]
+            if not ca:
+                continue
+            keys_a = exact_keys.get(ia)
+            for j in range(i + 1, len(ids_ordered)):
+                ib = ids_ordered[j]
+                if keys_a and keys_a & exact_keys.get(ib, set()):
+                    continue
+                cb = cword_sets[ib]
+                if not cb:
+                    continue
+                n_inter = len(ca & cb)
+                sim = n_inter / (len(ca) + len(cb) - n_inter)
+                if sim >= thr - eps:
+                    r_sim = round(sim, 6)
+                    if ref_max_jac[ia] is None or r_sim > ref_max_jac[ia]:
+                        ref_max_jac[ia] = r_sim
+                    if ref_max_jac[ib] is None or r_sim > ref_max_jac[ib]:
+                        ref_max_jac[ib] = r_sim
+                    ref_near_pairs.append((ia, ib, round(sim, 4)))
+
+        ref_near_groups = description_gate._connected_components(
+            ids_ordered, [(a, b) for a, b, _ in ref_near_pairs]
+        )
+        self.assertEqual(audit["near_pairs"], ref_near_pairs)
+        self.assertEqual(audit["near_groups"], ref_near_groups)
+        for r in audit["records"]:
+            self.assertEqual(r["max_content_jaccard"], ref_max_jac[r["id"]], f"mismatch on {r['id']}")
+
+    def test_blocked_pairs_top1_lineage_and_coverage_scale_paths(self):
+        vecs = unit_vectors(35, d=8, seed=31)
+        ref_pairs = list(desk.pairs_at_least(vecs, 0.25, chunk=100))
+        ref_top1 = desk.top1_percentiles(vecs, chunk=100)
+        with mock.patch.object(desk, "BLOCK_BYTES", 64):
+            got_pairs = list(desk.pairs_at_least(vecs, 0.25))
+            self.assertEqual([(a, b) for a, b, _ in got_pairs], [(a, b) for a, b, _ in ref_pairs])
+            np.testing.assert_allclose([s for _, _, s in got_pairs], [s for _, _, s in ref_pairs], rtol=1e-6, atol=1e-6)
+            self.assertEqual(desk.top1_percentiles(vecs), ref_top1)
+
+        # Lineage blocked matrix product with tiny BLOCK_BYTES
+        t_items = [
+            desk.TextItem(
+                sha256=f"{i:064x}",
+                paths=[f"runs/r{i}/files/gate.py"],
+                name="gate.py",
+                suffix=".py",
+                run_id=f"r{i}",
+                outcome="pass" if i % 2 == 0 else "fail",
+                occurrences=[{
+                    "path": f"runs/r{i}/files/gate.py",
+                    "run_id": f"r{i}",
+                    "name": "gate.py",
+                    "suffix": ".py",
+                    "outcome": "pass" if i % 2 == 0 else "fail",
+                }],
+            )
+            for i in range(12)
+        ]
+        # Add a second occurrence of item 0 in another run (same item_idx -> cosine 1.0) and in same run (skipped)
+        t_items[0].occurrences.append({
+            "path": "runs/r0/files/sub/gate.py",
+            "run_id": "r0",
+            "name": "gate.py",
+            "suffix": ".py",
+            "outcome": "pass",
+        })
+        t_items[0].occurrences.append({
+            "path": "runs/r99/files/gate.py",
+            "run_id": "r99",
+            "name": "gate.py",
+            "suffix": ".py",
+            "outcome": "pass",
+        })
+        t_vecs = unit_vectors(12, d=8, seed=32)
+        lin_full = desk.lineage(t_items, t_vecs, k=5)
+        with mock.patch.object(desk, "BLOCK_BYTES", 16):
+            lin_blocked = desk.lineage(t_items, t_vecs, k=5)
+            lin_no_vecs = desk.lineage(t_items, np.zeros((12, 0), dtype=np.float32), k=5)
+        self.assertEqual(lin_blocked, lin_full)
+        self.assertEqual(lin_blocked["files"]["gate.py"][0]["cosine"], 1.0)
+        self.assertEqual(lin_no_vecs["files"]["gate.py"][0]["cosine"], 1.0)
+        self.assertEqual(lin_no_vecs["files"]["gate.py"][2]["cosine"], 0.0)
+
+        # Coverage with no approved items vs approved items
+        items_unapproved = [
+            desk.Item(f"{i:064x}", [f"outputs/w/{i}.png"], ["w"], record={"status": "rejected", "id": str(i)})
+            for i in range(4)
+        ]
+        qv = unit_vectors(2, d=8, seed=33)
+        cov_empty = desk.coverage(items_unapproved, vecs[:4], ["s1", "s2"], qv)
+        self.assertEqual([r["top"] for r in cov_empty], [[], []])
 
 
 if __name__ == "__main__":

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-20
+
+### Changed
+- `registry.REGISTRY`: updated `vram_mib` to conservative whole-card figures measured on the RTX 5090 so `need_mib = vram_mib + 1,024 MiB` covers CUDA context overhead on a shared GPU (`dinov2` 1,272, `siglip2` 6,207, `gte-modernbert` 7,112, `bge-m3` 8,442, `eg2` 13,119, `qwen3-emb-0.6b` 15,065 MiB).
+- `desk.scan`: strip-mined `_conv1d_axis0` and added `threads` worker pool (`ProcessPoolExecutor` when `threads > 1` and `>= 8` uncached images) for the first uncached scan; `scan.jsonl` rows and `SCAN_V = 2` are unchanged.
+- `description_gate.audit_records`: replaced full-postings Jaccard candidate loop with rare-first prefix filtering (`L - ceil(tau * L) + 1`), producing identical `near_pairs` and `near_groups`; `max_content_jaccard` is now `None` for records with no near-duplicate partner (`>= 0.85`).
+- `desk.mid_rank` and `desk._rank_descriptions`: added `_RANK_TIE_EPS = 1e-6` so float32 dot products on tied image vectors split ties regardless of single-row vs matrix-block BLAS calls.
+- `desk.pairs_at_least`, `desk.top1_percentiles`, `desk.lineage`, `desk.coverage`: bounded block sizing via `_block_rows` and single-slice `XA = img[A]`.
+- `backends.transformers_warnings_off`: also disables and restores transformers' weight-loading progress bars across all model loaders.
+
+### Fixed
+- `backends._vram_info_mib`: catches CPU-only torch builds when `--device cuda` is requested and raises `ENV_NO_CUDA_TORCH` with a hint to install CUDA torch from `https://download.pytorch.org` or pass `--device cpu`.
+- `desk.check_multimodal_pool`, `desk.index`, `desk.report`: image-only backends (`dinov2`) no longer require `--images-only` on locked multimodal benchmark pools when called from Python or CLI.
+
 ## [0.2.0] - 2026-10-20
 
 ### Added

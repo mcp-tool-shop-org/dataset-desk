@@ -22,6 +22,8 @@ For the embedding index, add the `models` extra (torch, transformers and sentenc
 pip install "dataset-desk[models]"
 ```
 
+On Windows with an NVIDIA GPU, install a CUDA build of torch from `https://download.pytorch.org` first; PyPI's Windows torch is CPU-only.
+
 ## Lay out a project
 
 dataset-desk reads [style-dataset-lab](https://github.com/mcp-tool-shop-org/style-dataset-lab)'s project layout:

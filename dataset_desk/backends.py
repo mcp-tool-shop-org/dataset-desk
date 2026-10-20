@@ -180,9 +180,16 @@ def _vram_info_mib(device: str = "cuda") -> tuple[int, int]:
     if mem_fn is None:
         raise RuntimeError("torch.cuda.mem_get_info is not available")
     try:
-        free_val, total_val = mem_fn(device) if ":" in device else mem_fn()
-    except TypeError:
-        free_val, total_val = mem_fn()
+        try:
+            free_val, total_val = mem_fn(device) if ":" in device else mem_fn()
+        except TypeError:
+            free_val, total_val = mem_fn()
+    except (AssertionError, RuntimeError) as exc:
+        raise DeskError(
+            "ENV_NO_CUDA_TORCH",
+            f"REFUSED: --device {device!r} requested, but the installed torch has no CUDA support ({exc})",
+            cause=exc,
+        ) from exc
     return _scale_mib(int(free_val), int(total_val))
 
 
@@ -409,31 +416,32 @@ class EG2Embedder:
             torch_dtype = torch.float32
             self.dtype_name = "float32"
 
-        if self.text_only:
-            self.model = SentenceTransformer(
-                EG2_REPO,
-                revision=EG2_REVISION,
-                device=self.device,
-                config_kwargs={"vision_config": None, "audio_config": None},
-                model_kwargs={"dtype": torch_dtype},
-            )
-        else:
-            self.model = SentenceTransformer(
-                EG2_REPO,
-                revision=EG2_REVISION,
-                device=self.device,
-                config_kwargs={"audio_config": None},
-                model_kwargs={"dtype": torch_dtype},
-                processor_kwargs=dict(self.processor_kwargs),
-            )
-            if len(self.model) > 0:
-                mod0 = self.model[0]
-                mod0.processing_kwargs = dict(self.processing_kwargs)
-                proc = getattr(mod0, "processor", None)
-                if proc is not None:
-                    proc.image_seq_length = self.vision_tokens
-                    if getattr(proc, "image_processor", None) is not None:
-                        proc.image_processor.max_soft_tokens = self.vision_tokens
+        with transformers_warnings_off():
+            if self.text_only:
+                self.model = SentenceTransformer(
+                    EG2_REPO,
+                    revision=EG2_REVISION,
+                    device=self.device,
+                    config_kwargs={"vision_config": None, "audio_config": None},
+                    model_kwargs={"dtype": torch_dtype},
+                )
+            else:
+                self.model = SentenceTransformer(
+                    EG2_REPO,
+                    revision=EG2_REVISION,
+                    device=self.device,
+                    config_kwargs={"audio_config": None},
+                    model_kwargs={"dtype": torch_dtype},
+                    processor_kwargs=dict(self.processor_kwargs),
+                )
+                if len(self.model) > 0:
+                    mod0 = self.model[0]
+                    mod0.processing_kwargs = dict(self.processing_kwargs)
+                    proc = getattr(mod0, "processor", None)
+                    if proc is not None:
+                        proc.image_seq_length = self.vision_tokens
+                        if getattr(proc, "image_processor", None) is not None:
+                            proc.image_processor.max_soft_tokens = self.vision_tokens
         self.params = sum(p.numel() for p in self.model.parameters())
 
     def _encode(self, inputs: list) -> np.ndarray:
@@ -502,20 +510,30 @@ class EG2Embedder:
 
 @contextlib.contextmanager
 def transformers_warnings_off():
-    """Hold transformers' log at error level while a model loads, then restore it.
+    """Hold transformers' log at error level and disable its progress bar while a model loads, then restore both.
 
     SigLIP2's published config sets bos/eos token ids outside its text vocabulary, and transformers logs a warning on
     every load. The desk never uses those ids, so the warning only adds noise. Errors still show."""
     try:
         from transformers.utils import logging as tf_logging
-    except ImportError:
+    except (ImportError, ValueError):
         yield
         return
     previous = tf_logging.get_verbosity()
+    is_pb_enabled = getattr(tf_logging, "is_progress_bar_enabled", None)
+    disable_pb = getattr(tf_logging, "disable_progress_bar", None)
+    enable_pb = getattr(tf_logging, "enable_progress_bar", None)
+    prev_pb = bool(is_pb_enabled()) if callable(is_pb_enabled) else None
     tf_logging.set_verbosity_error()
+    if callable(disable_pb):
+        disable_pb()
     try:
         yield
     finally:
+        if prev_pb is True and callable(enable_pb):
+            enable_pb()
+        elif prev_pb is False and callable(disable_pb):
+            disable_pb()
         tf_logging.set_verbosity(previous)
 
 
@@ -688,12 +706,13 @@ class SentenceTransformerTextEmbedder:
             torch_dtype = torch.float32
             self.dtype_name = "float32"
 
-        self.model = SentenceTransformer(
-            self.repo,
-            revision=self.revision,
-            device=self.device,
-            model_kwargs={"dtype": torch_dtype},
-        )
+        with transformers_warnings_off():
+            self.model = SentenceTransformer(
+                self.repo,
+                revision=self.revision,
+                device=self.device,
+                model_kwargs={"dtype": torch_dtype},
+            )
         self.model.max_seq_length = self.max_seq_length
         self.params = sum(p.numel() for p in self.model.parameters())
 
@@ -774,9 +793,10 @@ class DINOv2Embedder:
         from transformers import AutoImageProcessor, AutoModel
 
         self.torch = torch
-        self.processor = AutoImageProcessor.from_pretrained(self.repo, revision=self.revision)
-        self.model = AutoModel.from_pretrained(self.repo, revision=self.revision,
-                                               dtype=torch.float32).to(self.device).eval()
+        with transformers_warnings_off():
+            self.processor = AutoImageProcessor.from_pretrained(self.repo, revision=self.revision)
+            self.model = AutoModel.from_pretrained(self.repo, revision=self.revision,
+                                                   dtype=torch.float32).to(self.device).eval()
         self.params = sum(p.numel() for p in self.model.parameters())
 
     def _pooled(self, out) -> np.ndarray:
@@ -899,15 +919,16 @@ class PlainSightDrafter:
 
             if Florence2Engine is not None:
                 try:
-                    eng = Florence2Engine(
-                        model_id=self.model_id,
-                        revision=self.requested_revision,
-                        device=self.device,
-                        dtype="float32" if self.device == "cpu" else None,
-                        eager_load=True,
-                    )
-                    if not getattr(eng, "loaded", False) and hasattr(eng, "_ensure_loaded"):
-                        eng._ensure_loaded()
+                    with transformers_warnings_off():
+                        eng = Florence2Engine(
+                            model_id=self.model_id,
+                            revision=self.requested_revision,
+                            device=self.device,
+                            dtype="float32" if self.device == "cpu" else None,
+                            eager_load=True,
+                        )
+                        if not getattr(eng, "loaded", False) and hasattr(eng, "_ensure_loaded"):
+                            eng._ensure_loaded()
                 except Exception as exc:
                     raise RuntimeError(
                         f"plain-sight offline load failed for repo {self.model_id!r} at revision "
@@ -932,28 +953,29 @@ class PlainSightDrafter:
             from transformers import AutoProcessor
 
             try:
-                processor = AutoProcessor.from_pretrained(
-                    self.model_id,
-                    revision=self.requested_revision,
-                    local_files_only=True,
-                )
-                try:
-                    from transformers import AutoModelForImageTextToText
-
-                    model = AutoModelForImageTextToText.from_pretrained(
+                with transformers_warnings_off():
+                    processor = AutoProcessor.from_pretrained(
                         self.model_id,
                         revision=self.requested_revision,
                         local_files_only=True,
                     )
-                except (ValueError, KeyError, ImportError):
-                    from transformers import Florence2ForConditionalGeneration
+                    try:
+                        from transformers import AutoModelForImageTextToText
 
-                    model = Florence2ForConditionalGeneration.from_pretrained(
-                        self.model_id,
-                        revision=self.requested_revision,
-                        local_files_only=True,
-                    )
-                model = model.eval().to(self.device)
+                        model = AutoModelForImageTextToText.from_pretrained(
+                            self.model_id,
+                            revision=self.requested_revision,
+                            local_files_only=True,
+                        )
+                    except (ValueError, KeyError, ImportError):
+                        from transformers import Florence2ForConditionalGeneration
+
+                        model = Florence2ForConditionalGeneration.from_pretrained(
+                            self.model_id,
+                            revision=self.requested_revision,
+                            local_files_only=True,
+                        )
+                    model = model.eval().to(self.device)
             except Exception as exc:
                 # Only reached when plain-sight isn't installed: the engine path above returns or raises.
                 hint = ("install plain-sight (https://github.com/mcp-tool-shop-org/plain-sight) and make sure the "
