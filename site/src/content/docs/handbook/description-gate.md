@@ -59,7 +59,7 @@ Each line is one approved record:
 
 - `gate_status`: `passed`, `failed` or `unchecked`;
 - `flags` and `reasons`: which tests failed, in words;
-- the statistics behind them: the shares, the longest shared run, the largest Jaccard, the token count;
+- the statistics behind them: the shares, the longest shared run, the largest Jaccard (`max_content_jaccard`: the exact value at 0.85 or more, `null` below), the token count;
 - `author_kind`: `human` for existing text, `captioner_assisted` for a drafted one.
 
 ## What the gate can't see

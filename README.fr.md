@@ -65,13 +65,15 @@ Les enregistrements signalés sont envoyés à `description-review.jsonl` et à 
 pip install dataset-desk
 ```
 
-Cela donne le **niveau de base** : uniquement numpy et Pillow, pas de torch. Les vérifications de doublons, le canal d’apparence, la porte de description et le rapport fonctionnent tous dans celui-ci (`--backend none`).
+Cela donne la **version légère** : uniquement numpy et Pillow, pas de torch. Les vérifications de doublons, le canal d’apparence, la porte de description et le rapport fonctionnent tous dans cette version (`--backend none`).
 
-Pour l’index d’intégration (recherche, couverture, doublons sémantiques, vérification de l’adéquation de la description), ajoutez les bibliothèques de modèle :
+Pour l’index d’intégration (recherche, couverture, doublons sémantiques, vérification de l’adéquation de la description), ajoutez les bibliothèques du modèle :
 
 ```bash
 pip install "dataset-desk[models]"
 ```
+
+Sous Windows avec une carte graphique NVIDIA, installez d’abord une version CUDA de torch à partir de `https://download.pytorch.org` ; la version Windows de torch de PyPI est uniquement pour CPU.
 
 Les modèles sont récupérés sur Hugging Face aux révisions fixées la première fois qu’ils sont utilisés, puis chargés à partir de votre cache. Chaque tâche a une valeur par défaut, et `--backend` en choisit une autre :
 
@@ -83,9 +85,9 @@ Les modèles sont récupérés sur Hugging Face aux révisions fixées la premi�
 | `eg2` | [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) | code (`--task code`, `lineage`) |
 | `qwen3-emb-0.6b`, `gte-modernbert` | [Qwen3-Embedding 0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B), [gte-modernbert-base](https://huggingface.co/Alibaba-NLP/gte-modernbert-base) | — |
 
-EmbeddingGemma 2 est utilisé de la manière indiquée dans sa fiche de modèle : un préfixe de tâche par commande, chargement uniquement du texte pour le texte et `--dim 768|512|256`. Définissez `HF_HUB_OFFLINE=1` pour interdire les téléchargements. Le rédacteur plain-sight est toujours hors ligne : il ne télécharge jamais.
+EmbeddingGemma 2 est utilisé de la manière indiquée dans sa fiche de modèle : un préfixe de tâche par commande, un chargement uniquement pour le texte pour le texte et `--dim 768|512|256`. Définissez `HF_HUB_OFFLINE=1` pour interdire les téléchargements. Le rédacteur plain-sight est toujours hors ligne : il ne télécharge jamais.
 
-**Fonctionne sur :** Python 3.11 et 3.12, sur Windows et Linux. CPU par défaut, avec chaque pool de threads limité (4 threads, sauf si `--threads` en indique autrement), et une exécution de modèle réduit le processus à une priorité inférieure à la normale, afin qu’il puisse partager une machine.
+**Fonctionne sur :** Python 3.11 et 3.12, sous Windows et Linux. CPU par défaut, avec chaque pool de threads limité (4 threads, sauf si `--threads` en indique autrement), et une exécution de modèle réduit le processus à une priorité inférieure à la normale, afin qu’il puisse partager une machine.
 
 ## Utilisation
 
@@ -125,11 +127,11 @@ Un projet sans `records/` fonctionne également, tant que les images se trouvent
 
 ## Modèle de menace et confiance
 
-- **Ce qu’il lit :** le dossier de projet que vous nommez avec `--project` : images, `records/*.json`, métadonnées des ondes et les données de génération intégrées dans les fichiers PNG. Les commandes de texte lisent le dossier `--source` ou la branche `--rnd-data` que vous nommez. Elles refusent les données privées et les dépôts de données de rnd-data, et elles n’affichent que les chemins relatifs.
+- **Ce qu’il lit :** le dossier de projet que vous nommez avec `--project` : images, `records/*.json`, métadonnées des ondes et les données de génération intégrées dans les fichiers PNG. Les commandes de texte lisent le dossier `--source` ou la branche `--rnd-data` que vous nommez. Elles refusent le composant privé et les espaces de stockage de rnd-data, et elles n’affichent que les chemins relatifs.
 - **Ce qu’il écrit :** uniquement dans `--out` : son cache d’analyse, les caches d’intégration, le rapport, `description-review.jsonl` et la feuille de calcul. Il refuse un `--out` à l’intérieur du projet (`PERM_OUT_INSIDE_PROJECT`), de sorte qu’un projet n’est jamais modifié.
 - **Ce qu’il ne touche jamais :** tout ce qui se trouve en dehors de ces deux dossiers. Il ne supprime rien, nulle part.
-- **Réseau :** la version allégée ne l’utilise jamais. Un moteur de modèle récupère ses poids pré-enregistrés sur Hugging Face lors de la première utilisation, à moins que `HF_HUB_OFFLINE=1` ne soit défini ; le module de génération est chargé avec `HF_HUB_OFFLINE=1` et `local_files_only=True` à chaque fois. Aucun modèle n’exécute de code à distance.
-- **Autorisations :** un compte d’utilisateur ordinaire. Une GPU a besoin de `--device` plus un `--grant`, afin qu’une carte partagée ne soit pas utilisée par erreur. Avant de charger un modèle, un régulateur de VRAM vérifie que la mémoire déjà utilisée plus les besoins mesurés du modèle entrent dans `--vram-budget` (par défaut : 26 624 MiB). Il ne supprime jamais rien ; `--wait` effectue des vérifications jusqu’à ce que le chargement soit effectué.
+- **Réseau :** la version allégée ne l’utilise jamais. Un moteur de modèle récupère ses poids pré-enregistrés depuis Hugging Face lors de la première utilisation, à moins que `HF_HUB_OFFLINE=1` ne soit défini ; le module de génération est chargé avec `HF_HUB_OFFLINE=1` et `local_files_only=True` à chaque fois. Aucun modèle n’exécute de code à distance.
+- **Autorisations :** un compte d’utilisateur ordinaire. Une GPU a besoin de `--device` plus un `--grant`, afin qu’une carte partagée ne soit pas utilisée par erreur. Avant de charger un modèle, un contrôleur de VRAM vérifie que la mémoire déjà utilisée plus les besoins mesurés du modèle sont inférieurs à `--vram-budget` (par défaut : 26 624 MiB). Il ne supprime jamais rien ; `--wait` effectue des vérifications jusqu’à ce que le chargement soit effectué.
 - **Secrets et télémétrie :** il ne lit aucun identifiant et ne collecte ni n’envoie aucune télémétrie.
 - **Étapes sécurisées :** pour les projets verrouillés pour un test de performance en cours, les intégrations de descriptions et toute acceptation de descriptions basée sur un modèle sont refusées, à moins que `--allow-multimodal-pool` ne soit transmis, afin que les requêtes du test de performance ne soient pas influencées par les modèles qu’il mesure.
 
@@ -137,9 +139,9 @@ Signalez une vulnérabilité comme décrit dans [SECURITY.md](SECURITY.md).
 
 ## État
 
-**v0.2.0, un prototype public.** Le code est testé hors ligne : 188 tests et 95 % de couverture des lignes, avec de petits éléments de substitution pour les bibliothèques de modèles.
-- **Calibrage :** les exécutions du studio sur ses propres données, sur une RTX 5090, ont défini les seuils de duplication et les valeurs de VRAM. Ils sont provisoires et reposent sur un seul ensemble par type. Les seuils de code reposent sur 17 copies implantées. La méthode et les données sont disponibles dans [newsletter issue 16](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
-- **Grands projets :** les doublons, les valeurs aberrantes et le canal de recherche fonctionnent dans des blocs délimités. Sur des ensembles synthétiques, la recherche de doublons et le canal de recherche prennent quelques minutes pour 100 000 images, alors qu’ils prenaient des heures ou manquaient de mémoire. La porte de description est environ 6 fois plus rapide. Sa vérification de Jaccard ralentit encore considérablement sur les très grands ensembles qui partagent de nombreux mots, et cette question de conception reste ouverte.
+**v0.2.1, un prototype public.** Le code est testé hors ligne : 197 tests et 96 % de couverture des lignes, avec de petits éléments de substitution pour les bibliothèques de modèles.
+- **Calibrage :** les exécutions du studio sur ses propres données, sur une RTX 5090, ont défini les seuils de duplication, qui sont provisoires et reposent sur un seul ensemble par type. Les chiffres de VRAM sont des chiffres conservateurs pour la carte entière, contexte CUDA inclus, mesurés sur une RTX 5090 ; d’autres cartes et corpus peuvent différer. Les seuils de code reposent sur 17 copies implantées. La méthode et les données sont disponibles dans [le numéro 16 de la newsletter](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
+- **Grands projets :** les doublons, les valeurs aberrantes et le canal de recherche fonctionnent dans des blocs limités. Sur les ensembles synthétiques, la recherche de quasi-doublons et le canal de recherche prennent quelques minutes pour 100 000 images, alors qu’ils prenaient des heures ou manquaient de mémoire. La vérification des quasi-doublons de la porte de description utilise un filtre de préfixe exact, de sorte qu’elle ne compare que les descriptions qui pourraient atteindre 0,85. La première analyse est environ deux fois plus rapide par image, avec des résultats identiques, et s’exécute en parallèle sous `--threads`.
 - **Attendez-vous à ce que la ligne de commande change avant la version 1.0.**
 
 Le document de conception, sa base de recherche et son historique de révision sont disponibles dans la bibliothèque de recherche du studio : [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).
@@ -157,7 +159,7 @@ CI maintient la couverture des lignes à 90 % ou plus.
 
 ## Licence
 
-[MIT](LICENSE). Les modèles qu’il peut charger ne font pas partie de ce paquet, et chacun est soumis à sa propre licence ; lisez la fiche du modèle avant de l’utiliser.
+[MIT](LICENSE). Les modèles qu’il peut charger ne font pas partie de ce package, et chacun a sa propre licence ; lisez la fiche du modèle avant de l’utiliser.
 
 ---
 

@@ -43,12 +43,14 @@ model.
 
 ## Status
 
-v0.2.0 is a public prototype. It is tested offline (188 tests, 95% line coverage).
-- **Calibration:** the studio's runs on its own data set the duplicate thresholds and the models' VRAM figures. They're
-  provisional, and they rest on one pool per kind; the method and the data are in
+v0.2.1 is a public prototype. It is tested offline (197 tests, 96% line coverage).
+- **Calibration:** the studio's runs on its own data set the duplicate thresholds, which are
+  provisional and rest on one pool per kind. The models' VRAM figures are conservative whole-card figures, CUDA context
+  included, measured on an RTX 5090; other cards and corpora may differ. The method and the data are in
   [newsletter issue 16](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
 - **Large projects:** duplicates, outliers and the look channel work in bounded blocks. On synthetic sets they take
-  minutes at 100,000 images. The description gate's Jaccard check still slows on very large sets that share many words.
+  minutes at 100,000 images. The description gate's near-duplicate check uses an exact prefix filter, and the first scan
+  runs in parallel under `--threads`.
 
 The design record and its review history are in the studio's research library:
 [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).
