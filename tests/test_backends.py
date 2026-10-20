@@ -629,6 +629,18 @@ class RegistryAndNewBackendsTests(TmpCase):
     def test_registry_entries_have_40_hex_revision_licence_and_vram(self):
         expected = {"eg2", "siglip2", "bge-m3", "qwen3-emb-0.6b", "gte-modernbert", "dinov2"}
         self.assertEqual(set(registry.REGISTRY), expected)
+        self.assertEqual(
+            registry.REGISTRY["eg2"].licence,
+            "Apache-2.0; deployments follow the Gemma Prohibited Use Policy",
+        )
+        expected_max_tokens = {
+            "eg2": 8000,
+            "siglip2": 64,
+            "bge-m3": 8192,
+            "qwen3-emb-0.6b": 8192,
+            "gte-modernbert": 8192,
+            "dinov2": 0,
+        }
         for name, spec in registry.REGISTRY.items():
             self.assertEqual(spec.name, name)
             self.assertEqual(len(spec.revision), 40)
@@ -638,6 +650,7 @@ class RegistryAndNewBackendsTests(TmpCase):
             self.assertTrue(spec.modalities)
             self.assertTrue(spec.loader)
             self.assertGreater(spec.vram_mib, 0)
+            self.assertEqual(spec.max_tokens, expected_max_tokens[name])
             self.assertEqual(spec.vram_budget, spec.vram_mib)
             self.assertEqual(spec.vram_budget_mib, spec.vram_mib)
             self.assertEqual(spec.loader_kind, spec.loader)
@@ -645,6 +658,8 @@ class RegistryAndNewBackendsTests(TmpCase):
             self.assertEqual(spec.get("licence"), spec.licence)
             self.assertIn("repo", spec)
             self.assertEqual(spec.to_dict()["name"], name)
+        self.assertEqual(backends.FakeEmbedder().max_tokens, 8192)
+        self.assertEqual(backends.NoneEmbedder().max_tokens, 0)
 
     def test_task_defaults_and_resolution(self):
         self.assertEqual(
@@ -668,7 +683,92 @@ class RegistryAndNewBackendsTests(TmpCase):
             backends.make("unknown-model-xyz")
         self.assertEqual(cm.exception.code, "INPUT_UNKNOWN_BACKEND")
 
-    def test_sentence_transformer_text_models_cpu_and_cuda(self):
+    def test_eg2_prefixes_titles_and_text_only_mode(self):
+        self.assertEqual(backends.EG2_PREFIX["code_query"], "task: code retrieval | query: ")
+        self.assertEqual(backends.format_eg2_prefix("document", "dir/sub/gate.py"), "title: gate.py | text: ")
+        self.assertEqual(backends.format_eg2_prefix("document", None), "title: none | text: ")
+        self.assertEqual(backends.format_eg2_prefix("document", ""), "title: none | text: ")
+        # Symmetric and other roles never include a title
+        self.assertEqual(
+            backends.format_eg2_prefix("symmetric", "gate.py"),
+            "task: sentence similarity | query: ",
+        )
+        self.assertEqual(
+            backends.format_eg2_prefix("code_query", "gate.py"),
+            "task: code retrieval | query: ",
+        )
+        with self.assertRaises(ValueError):
+            backends.format_eg2_prefix("bogus")
+
+        with fakes.fake_modules(
+            torch=fakes.make_torch(),
+            sentence_transformers=fakes.make_sentence_transformers(),
+        ):
+            e_txt = backends.make("eg2", text_only=True, dim=512)
+            self.assertTrue(e_txt.text_only)
+            self.assertEqual(e_txt.vision_tokens, 0)
+            self.assertEqual(e_txt.processor_kwargs, {})
+            self.assertEqual(e_txt.processing_kwargs, {})
+            out = e_txt.texts(["def foo(): pass", "def bar(): pass"], role="document", titles=["src/a.py", None])
+            st = fakes.FakeSentenceTransformer.instances[0]
+            self.assertEqual(st.kw["config_kwargs"], {"vision_config": None, "audio_config": None})
+            self.assertNotIn("processor_kwargs", st.kw)
+            self.assertIsNone(st.mod0.processing_kwargs)
+            self.assertIsNone(st.mod0.processor.image_seq_length)
+            self.assertIsNone(st.mod0.processor.image_processor.max_soft_tokens)
+            sent, _ = st.encoded[0]
+            self.assertEqual(
+                sent,
+                ["title: a.py | text: def foo(): pass", "title: none | text: def bar(): pass"],
+            )
+            self.assertEqual(out.shape, (2, 512))
+            np.testing.assert_allclose(np.linalg.norm(out, axis=1), 1.0, atol=1e-5)
+
+            # Symmetric never includes title even if titles is passed
+            e_txt.texts(["same text"], role="symmetric", titles="should_not_appear.py")
+            sym_sent, _ = st.encoded[1]
+            self.assertEqual(sym_sent, ["task: sentence similarity | query: same text"])
+
+            with self.assertRaises(DeskError) as cm_im:
+                e_txt.images(["a.png"])
+            self.assertEqual(cm_im.exception.code, "INPUT_BAD_ARGUMENT")
+            with self.assertRaises(DeskError) as cm_mm:
+                e_txt.multimodal([{"text": "x", "images": ["a.png"]}])
+            self.assertEqual(cm_mm.exception.code, "INPUT_BAD_ARGUMENT")
+
+    def test_dim_and_vision_tokens_reach_eg2_and_fake_and_refuse_others(self):
+        for vt in backends.EG2_VISION_TOKENS:
+            fe = backends.make("fake", dim=256, vision_tokens=vt)
+            self.assertEqual(fe.dim, 256)
+            self.assertEqual(fe.vision_tokens, vt)
+        fe_vecs = backends.make("fake", dim=256).texts(["red blue"])
+        self.assertEqual(fe_vecs.shape, (1, 256))
+        np.testing.assert_allclose(np.linalg.norm(fe_vecs, axis=1), 1.0, atol=1e-5)
+
+        for d in (768, 512, 256):
+            eg = backends.make("eg2", dim=d, vision_tokens=560)
+            self.assertEqual(eg.dim, d)
+            self.assertEqual(eg.vision_tokens, 560)
+
+        for bad_kw in ({"dim": 128}, {"vision_tokens": 100}):
+            for b in ("eg2", "fake"):
+                with self.assertRaises(DeskError) as cm_bad:
+                    backends.make(b, **bad_kw)
+                self.assertEqual(cm_bad.exception.code, "INPUT_BAD_ARGUMENT")
+
+        for other in ("bge-m3", "qwen3-emb-0.6b", "gte-modernbert", "siglip2", "dinov2", "none"):
+            with self.assertRaises(DeskError) as cm_d:
+                backends.make(other, dim=256)
+            self.assertEqual(cm_d.exception.code, "INPUT_BAD_ARGUMENT")
+            with self.assertRaises(DeskError) as cm_vt:
+                backends.make(other, vision_tokens=280)
+            self.assertEqual(cm_vt.exception.code, "INPUT_BAD_ARGUMENT")
+
+    def test_sentence_transformer_text_models_cpu_and_cuda_and_qwen3_prompt_name(self):
+        self.assertEqual(
+            backends.QWEN3_QUERY_PROMPT,
+            "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+        )
         for name in ("bge-m3", "qwen3-emb-0.6b", "gte-modernbert"):
             spec = registry.REGISTRY[name]
             with fakes.fake_modules(
@@ -677,15 +777,28 @@ class RegistryAndNewBackendsTests(TmpCase):
             ):
                 e_cpu = backends.make(name, device="cpu")
                 self.assertEqual(e_cpu.texts([]).shape, (0, spec.dim))
-                out_cpu = e_cpu.texts(["hello world", "second line"])
-                e_cpu.texts(["cached model branch"])
+                out_cpu = e_cpu.texts(["hello world", "second line"], role="query")
+                e_cpu.texts(["code search"], role="code_query")
+                e_cpu.texts(["doc body"], role="document", titles="doc.md")
+                e_cpu.texts(["sym body"], role="symmetric")
+                e_cpu.texts(["clus body"], role="clustering")
                 st_cpu = fakes.FakeSentenceTransformer.instances[0]
                 self.assertEqual(st_cpu.repo, spec.repo)
                 self.assertEqual(st_cpu.kw["revision"], spec.revision)
                 self.assertEqual(st_cpu.kw["model_kwargs"]["dtype"], "float32")
-                self.assertEqual(st_cpu.max_seq_length, 2048)
+                self.assertEqual(st_cpu.max_seq_length, 8192)
                 self.assertTrue(st_cpu.encoded[0][1]["normalize_embeddings"])
                 np.testing.assert_allclose(np.linalg.norm(out_cpu, axis=1), 1.0, atol=1e-5)
+
+                if name == "qwen3-emb-0.6b":
+                    self.assertEqual(st_cpu.encoded[0][1].get("prompt_name"), "query")
+                    self.assertEqual(st_cpu.encoded[1][1].get("prompt_name"), "query")
+                    self.assertNotIn("prompt_name", st_cpu.encoded[2][1])
+                    self.assertNotIn("prompt_name", st_cpu.encoded[3][1])
+                    self.assertNotIn("prompt_name", st_cpu.encoded[4][1])
+                else:
+                    for _, enc_kw in st_cpu.encoded:
+                        self.assertNotIn("prompt_name", enc_kw)
 
                 e_cuda = backends.make(name, device="cuda:0", grant="g-1")
                 e_cuda.texts(["on gpu"])
@@ -779,7 +892,7 @@ class RegistryAndNewBackendsTests(TmpCase):
 
 class VRAMGovernorTests(TmpCase):
     def test_enough_room_loads_and_never_spawns_or_signals_processes(self):
-        t = fakes.make_torch(free_mib=20000, total_mib=32768)
+        t = fakes.make_torch(free_mib=22000, total_mib=32768)
         st = fakes.make_sentence_transformers()
         with fakes.fake_modules(torch=t, sentence_transformers=st), \
                 mock.patch("subprocess.run", side_effect=AssertionError("subprocess forbidden")), \
@@ -790,32 +903,73 @@ class VRAMGovernorTests(TmpCase):
         self.assertEqual(out.shape, (1, 768))
 
     def test_too_little_free_vram_refuses_with_perm_gpu_busy(self):
-        # eg2 needs 12550 + 1024 = 13574 MiB; give 10000 MiB free
+        # eg2 needs 12550 + 1024 = 13574 MiB; give 10000 MiB free on 32768 MiB (used = 22768 MiB)
         t = fakes.make_torch(free_mib=10000, total_mib=32768)
         with fakes.fake_modules(torch=t):
             with self.assertRaises(DeskError) as cm:
                 backends.make("eg2", device="cuda:0", grant="grant-1")
         self.assertEqual(cm.exception.code, "PERM_GPU_BUSY")
+        self.assertTrue(cm.exception.retryable)
         self.assertEqual(cm.exception.exit_code, 1)
-        self.assertIn("10000 MiB", cm.exception.message)
-        self.assertIn("13574 MiB", cm.exception.message)
+        msg = cm.exception.message
+        self.assertIn("used 22768 MiB", msg)
+        self.assertIn("free 10000 MiB", msg)
+        self.assertIn("need 13574 MiB", msg)
+        self.assertIn("budget 26624 MiB", msg)
 
-    def test_over_vram_budget_ceiling_refuses(self):
-        # Free memory is plenty (30000 MiB), but --vram-budget ceiling is 12000 MiB (< 13574 MiB needed by eg2)
+    def test_over_vram_budget_ceiling_refuses_immediately_without_polling(self):
+        # Free memory is plenty (30000 MiB, used = 2768 MiB), but --vram-budget ceiling is 12000 MiB (< 13574 MiB need)
         t = fakes.make_torch(free_mib=30000, total_mib=32768)
+        sleeps = []
+        with fakes.fake_modules(torch=t), \
+                mock.patch("dataset_desk.backends.time.sleep", side_effect=lambda s: sleeps.append(s)):
+            with self.assertRaises(DeskError) as cm:
+                backends.make("eg2", device="cuda", grant="grant-1", vram_budget=12000, wait=30)
+        self.assertEqual(cm.exception.code, "PERM_GPU_BUSY")
+        self.assertFalse(cm.exception.retryable)
+        self.assertEqual(sleeps, [])
+        msg = cm.exception.message
+        self.assertIn("used 2768 MiB", msg)
+        self.assertIn("free 30000 MiB", msg)
+        self.assertIn("need 13574 MiB", msg)
+        self.assertIn("budget 12000 MiB", msg)
+
+    def test_used_plus_need_over_budget_refuses_and_polls_under_wait(self):
+        # 18000 MiB free on 32768 MiB -> used = 14768 MiB.
+        # eg2 needs 13574 MiB -> free (18000) >= need (13574) and need (13574) <= budget (26624),
+        # YET used + need = 14768 + 13574 = 28342 > 26624 -> refused with PERM_GPU_BUSY!
+        t = fakes.make_torch(free_mib=18000, total_mib=32768)
         with fakes.fake_modules(torch=t):
             with self.assertRaises(DeskError) as cm:
-                backends.make("eg2", device="cuda", grant="grant-1", vram_budget=12000)
+                backends.make("eg2", device="cuda:0", grant="grant-1")
         self.assertEqual(cm.exception.code, "PERM_GPU_BUSY")
-        self.assertIn("13574 MiB", cm.exception.message)
-        self.assertIn("12000 MiB", cm.exception.message)
+        self.assertTrue(cm.exception.retryable)
+        msg = cm.exception.message
+        self.assertIn("used 14768 MiB", msg)
+        self.assertIn("free 18000 MiB", msg)
+        self.assertIn("need 13574 MiB", msg)
+        self.assertIn("budget 26624 MiB", msg)
+
+        # Under --wait, polls until used + need <= budget (when free rises to 22000 -> used = 10768, 10768+13574=24342 <= 26624)
+        readings = [
+            (18000 * (1 << 20), 32768 * (1 << 20)),
+            (22000 * (1 << 20), 32768 * (1 << 20)),
+        ]
+        t.cuda.mem_get_info = mock.Mock(side_effect=readings)
+        st = fakes.make_sentence_transformers()
+        sleeps = []
+        with fakes.fake_modules(torch=t, sentence_transformers=st), \
+                mock.patch("dataset_desk.backends.time.sleep", side_effect=lambda s: sleeps.append(s)):
+            emb = backends.make("eg2", device="cuda:0", grant="grant-1", wait=20)
+            emb.texts(["ok"])
+        self.assertEqual(sleeps, [10.0])
 
     def test_wait_polls_every_10s_and_loads_once_room_appears(self):
         t = fakes.make_torch()
         readings = [
             (2000 * (1 << 20), 32768 * (1 << 20)),
             (2000 * (1 << 20), 32768 * (1 << 20)),
-            (18000 * (1 << 20), 32768 * (1 << 20)),
+            (22000 * (1 << 20), 32768 * (1 << 20)),
         ]
         t.cuda.mem_get_info = mock.Mock(side_effect=readings)
         st = fakes.make_sentence_transformers()
@@ -844,13 +998,14 @@ class VRAMGovernorTests(TmpCase):
         class FakeDevice:
             def __init__(self, idx):
                 self.idx = idx
-                self.memory_info = types.SimpleNamespace(free=8000 * (1 << 20), total=32768 * (1 << 20))
+                self.memory_info = types.SimpleNamespace(free=20000 * (1 << 20), total=32768 * (1 << 20))
 
         cuda_core.Device = FakeDevice
         cuda_pkg.core = cuda_core
         with mock.patch.dict(sys.modules, {"torch": None, "cuda": cuda_pkg, "cuda.core": cuda_core}):
             free = backends.check_vram("cuda:0", 1674, name="bge-m3")
-        self.assertEqual(free, 8000)
+            self.assertEqual(backends._free_vram_mib("cuda:0"), 20000)
+        self.assertEqual(free, 20000)
 
     def test_governor_cpu_noop_callable_cuda_core_and_direct_embedder_vram_check(self):
         self.assertEqual(backends.check_vram("cpu", 5000), 0)
@@ -859,12 +1014,12 @@ class VRAMGovernorTests(TmpCase):
 
         class CallableMemDevice:
             def __init__(self, idx):
-                self.memory_info = lambda: (9000 * (1 << 20), 32768 * (1 << 20))
+                self.memory_info = lambda: (20000 * (1 << 20), 32768 * (1 << 20))
 
         cuda_core.Device = CallableMemDevice
         cuda_pkg.core = cuda_core
         with mock.patch.dict(sys.modules, {"torch": None, "cuda": cuda_pkg, "cuda.core": cuda_core}):
-            self.assertEqual(backends.check_vram("cuda:bad", 1000), 9000)
+            self.assertEqual(backends.check_vram("cuda:bad", 1000), 20000)
 
         t_no_mem = types.ModuleType("torch")
         t_no_mem.cuda = types.SimpleNamespace()
@@ -874,7 +1029,7 @@ class VRAMGovernorTests(TmpCase):
 
         # Direct instantiation (bypassing make) checks VRAM inside _ensure_model()
         img_path = png(self.tmp, "g.png")
-        t_ok = fakes.make_torch(free_mib=20000, total_mib=32768)
+        t_ok = fakes.make_torch(free_mib=22000, total_mib=32768)
         tf = fakes.make_transformers()
         st = fakes.make_sentence_transformers()
         with fakes.fake_modules(torch=t_ok, transformers=tf, sentence_transformers=st):

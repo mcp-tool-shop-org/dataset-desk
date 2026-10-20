@@ -63,11 +63,15 @@ DINOV2_REPO, DINOV2_REVISION = REGISTRY["dinov2"].repo, REGISTRY["dinov2"].revis
 VRAM_MARGIN_MIB = 1024
 DEFAULT_VRAM_BUDGET_MIB = 26624
 VRAM_POLL_SECONDS = 10.0
-TEXT_MAX_SEQ_LENGTH = 2048
+TEXT_MAX_SEQ_LENGTH = REGISTRY["bge-m3"].max_tokens
+
+# From Qwen/Qwen3-Embedding-0.6B config_sentence_transformers.json at revision 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3.
+QWEN3_QUERY_PROMPT = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:"
 
 # EmbeddingGemma 2's official task prefixes from its model card. Images take no prefix.
 EG2_PREFIX = {
     "query": "task: search result | query: ",
+    "code_query": "task: code retrieval | query: ",
     "document": "title: none | text: ",
     "symmetric": "task: sentence similarity | query: ",
     "clustering": "task: clustering | query: ",
@@ -78,6 +82,24 @@ EG2_PREFIX = {
 EG2_VALID_DIMS = (768, 512, 256)
 # Supported soft vision token counts in transformers.models.gemma4.image_processing_gemma4._SUPPORTED_SOFT_TOKENS.
 EG2_VISION_TOKENS = (70, 140, 280, 560, 1120)
+
+
+def format_eg2_prefix(role: str, title: str | None = None) -> str:
+    """Return the EmbeddingGemma 2 task prefix for `role`. Only `document` takes a title (base file name or 'none')."""
+    if role not in EG2_PREFIX:
+        raise ValueError(f"unknown EG2 text role {role!r}; expected one of {sorted(EG2_PREFIX)}")
+    if role == "document":
+        clean = os.path.basename(str(title).replace("\\", "/")).strip() if title else ""
+        return f"title: {clean or 'none'} | text: "
+    return EG2_PREFIX[role]
+
+
+def _resolve_titles(n: int, titles: list[str | None] | tuple[str | None, ...] | str | None) -> list[str | None]:
+    if titles is None:
+        return [None] * n
+    if isinstance(titles, str):
+        return [titles] * n
+    return [titles[i] if i < len(titles) else None for i in range(n)]
 
 
 def enter_torch_region(threads: int = DEFAULT_THREADS) -> None:
@@ -118,12 +140,18 @@ def check_device(device: str, grant: str | None) -> None:
         raise DeskError("PERM_GPU_NEEDS_GRANT", f"REFUSED: device {device!r} needs a grant id (--grant); the GPU is shared")
 
 
+def _scale_mib(free_val: int, total_val: int) -> tuple[int, int]:
+    if max(free_val, total_val) >= (1 << 20):
+        return free_val // (1 << 20), total_val // (1 << 20)
+    return free_val, total_val
+
+
 def _to_mib(free_val: int, total_val: int) -> int:
-    return free_val // (1 << 20) if max(free_val, total_val) >= (1 << 20) else free_val
+    return _scale_mib(free_val, total_val)[0]
 
 
-def _free_vram_mib(device: str = "cuda") -> int:
-    """Read free CUDA memory in MiB via torch.cuda.mem_get_info(), or cuda.core if torch isn't loaded yet."""
+def _vram_info_mib(device: str = "cuda") -> tuple[int, int]:
+    """Read (free_mib, total_mib) on CUDA via torch.cuda.mem_get_info(), or cuda.core if torch isn't loaded yet."""
     dev_idx = 0
     if ":" in device:
         with contextlib.suppress(ValueError):
@@ -143,9 +171,9 @@ def _free_vram_mib(device: str = "cuda") -> int:
             if callable(mem):
                 mem = mem()
             if isinstance(mem, tuple) and len(mem) >= 2:
-                return _to_mib(int(mem[0]), int(mem[1]))
+                return _scale_mib(int(mem[0]), int(mem[1]))
             if mem is not None and hasattr(mem, "free"):
-                return _to_mib(int(mem.free), int(getattr(mem, "total", mem.free)))
+                return _scale_mib(int(mem.free), int(getattr(mem, "total", mem.free)))
         import torch as torch_mod  # type: ignore[no-redef]
 
     mem_fn = getattr(getattr(torch_mod, "cuda", None), "mem_get_info", None)
@@ -155,7 +183,12 @@ def _free_vram_mib(device: str = "cuda") -> int:
         free_val, total_val = mem_fn(device) if ":" in device else mem_fn()
     except TypeError:
         free_val, total_val = mem_fn()
-    return _to_mib(int(free_val), int(total_val))
+    return _scale_mib(int(free_val), int(total_val))
+
+
+def _free_vram_mib(device: str = "cuda") -> int:
+    """Read free CUDA memory in MiB via _vram_info_mib()."""
+    return _vram_info_mib(device)[0]
 
 
 def check_vram(
@@ -175,21 +208,33 @@ def check_vram(
     waited = 0.0
 
     while True:
-        free_mib = _free_vram_mib(device)
+        free_mib, total_mib = _vram_info_mib(device)
+        used_mib = max(0, total_mib - free_mib)
         if need_mib > ceiling_mib:
             raise DeskError(
                 "PERM_GPU_BUSY",
                 f"REFUSED: {name} needs {need_mib} MiB ({budget_mib} MiB + {VRAM_MARGIN_MIB} MiB margin), "
-                f"exceeding --vram-budget {ceiling_mib} MiB ({free_mib} MiB free on {device})",
+                f"exceeding --vram-budget {ceiling_mib} MiB (used {used_mib} MiB, free {free_mib} MiB, "
+                f"need {need_mib} MiB, budget {ceiling_mib} MiB on {device})",
                 retryable=False,
             )
-        if free_mib >= need_mib:
+        if free_mib >= need_mib and used_mib + need_mib <= ceiling_mib:
             return free_mib
         if waited >= wait_limit:
+            if free_mib < need_mib:
+                raise DeskError(
+                    "PERM_GPU_BUSY",
+                    f"REFUSED: GPU {device} busy (used {used_mib} MiB, free {free_mib} MiB, "
+                    f"need {need_mib} MiB ({budget_mib} MiB + {VRAM_MARGIN_MIB} MiB margin), "
+                    f"budget {ceiling_mib} MiB for {name})",
+                    retryable=True,
+                )
             raise DeskError(
                 "PERM_GPU_BUSY",
-                f"REFUSED: GPU {device} busy ({free_mib} MiB free, need {need_mib} MiB for {name}: "
-                f"{budget_mib} MiB + {VRAM_MARGIN_MIB} MiB margin)",
+                f"REFUSED: GPU {device} busy: used {used_mib} MiB + need {need_mib} MiB = {used_mib + need_mib} MiB "
+                f"exceeds --vram-budget {ceiling_mib} MiB (used {used_mib} MiB, free {free_mib} MiB, "
+                f"need {need_mib} MiB ({budget_mib} MiB + {VRAM_MARGIN_MIB} MiB margin), "
+                f"budget {ceiling_mib} MiB for {name})",
                 retryable=True,
             )
         step = min(VRAM_POLL_SECONDS, wait_limit - waited)
@@ -200,12 +245,13 @@ def check_vram(
 class NoneEmbedder:
     """No-embedding backend for dataset-desk-lite: needs only numpy and Pillow (no torch)."""
 
-    name, revision, dim, vision_tokens, dtype_name = "none", "none-1", 0, 0, "none"
+    name, revision, dim, vision_tokens, max_tokens, dtype_name = "none", "none-1", 0, 0, 0, "none"
+    has_symmetric_vectors = False
 
     def images(self, paths: list[str]) -> np.ndarray:
         return np.zeros((len(paths), 0), np.float32)
 
-    def texts(self, texts: list[str], role: str = "query") -> np.ndarray:
+    def texts(self, texts: list[str], role: str = "query", titles=None) -> np.ndarray:
         return np.zeros((len(texts), 0), np.float32)
 
 
@@ -215,7 +261,40 @@ class FakeEmbedder:
     An image's vector is its mean colour. A text's vector counts the words red, green and blue. The fourth axis keeps
     vectors nonzero."""
 
-    name, revision, dim, vision_tokens, dtype_name = "fake", "fake-1", 4, 280, "float32"
+    name, revision, dim, vision_tokens, max_tokens, dtype_name = "fake", "fake-1", 4, 280, 8192, "float32"
+    has_symmetric_vectors = True
+
+    def __init__(
+        self,
+        *,
+        dim: int | None = None,
+        vision_tokens: int | None = None,
+        text_only: bool = False,
+        **_kw,
+    ) -> None:
+        if dim is not None and dim not in (*EG2_VALID_DIMS, 4):
+            raise DeskError(
+                "INPUT_BAD_ARGUMENT",
+                f"REFUSED: fake dim={dim} not in {EG2_VALID_DIMS} (128d degrades multimodal quality)",
+            )
+        if vision_tokens is not None and vision_tokens not in EG2_VISION_TOKENS:
+            raise DeskError(
+                "INPUT_BAD_ARGUMENT",
+                f"REFUSED: fake vision_tokens={vision_tokens} must be one of {EG2_VISION_TOKENS}",
+            )
+        self.dim = 4 if dim is None else int(dim)
+        self.vision_tokens = 280 if vision_tokens is None else int(vision_tokens)
+        self.max_tokens = 8192
+        self.seen_calls: list[dict] = []
+
+    def _fit_rows(self, rows: list[list[float]]) -> np.ndarray:
+        if not rows:
+            return np.zeros((0, self.dim), np.float32)
+        arr = np.asarray(rows, dtype=np.float32)
+        if self.dim != arr.shape[1]:
+            reps = (self.dim + arr.shape[1] - 1) // arr.shape[1]
+            arr = np.tile(arr, (1, reps))[:, :self.dim]
+        return unit_rows(arr)
 
     def images(self, paths: list[str]) -> np.ndarray:
         from PIL import Image
@@ -225,27 +304,32 @@ class FakeEmbedder:
             with Image.open(p) as im:
                 px = np.asarray(im.convert("RGB").resize((8, 8)), dtype=np.float32) / 255.0
             r, g, b = px.reshape(-1, 3).mean(axis=0)
-            rows.append([r, g, b, 0.05])
-        return unit_rows(rows) if rows else np.zeros((0, self.dim), np.float32)
+            rows.append([float(r), float(g), float(b), 0.05])
+        return self._fit_rows(rows)
 
-    def texts(self, texts: list[str], role: str = "query") -> np.ndarray:
+    def texts(self, texts: list[str], role: str = "query", titles=None) -> np.ndarray:
         if role not in EG2_PREFIX:
             raise ValueError(f"unknown text role {role!r}; expected one of {sorted(EG2_PREFIX)}")
+        resolved_titles = _resolve_titles(len(texts), titles)
+        formatted = [format_eg2_prefix(role, tl) + t for t, tl in zip(texts, resolved_titles, strict=True)]
+        self.seen_calls.append({"role": role, "titles": resolved_titles, "formatted": formatted})
+        bias = 0.052 if role == "document" else (0.054 if role == "symmetric" else 0.05)
         rows = []
         for t in texts:
             w = t.lower()
-            rows.append([w.count("red"), w.count("green"), w.count("blue"), 0.05])
-        return unit_rows(rows) if rows else np.zeros((0, self.dim), np.float32)
+            rows.append([float(w.count("red")), float(w.count("green")), float(w.count("blue")), bias])
+        return self._fit_rows(rows)
 
     def multimodal(self, items: list[dict], role: str | None = "query") -> np.ndarray:
         """Interleaved text + image items: [{'text': '...', 'images': [path, ...]}]."""
         if role is not None and role not in EG2_PREFIX:
             raise ValueError(f"unknown text role {role!r}; expected one of {sorted(EG2_PREFIX)}")
         rows = []
+        neutral_tv = np.tile(np.array([0.0, 0.0, 0.0, 0.05], dtype=np.float32), (self.dim + 3) // 4)[:self.dim]
         for item in items:
             txt = item.get("text") or ""
             im_paths = item.get("images") or ([item["image"]] if item.get("image") else [])
-            tv = self.texts([txt], role=role or "query")[0] if txt else np.array([0, 0, 0, 0.05], dtype=np.float32)
+            tv = self.texts([txt], role=role or "query")[0] if txt else neutral_tv
             iv = self.images(im_paths).mean(axis=0) if im_paths else np.zeros(self.dim, dtype=np.float32)
             rows.append(0.5 * tv + 0.5 * iv)
         return unit_rows(rows) if rows else np.zeros((0, self.dim), np.float32)
@@ -264,26 +348,35 @@ class EG2Embedder:
 
     name, revision = "eg2", EG2_REVISION
     vram_mib = REGISTRY["eg2"].vram_mib
+    max_tokens = REGISTRY["eg2"].max_tokens
+    has_symmetric_vectors = True
 
-    def __init__(self, device: str = "cpu", threads: int = DEFAULT_THREADS, dim: int = 768, batch: int = 4,
-                 vision_tokens: int = 280, dtype: str = "auto",
-                 vram_budget: int = DEFAULT_VRAM_BUDGET_MIB, wait: float = 0.0):
-        if dim not in EG2_VALID_DIMS:
-            raise ValueError(f"REFUSED: EG2 dim={dim} not in {EG2_VALID_DIMS} (128d degrades multimodal quality)")
-        if vision_tokens not in EG2_VISION_TOKENS:
-            raise ValueError(f"REFUSED: EG2 vision_tokens={vision_tokens} must be one of {EG2_VISION_TOKENS}")
+    def __init__(self, device: str = "cpu", threads: int = DEFAULT_THREADS, dim: int | None = 768, batch: int = 4,
+                 vision_tokens: int | None = 280, dtype: str = "auto",
+                 vram_budget: int = DEFAULT_VRAM_BUDGET_MIB, wait: float = 0.0,
+                 text_only: bool = False):
+        eff_dim = 768 if dim is None else int(dim)
+        eff_vt = 280 if vision_tokens is None else int(vision_tokens)
+        if eff_dim not in EG2_VALID_DIMS:
+            raise ValueError(f"REFUSED: EG2 dim={eff_dim} not in {EG2_VALID_DIMS} (128d degrades multimodal quality)")
+        if eff_vt not in EG2_VISION_TOKENS:
+            raise ValueError(f"REFUSED: EG2 vision_tokens={eff_vt} must be one of {EG2_VISION_TOKENS}")
         if dtype in ("float16", "fp16", "half"):
             raise ValueError("REFUSED: float16 overflows EmbeddingGemma 2 activations; use float32 or bfloat16")
 
         self.device = device
         self.threads = threads
-        self.dim, self.batch, self.vision_tokens = dim, batch, vision_tokens
+        self.dim = eff_dim
+        self.batch = batch
+        self.text_only = bool(text_only)
+        self.vision_tokens = 0 if self.text_only else eff_vt
+        self.max_tokens = REGISTRY["eg2"].max_tokens
         self.vram_budget, self.wait = vram_budget, wait
         self._vram_checked = False
         self._requested_dtype = dtype
         self.dtype_name = "bfloat16" if dtype == "bfloat16" else "float32"
-        self.processor_kwargs = {"image_seq_length": vision_tokens}
-        self.processing_kwargs = {"image": {"max_soft_tokens": vision_tokens}}
+        self.processor_kwargs = {} if self.text_only else {"image_seq_length": eff_vt}
+        self.processing_kwargs = {} if self.text_only else {"image": {"max_soft_tokens": eff_vt}}
         self.model = None
         self.params: int | None = None
 
@@ -305,31 +398,47 @@ class EG2Embedder:
             torch_dtype = torch.float32
             self.dtype_name = "float32"
 
-        self.model = SentenceTransformer(
-            EG2_REPO,
-            revision=EG2_REVISION,
-            device=self.device,
-            config_kwargs={"audio_config": None},
-            model_kwargs={"dtype": torch_dtype},
-            processor_kwargs=dict(self.processor_kwargs),
-        )
-        if len(self.model) > 0:
-            mod0 = self.model[0]
-            mod0.processing_kwargs = dict(self.processing_kwargs)
-            proc = getattr(mod0, "processor", None)
-            if proc is not None:
-                proc.image_seq_length = self.vision_tokens
-                if getattr(proc, "image_processor", None) is not None:
-                    proc.image_processor.max_soft_tokens = self.vision_tokens
+        if self.text_only:
+            self.model = SentenceTransformer(
+                EG2_REPO,
+                revision=EG2_REVISION,
+                device=self.device,
+                config_kwargs={"vision_config": None, "audio_config": None},
+                model_kwargs={"dtype": torch_dtype},
+            )
+        else:
+            self.model = SentenceTransformer(
+                EG2_REPO,
+                revision=EG2_REVISION,
+                device=self.device,
+                config_kwargs={"audio_config": None},
+                model_kwargs={"dtype": torch_dtype},
+                processor_kwargs=dict(self.processor_kwargs),
+            )
+            if len(self.model) > 0:
+                mod0 = self.model[0]
+                mod0.processing_kwargs = dict(self.processing_kwargs)
+                proc = getattr(mod0, "processor", None)
+                if proc is not None:
+                    proc.image_seq_length = self.vision_tokens
+                    if getattr(proc, "image_processor", None) is not None:
+                        proc.image_processor.max_soft_tokens = self.vision_tokens
         self.params = sum(p.numel() for p in self.model.parameters())
 
     def _encode(self, inputs: list) -> np.ndarray:
         self._ensure_model()
         out = self.model.encode(inputs, batch_size=self.batch, normalize_embeddings=True, truncate_dim=self.dim,
                                 convert_to_numpy=True, show_progress_bar=False)
-        return unit_rows(out)
+        arr = np.asarray(out, dtype=np.float32)
+        if arr.ndim == 1:
+            arr = arr[None, :]
+        if arr.shape[1] > self.dim:
+            arr = arr[:, :self.dim]
+        return unit_rows(arr)
 
     def images(self, paths: list[str]) -> np.ndarray:
+        if self.text_only:
+            raise DeskError("INPUT_BAD_ARGUMENT", "REFUSED: EG2Embedder loaded with text_only=True cannot embed images")
         if not paths:
             return np.zeros((0, self.dim), np.float32)
         from PIL import Image
@@ -343,14 +452,20 @@ class EG2Embedder:
             rows.append(self._encode(ims))  # a PIL image is the image modality; no prefix
         return np.vstack(rows) if rows else np.zeros((0, self.dim), np.float32)
 
-    def texts(self, texts: list[str], role: str = "query") -> np.ndarray:
+    def texts(self, texts: list[str], role: str = "query", titles=None) -> np.ndarray:
         if role not in EG2_PREFIX:
             raise ValueError(f"unknown EG2 text role {role!r}; expected one of {sorted(EG2_PREFIX)}")
-        return self._encode([EG2_PREFIX[role] + t for t in texts]) if texts else np.zeros((0, self.dim), np.float32)
+        if not texts:
+            return np.zeros((0, self.dim), np.float32)
+        resolved_titles = _resolve_titles(len(texts), titles)
+        formatted = [format_eg2_prefix(role, tl) + t for t, tl in zip(texts, resolved_titles, strict=True)]
+        return self._encode(formatted)
 
     def multimodal(self, items: list[dict], role: str | None = "query") -> np.ndarray:
         """Encode interleaved text + image dicts into one shared 8K context window.
         Each item is {'text': '... <|image|> ...', 'images': [path, ...]}."""
+        if self.text_only:
+            raise DeskError("INPUT_BAD_ARGUMENT", "REFUSED: EG2Embedder loaded with text_only=True cannot embed images")
         if role is not None and role not in EG2_PREFIX:
             raise ValueError(f"unknown EG2 text role {role!r}; expected one of {sorted(EG2_PREFIX)}")
         if not items:
@@ -358,7 +473,7 @@ class EG2Embedder:
         from PIL import Image
 
         payloads = []
-        prefix = EG2_PREFIX[role] if role else ""
+        prefix = format_eg2_prefix(role) if role else ""
         for item in items:
             raw_text = item.get("text") or ""
             im_paths = item.get("images") or ([item["image"]] if item.get("image") else [])
@@ -398,6 +513,8 @@ class SigLIP2Embedder:
 
     name, revision, dim, vision_tokens, dtype_name = "siglip2", SIGLIP2_REVISION, 1152, 729, "float32"
     vram_mib = REGISTRY["siglip2"].vram_mib
+    max_tokens = REGISTRY["siglip2"].max_tokens
+    has_symmetric_vectors = False
 
     def __init__(self, device: str = "cpu", threads: int = DEFAULT_THREADS, batch: int = 4,
                  vram_budget: int = DEFAULT_VRAM_BUDGET_MIB, wait: float = 0.0):
@@ -448,7 +565,7 @@ class SigLIP2Embedder:
                 rows.append(self._pooled(self.model.get_image_features(**inputs)))
         return np.vstack(rows) if rows else np.zeros((0, 1152), np.float32)
 
-    def texts(self, texts: list[str], role: str = "query") -> np.ndarray:
+    def texts(self, texts: list[str], role: str = "query", titles=None) -> np.ndarray:
         if not texts:
             return np.zeros((0, 1152), np.float32)
         self._ensure_model()
@@ -463,10 +580,11 @@ class SigLIP2Embedder:
 
 class SentenceTransformerTextEmbedder:
     """Text-only embedder loaded through SentenceTransformer(repo, revision=...) with bf16 on CUDA, fp32 on CPU,
-    max_seq_length=2048, and unit-normalized output."""
+    max_seq_length following spec.max_tokens, and unit-normalized output."""
 
     vision_tokens = 0
     max_seq_length = TEXT_MAX_SEQ_LENGTH
+    has_symmetric_vectors = False
 
     def __init__(
         self,
@@ -485,6 +603,8 @@ class SentenceTransformerTextEmbedder:
         self.modalities = spec.modalities
         self.vram_mib = spec.vram_mib
         self.dim = spec.dim
+        self.max_tokens = spec.max_tokens
+        self.max_seq_length = spec.max_tokens or TEXT_MAX_SEQ_LENGTH
         self.device, self.threads, self.batch = device, threads, batch
         self.vram_budget, self.wait = vram_budget, wait
         self._vram_checked = False
@@ -518,17 +638,19 @@ class SentenceTransformerTextEmbedder:
         self.model.max_seq_length = self.max_seq_length
         self.params = sum(p.numel() for p in self.model.parameters())
 
-    def texts(self, texts: list[str], role: str = "query") -> np.ndarray:
+    def texts(self, texts: list[str], role: str = "query", titles=None) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.dim), np.float32)
         self._ensure_model()
-        out = self.model.encode(
-            texts,
-            batch_size=self.batch,
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-            show_progress_bar=False,
-        )
+        encode_kw: dict = {
+            "batch_size": self.batch,
+            "normalize_embeddings": True,
+            "convert_to_numpy": True,
+            "show_progress_bar": False,
+        }
+        if self.name == "qwen3-emb-0.6b" and role in ("query", "code_query"):
+            encode_kw["prompt_name"] = "query"
+        out = self.model.encode(texts, **encode_kw)
         res = unit_rows(out)
         if res.ndim == 2 and res.shape[1] > 0:
             self.dim = int(res.shape[1])
@@ -543,7 +665,9 @@ class DINOv2Embedder:
     unit-normalized."""
 
     vision_tokens = 256
+    max_tokens = REGISTRY["dinov2"].max_tokens
     dtype_name = "float32"
+    has_symmetric_vectors = False
 
     def __init__(
         self,
@@ -562,6 +686,7 @@ class DINOv2Embedder:
         self.modalities = spec.modalities
         self.vram_mib = spec.vram_mib
         self.dim = spec.dim
+        self.max_tokens = spec.max_tokens
         self.device, self.threads, self.batch = device, threads, batch
         self.vram_budget, self.wait = vram_budget, wait
         self._vram_checked = False
@@ -611,7 +736,7 @@ class DINOv2Embedder:
             self.dim = int(res.shape[1])
         return res
 
-    def texts(self, texts: list[str], role: str = "query") -> np.ndarray:
+    def texts(self, texts: list[str], role: str = "query", titles=None) -> np.ndarray:
         raise DeskError("INPUT_BAD_ARGUMENT", f"backend {self.name!r} is image-only and cannot embed texts")
 
 
@@ -834,7 +959,7 @@ def make_drafter(name: str, device: str = "cpu", threads: int = DEFAULT_THREADS,
 
 _STANDINS = {
     "none": lambda **_kw: NoneEmbedder(),
-    "fake": lambda **_kw: FakeEmbedder(),
+    "fake": lambda **kw: FakeEmbedder(**kw),
 }
 
 _LOADERS = {
@@ -843,6 +968,32 @@ _LOADERS = {
     "sentence_transformer": lambda spec, **kw: SentenceTransformerTextEmbedder(spec, **kw),
     "dinov2": lambda spec, **kw: DINOv2Embedder(spec, **kw),
 }
+
+
+def validate_embedder_options(
+    backend: str,
+    *,
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+) -> None:
+    """Validate --dim and --vision-tokens against backend capabilities."""
+    if backend not in ("eg2", "fake") and (dim is not None or vision_tokens is not None):
+        raise DeskError(
+            "INPUT_BAD_ARGUMENT",
+            f"REFUSED: backend {backend!r} does not support --dim or --vision-tokens (only 'eg2' and 'fake' do)",
+        )
+    if dim is not None:
+        allowed_dims = EG2_VALID_DIMS if backend == "eg2" else (*EG2_VALID_DIMS, 4)
+        if dim not in allowed_dims:
+            raise DeskError(
+                "INPUT_BAD_ARGUMENT",
+                f"REFUSED: {backend} dim={dim} not in {EG2_VALID_DIMS} (128d degrades multimodal quality)",
+            )
+    if vision_tokens is not None and vision_tokens not in EG2_VISION_TOKENS:
+        raise DeskError(
+            "INPUT_BAD_ARGUMENT",
+            f"REFUSED: {backend} vision_tokens={vision_tokens} must be one of {EG2_VISION_TOKENS}",
+        )
 
 
 def _can_probe_vram() -> bool:
@@ -861,24 +1012,36 @@ def make(
     *,
     vram_budget: int = DEFAULT_VRAM_BUDGET_MIB,
     wait: float = 0.0,
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+    text_only: bool = False,
     **kwargs,
 ):
     check_device(device, grant)
     cap_threads(threads)
-    standin = _STANDINS.get(backend)
-    if standin is not None:
-        return standin(device=device, threads=threads, **kwargs)
-    spec = REGISTRY.get(backend)
-    if spec is None:
+    if backend not in _STANDINS and backend not in REGISTRY:
         valid = ", ".join([*REGISTRY, *_STANDINS])
         raise DeskError("INPUT_UNKNOWN_BACKEND", f"unknown backend {backend!r}: {valid}")
+    validate_embedder_options(backend, dim=dim, vision_tokens=vision_tokens)
+    extra_kw = dict(kwargs)
+    if backend in ("eg2", "fake"):
+        if dim is not None:
+            extra_kw["dim"] = dim
+        if vision_tokens is not None:
+            extra_kw["vision_tokens"] = vision_tokens
+        if text_only:
+            extra_kw["text_only"] = True
+    standin = _STANDINS.get(backend)
+    if standin is not None:
+        return standin(device=device, threads=threads, **extra_kw)
+    spec = REGISTRY[backend]
     emb = _LOADERS[spec.loader](
         spec,
         device=device,
         threads=threads,
         vram_budget=vram_budget,
         wait=wait,
-        **kwargs,
+        **extra_kw,
     )
     if device != "cpu" and _can_probe_vram():
         check_vram(device, spec.vram_mib, vram_budget=vram_budget, wait=wait, name=spec.name)

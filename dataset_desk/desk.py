@@ -32,6 +32,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -622,31 +623,77 @@ def scan(project: str, strict: bool = False, out: str | None = None) -> tuple[li
 
 # ---- the cache: one folder per backend under --out ------------------------------------------------------------
 
-def cache_dir(out: str, backend: str) -> str:
-    return os.path.join(out, backend)
+def _default_dim_for_backend(backend: str) -> int:
+    if backend in registry.REGISTRY:
+        return registry.REGISTRY[backend].dim
+    if backend == "fake":
+        return 4
+    return 0
 
 
-def save_cache(out: str, backend: str, items: list[Item], img: np.ndarray, txt: dict, meta: dict,
-               cluster_txt: dict | None = None) -> None:
-    d = cache_dir(out, backend)
+def _default_vision_tokens_for_backend(backend: str) -> int:
+    if backend == "siglip2":
+        return 729
+    if backend == "dinov2":
+        return 256
+    if backend in ("eg2", "fake"):
+        return 280
+    return 0
+
+
+def cache_dir(
+    out: str,
+    backend: str,
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+) -> str:
+    parts = [backend]
+    def_dim = _default_dim_for_backend(backend)
+    if dim is not None and dim > 0 and dim != def_dim:
+        parts.append(f"d{dim}")
+    def_vt = _default_vision_tokens_for_backend(backend)
+    if vision_tokens is not None and vision_tokens > 0 and vision_tokens != def_vt:
+        parts.append(f"vt{vision_tokens}")
+    return os.path.join(out, "-".join(parts))
+
+
+def save_cache(
+    out: str,
+    backend: str,
+    items: list[Item],
+    img: np.ndarray,
+    txt: dict,
+    meta: dict,
+    cluster_txt: dict | None = None,
+    *,
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+) -> None:
+    d = cache_dir(out, backend, dim=dim, vision_tokens=vision_tokens)
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "items.jsonl"), "w", encoding="utf-8") as f:
         for it in items:
             f.write(json.dumps(asdict(it), ensure_ascii=False) + "\n")
     np.save(os.path.join(d, "images.npy"), img)
-    dim = int(img.shape[1]) if img.ndim == 2 else 0
+    vec_dim = int(img.shape[1]) if img.ndim == 2 else 0
     shas = sorted(txt)
     np.save(os.path.join(d, "texts.npy"),
-            np.vstack([txt[s] for s in shas]) if shas else np.zeros((0, dim), np.float32))
+            np.vstack([txt[s] for s in shas]) if shas else np.zeros((0, vec_dim), np.float32))
     cshas = sorted(cluster_txt or {})
     np.save(os.path.join(d, "cluster_texts.npy"),
-            np.vstack([cluster_txt[s] for s in cshas]) if cshas else np.zeros((0, dim), np.float32))
+            np.vstack([cluster_txt[s] for s in cshas]) if cshas else np.zeros((0, vec_dim), np.float32))
     with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as f:
         json.dump({**meta, "text_shas": shas, "cluster_text_shas": cshas}, f, indent=1)
 
 
-def load_cache(out: str, backend: str) -> tuple[list[Item], np.ndarray, dict, dict]:
-    d = cache_dir(out, backend)
+def load_cache(
+    out: str,
+    backend: str,
+    *,
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+) -> tuple[list[Item], np.ndarray, dict, dict]:
+    d = cache_dir(out, backend, dim=dim, vision_tokens=vision_tokens)
     try:
         with open(os.path.join(d, "meta.json"), encoding="utf-8") as f:
             meta = json.load(f)
@@ -670,16 +717,29 @@ def index(project: str, out: str, emb, limit: int | None = None, grant: str | No
           strict: bool = False, images_only: bool = False, allow_multimodal_pool: bool = False,
           log=print) -> dict:
     """Embed every unique image, and every approved record's description as a search query. Reuses vectors already
-    cached for the same backend, revision and vision token budget, and shares scan.jsonl across backends."""
+    cached for the same backend, revision and settings, and shares scan.jsonl across backends."""
     check_multimodal_pool(project, emb.name, images_only=images_only, allow_multimodal_pool=allow_multimodal_pool)
     items, stats = scan(project, strict=strict, out=out)
     if limit:
         items = items[:limit]
     old_img, old_txt, old_ctxt = {}, {}, {}
-    vtokens = getattr(emb, "vision_tokens", 280)
+    vtokens = int(getattr(emb, "vision_tokens", 280))
+    emb_dim = int(getattr(emb, "dim", 0))
+    max_tokens = int(getattr(emb, "max_tokens", 0))
+    dtype_name = getattr(emb, "dtype_name", "float32")
+    index_role = "query"
+    expected_meta = {
+        "revision": emb.revision,
+        "dim": emb_dim,
+        "vision_tokens": vtokens,
+        "max_tokens": max_tokens,
+        "max_chunks": TEXT_MAX_CHUNKS,
+        "role": index_role,
+        "dtype": dtype_name,
+    }
     try:
-        o_items, o_img, o_txt, o_meta = load_cache(out, emb.name)
-        if o_meta.get("revision") == emb.revision and o_meta.get("vision_tokens", 280) == vtokens:
+        o_items, o_img, o_txt, o_meta = load_cache(out, emb.name, dim=emb_dim, vision_tokens=vtokens)
+        if all(o_meta.get(k) == v for k, v in expected_meta.items()):
             old_img = dict(zip((it.sha256 for it in o_items), o_img, strict=True))
             cur_exp = {x.sha256: (x.record or {}).get("explanation") for x in items}
             old_txt = {
@@ -718,7 +778,7 @@ def index(project: str, out: str, emb, limit: int | None = None, grant: str | No
             for it, cv in zip(described, emb.texts(texts_list, "clustering"), strict=True):
                 old_ctxt[it.sha256] = cv
 
-    dim = getattr(emb, "dim", 0)
+    dim = int(getattr(emb, "dim", 0))
     img = np.vstack([old_img[it.sha256] for it in items]) if (items and dim > 0) else np.zeros((len(items), dim), np.float32)
     keep = (
         {it.sha256 for it in items if it.status == "approved" and (it.record or {}).get("explanation")}
@@ -727,12 +787,16 @@ def index(project: str, out: str, emb, limit: int | None = None, grant: str | No
     )
     txt = {s: v for s, v in old_txt.items() if s in keep}
     cluster_txt = {s: v for s, v in old_ctxt.items() if s in keep}
+    final_dim = int(img.shape[1]) if items else dim
     meta = {
         "backend": emb.name,
         "revision": emb.revision,
-        "dim": int(img.shape[1]) if items else 0,
+        "dim": final_dim,
         "vision_tokens": vtokens,
-        "dtype": getattr(emb, "dtype_name", "float32"),
+        "max_tokens": max_tokens,
+        "max_chunks": TEXT_MAX_CHUNKS,
+        "role": index_role,
+        "dtype": getattr(emb, "dtype_name", dtype_name),
         "images_only": eff_images_only,
         "project": os.path.abspath(project),
         "grant": grant,
@@ -744,9 +808,9 @@ def index(project: str, out: str, emb, limit: int | None = None, grant: str | No
         **{k: v for k, v in stats.items() if k != "problems"},
         "problems": stats["problems"],
     }
-    save_cache(out, emb.name, items, img, txt, meta, cluster_txt=cluster_txt)
+    save_cache(out, emb.name, items, img, txt, meta, cluster_txt=cluster_txt, dim=final_dim, vision_tokens=vtokens)
     log(f"indexed {len(items)} unique images ({len(todo)} new, {t_img:.1f} s) and {len(txt)} descriptions "
-        f"with {emb.name}; cache: {cache_dir(out, emb.name)}")
+        f"with {emb.name}; cache: {cache_dir(out, emb.name, dim=final_dim, vision_tokens=vtokens)}")
     return meta
 
 
@@ -1217,25 +1281,153 @@ def _has_nul_first_4kb(path: str) -> bool:
         return b"\x00" in f.read(NUL_PROBE_BYTES)
 
 
-def chunk_text(text: str, chunk_chars: int = TEXT_CHUNK_CHARS, max_chunks: int = TEXT_MAX_CHUNKS) -> list[str]:
-    """Split text into chunks of about 6,000 characters, at most 8 chunks per file."""
+_TOKEN_SPAN_RE = re.compile(r"\S{1,6}\s*|\s+")
+
+
+class _SpanTokenizer:
+    """Deterministic span tokenizer used when an offline/stand-in embedder has no HF tokenizer attached."""
+
+    def spans(self, text: str) -> list[tuple[int, int]]:
+        return [m.span() for m in _TOKEN_SPAN_RE.finditer(text)]
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        return list(range(len(self.spans(text))))
+
+    def __call__(self, text: str, **_kw) -> dict:
+        return {"input_ids": self.encode(text)}
+
+
+_FALLBACK_TOKENIZER = _SpanTokenizer()
+
+
+def _resolve_tokenizer(emb=None, tokenizer=None):
+    if tokenizer is not None:
+        return tokenizer
+    if emb is not None:
+        tok = getattr(emb, "tokenizer", None)
+        if tok is not None:
+            return tok
+        mod = getattr(emb, "model", None)
+        if mod is not None:
+            tok = getattr(mod, "tokenizer", None)
+            if tok is not None:
+                return tok
+            if hasattr(mod, "__len__") and len(mod) > 0:
+                tok = getattr(mod[0], "tokenizer", None)
+                if tok is not None:
+                    return tok
+        proc = getattr(emb, "processor", None)
+        if proc is not None:
+            tok = getattr(proc, "tokenizer", None)
+            if tok is not None:
+                return tok
+    return _FALLBACK_TOKENIZER
+
+
+def _encode_token_ids(tok, text: str) -> list:
+    if hasattr(tok, "encode"):
+        try:
+            return list(tok.encode(text, add_special_tokens=False))
+        except TypeError:
+            return list(tok.encode(text))
+    if callable(tok):
+        try:
+            res = tok(text, add_special_tokens=False, truncation=False, padding=False)
+        except TypeError:
+            res = tok(text)
+        return list(res["input_ids"] if isinstance(res, dict) else res)
+    return _FALLBACK_TOKENIZER.encode(text)
+
+
+def chunk_text(
+    text: str,
+    emb=None,
+    *,
+    max_tokens: int | None = None,
+    prefix: str = "",
+    prefix_tokens: int | None = None,
+    tokenizer=None,
+    max_chunks: int = TEXT_MAX_CHUNKS,
+) -> list[str]:
+    """Split `text` into at most `max_chunks` chunks of at most `max_tokens - prefix_tokens - 4` tokens."""
     if not text:
         return [""]
-    chunks: list[str] = []
-    pos = 0
-    n = len(text)
-    while pos < n and len(chunks) < max_chunks:
-        end = min(pos + chunk_chars, n)
-        chunks.append(text[pos:end])
-        pos = end
+    if isinstance(emb, int) and max_tokens is None:
+        eff_max_tokens = emb
+        emb = None
+    elif max_tokens is not None:
+        eff_max_tokens = int(max_tokens)
+    elif emb is not None and getattr(emb, "max_tokens", 0) > 0:
+        eff_max_tokens = int(emb.max_tokens)
+    else:
+        eff_max_tokens = registry.REGISTRY["bge-m3"].max_tokens
+
+    tok = _resolve_tokenizer(emb, tokenizer)
+    if prefix_tokens is not None:
+        eff_prefix_tokens = max(0, int(prefix_tokens))
+    elif prefix:
+        eff_prefix_tokens = len(_encode_token_ids(tok, prefix))
+    else:
+        eff_prefix_tokens = 0
+
+    chunk_budget = max(1, eff_max_tokens - eff_prefix_tokens - 4)
+
+    if hasattr(tok, "spans"):
+        spans = tok.spans(text)
+        if len(spans) <= chunk_budget:
+            return [text]
+        chunks: list[str] = []
+        i = 0
+        while i < len(spans) and len(chunks) < max_chunks:
+            end_idx = min(i + chunk_budget, len(spans))
+            chunks.append(text[spans[i][0]:spans[end_idx - 1][1]])
+            i = end_idx
+        return chunks
+
+    if hasattr(tok, "encode") and hasattr(tok, "decode"):
+        ids = _encode_token_ids(tok, text)
+        if len(ids) <= chunk_budget:
+            return [text]
+        chunks = []
+        i = 0
+        while i < len(ids) and len(chunks) < max_chunks:
+            sub_ids = ids[i:i + chunk_budget]
+            try:
+                ch = tok.decode(sub_ids, skip_special_tokens=True)
+            except TypeError:
+                ch = tok.decode(sub_ids)
+            chunks.append(ch)
+            i += chunk_budget
+        return chunks
+
+    spans = _FALLBACK_TOKENIZER.spans(text)
+    if len(_encode_token_ids(tok, text)) <= chunk_budget:
+        return [text]
+    chunks = []
+    i = 0
+    while i < len(spans) and len(chunks) < max_chunks:
+        end_idx = min(i + chunk_budget, len(spans))
+        cand = text[spans[i][0]:spans[end_idx - 1][1]]
+        while end_idx - 1 > i and len(_encode_token_ids(tok, cand)) > chunk_budget:
+            end_idx -= 1
+            cand = text[spans[i][0]:spans[end_idx - 1][1]]
+        chunks.append(cand)
+        i = end_idx
     return chunks
 
 
-def embed_file_chunks(emb, chunks: list[str], role: str = "query") -> np.ndarray:
+def embed_file_chunks(emb, chunks: list[str], role: str = "document", title: str | None = None) -> np.ndarray:
     """Embed a file's chunks and return their unit-normalized mean vector."""
     if not chunks:
         chunks = [""]
-    vecs = emb.texts(chunks, role)
+    titles = [title] * len(chunks) if (title is not None and role == "document") else None
+    if titles is not None:
+        try:
+            vecs = emb.texts(chunks, role, titles=titles)
+        except TypeError:
+            vecs = emb.texts(chunks, role)
+    else:
+        vecs = emb.texts(chunks, role)
     if vecs.ndim != 2 or vecs.shape[1] == 0:
         return np.zeros((0,), np.float32)
     return backends.unit_rows(vecs.mean(axis=0))[0]
@@ -1418,29 +1610,60 @@ def scan_rnd_data(checkout: str) -> tuple[list[TextItem], dict]:
     }
 
 
-def text_cache_dir(out: str, backend: str) -> str:
-    return os.path.join(out, backend, "text")
+def text_cache_dir(
+    out: str,
+    backend: str,
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+) -> str:
+    def_dim = _default_dim_for_backend(backend)
+    folder = f"{backend}-d{dim}" if (dim is not None and dim > 0 and dim != def_dim) else backend
+    return os.path.join(out, folder, "text")
 
 
-def save_text_cache(out: str, backend: str, items: list[TextItem], vecs: np.ndarray, meta: dict) -> None:
-    d = text_cache_dir(out, backend)
+def save_text_cache(
+    out: str,
+    backend: str,
+    items: list[TextItem],
+    vecs: np.ndarray,
+    meta: dict,
+    *,
+    symmetric_vecs: np.ndarray | None = None,
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+) -> None:
+    d = text_cache_dir(out, backend, dim=dim, vision_tokens=vision_tokens)
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "items.jsonl"), "w", encoding="utf-8") as f:
         for it in items:
             f.write(json.dumps(asdict(it), ensure_ascii=False) + "\n")
     np.save(os.path.join(d, "texts.npy"), vecs)
+    sym_path = os.path.join(d, "texts_symmetric.npy")
+    if symmetric_vecs is not None:
+        np.save(sym_path, symmetric_vecs)
+    elif os.path.isfile(sym_path):
+        os.remove(sym_path)
     with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=1)
 
 
-def load_text_cache(out: str, backend: str) -> tuple[list[TextItem], np.ndarray, dict]:
-    d = text_cache_dir(out, backend)
+def load_text_cache(
+    out: str,
+    backend: str,
+    *,
+    role: str = "document",
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+) -> tuple[list[TextItem], np.ndarray, dict]:
+    d = text_cache_dir(out, backend, dim=dim, vision_tokens=vision_tokens)
     try:
         with open(os.path.join(d, "meta.json"), encoding="utf-8") as f:
             meta = json.load(f)
         with open(os.path.join(d, "items.jsonl"), encoding="utf-8") as f:
             items = [TextItem(**json.loads(line)) for line in f if line.strip()]
-        vecs = np.load(os.path.join(d, "texts.npy"))
+        sym_path = os.path.join(d, "texts_symmetric.npy")
+        vec_file = sym_path if (role == "symmetric" and os.path.isfile(sym_path)) else os.path.join(d, "texts.npy")
+        vecs = np.load(vec_file)
     except OSError as err:
         raise DeskError(
             "STATE_NO_INDEX",
@@ -1461,7 +1684,7 @@ def text_index(
     log=print,
 ) -> dict:
     """Embed text/code files from --source or --rnd-data into <out>/<backend>/text/, reusing cached vectors by sha256
-    and revision."""
+    and settings."""
     if bool(source) == bool(rnd_data):
         raise DeskError("INPUT_BAD_ARGUMENT", "text-index needs either --source <folder> or --rnd-data <checkout>")
     root_dir = os.path.realpath(os.path.abspath(source or rnd_data))
@@ -1470,13 +1693,38 @@ def text_index(
     if limit:
         items = items[:limit]
 
+    is_prefix_sensitive = bool(getattr(emb, "has_symmetric_vectors", False) or emb.name in ("eg2", "fake"))
+    emb_dim = int(getattr(emb, "dim", 0))
+    vtokens = int(getattr(emb, "vision_tokens", 0))
+    max_tokens = int(getattr(emb, "max_tokens", 0))
+    dtype_name = getattr(emb, "dtype_name", "float32")
+    role_meta = "document+symmetric" if is_prefix_sensitive else "document"
+    expected_meta = {
+        "revision": emb.revision,
+        "dim": emb_dim,
+        "vision_tokens": vtokens,
+        "max_tokens": max_tokens,
+        "max_chunks": TEXT_MAX_CHUNKS,
+        "role": role_meta,
+        "dtype": dtype_name,
+    }
+
     old_vecs: dict[str, np.ndarray] = {}
+    old_sym_vecs: dict[str, np.ndarray] = {}
     old_chunks: dict[str, int] = {}
     try:
-        o_items, o_vecs, o_meta = load_text_cache(out, emb.name)
-        if o_meta.get("revision") == emb.revision:
-            old_vecs = dict(zip((it.sha256 for it in o_items), o_vecs, strict=True))
-            old_chunks = {it.sha256: it.chunks for it in o_items}
+        o_items, o_vecs, o_meta = load_text_cache(out, emb.name, role="document", dim=emb_dim)
+        if all(o_meta.get(k) == v for k, v in expected_meta.items()):
+            if is_prefix_sensitive:
+                sym_file = os.path.join(text_cache_dir(out, emb.name, dim=emb_dim), "texts_symmetric.npy")
+                if os.path.isfile(sym_file):
+                    o_sym = np.load(sym_file)
+                    old_vecs = dict(zip((it.sha256 for it in o_items), o_vecs, strict=True))
+                    old_sym_vecs = dict(zip((it.sha256 for it in o_items), o_sym, strict=True))
+                    old_chunks = {it.sha256: it.chunks for it in o_items}
+            else:
+                old_vecs = dict(zip((it.sha256 for it in o_items), o_vecs, strict=True))
+                old_chunks = {it.sha256: it.chunks for it in o_items}
     except SystemExit:
         pass
 
@@ -1486,28 +1734,40 @@ def text_index(
         if it.sha256 in old_chunks:
             it.chunks = old_chunks[it.sha256]
 
+    read_chars = (max_tokens or registry.REGISTRY["bge-m3"].max_tokens) * TEXT_MAX_CHUNKS * 6 + 1024
     if todo and emb.name != "none":
         for it in todo:
             full = os.path.join(root_dir, it.paths[0])
             with open(full, encoding="utf-8", errors="replace") as f:
-                raw = f.read(TEXT_CHUNK_CHARS * TEXT_MAX_CHUNKS + 1024)
-            ch = chunk_text(raw)
-            it.chunks = len(ch)
-            old_vecs[it.sha256] = embed_file_chunks(emb, ch, role="document")
+                raw = f.read(read_chars)
+            doc_prefix = backends.format_eg2_prefix("document", it.name) if is_prefix_sensitive else ""
+            ch_doc = chunk_text(raw, emb, prefix=doc_prefix)
+            it.chunks = len(ch_doc)
+            old_vecs[it.sha256] = embed_file_chunks(emb, ch_doc, role="document", title=it.name)
+            if is_prefix_sensitive:
+                sym_prefix = backends.format_eg2_prefix("symmetric")
+                ch_sym = chunk_text(raw, emb, prefix=sym_prefix)
+                old_sym_vecs[it.sha256] = embed_file_chunks(emb, ch_sym, role="symmetric", title=None)
 
     t_sec = time.time() - t0
-    dim = getattr(emb, "dim", 0)
+    dim = int(getattr(emb, "dim", 0))
     if items and emb.name != "none" and old_vecs:
         vecs = np.vstack([old_vecs[it.sha256] for it in items])
         dim = int(vecs.shape[1])
+        sym_vecs = np.vstack([old_sym_vecs[it.sha256] for it in items]) if is_prefix_sensitive else None
     else:
         vecs = np.zeros((len(items), dim), np.float32)
+        sym_vecs = np.zeros((len(items), dim), np.float32) if (is_prefix_sensitive and emb.name != "none") else None
 
     meta = {
         "backend": emb.name,
         "revision": emb.revision,
         "dim": dim,
-        "dtype": getattr(emb, "dtype_name", "float32"),
+        "vision_tokens": vtokens,
+        "max_tokens": max_tokens,
+        "max_chunks": TEXT_MAX_CHUNKS,
+        "role": role_meta,
+        "dtype": getattr(emb, "dtype_name", dtype_name),
         "mode": "source" if source else "rnd-data",
         "grant": grant,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -1515,10 +1775,10 @@ def text_index(
         "text_seconds": round(t_sec, 2),
         **stats,
     }
-    save_text_cache(out, emb.name, items, vecs, meta)
+    save_text_cache(out, emb.name, items, vecs, meta, symmetric_vecs=sym_vecs, dim=dim)
     log(
         f"indexed {len(items)} unique text files ({len(todo)} new, {t_sec:.1f} s) "
-        f"with {emb.name}; cache: {text_cache_dir(out, emb.name)}"
+        f"with {emb.name}; cache: {text_cache_dir(out, emb.name, dim=dim)}"
     )
     return meta
 
@@ -1703,6 +1963,10 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
                     help=f"VRAM ceiling in MiB (default: {backends.DEFAULT_VRAM_BUDGET_MIB})")
     ap.add_argument("--wait", type=float, default=0.0,
                     help="seconds to poll (every 10 s) for free VRAM before refusing with PERM_GPU_BUSY")
+    ap.add_argument("--dim", type=int, default=None,
+                    help="Matryoshka embedding dimension for eg2/fake (768, 512, 256; 128 refused)")
+    ap.add_argument("--vision-tokens", dest="vision_tokens", type=int, default=None,
+                    help="vision soft tokens per image for eg2/fake (70, 140, 280, 560, 1120; default: 280)")
     ap.add_argument("--semantic", type=float, default=None,
                     help="cosine threshold for semantic duplicates (default: 0.90 for text-dupes, 0.95 for dupes)")
     ap.add_argument("--limit", type=int, help="index only the first N unique items (a smoke test)")
@@ -1726,6 +1990,7 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
 
     backend = command_backend(a.command, a.backend, a.task)
     backends.check_device(a.device, a.grant)
+    backends.validate_embedder_options(backend, dim=a.dim, vision_tokens=a.vision_tokens)
     backends.cap_threads(a.threads)
 
     make_kw: dict = {"device": a.device, "threads": a.threads, "grant": a.grant}
@@ -1733,8 +1998,13 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         make_kw["vram_budget"] = a.vram_budget
     if a.wait:
         make_kw["wait"] = a.wait
+    if a.dim is not None:
+        make_kw["dim"] = a.dim
+    if a.vision_tokens is not None:
+        make_kw["vision_tokens"] = a.vision_tokens
 
     if a.command in text_cmds:
+        make_kw["text_only"] = True
         if a.source and a.rnd_data:
             raise DeskError("INPUT_BAD_ARGUMENT", "pass either --source or --rnd-data, not both")
         src_root = os.path.abspath(a.source or a.rnd_data) if (a.source or a.rnd_data) else None
@@ -1756,14 +2026,16 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         if a.command == "text-index":
             text_index(out, emb, source=a.source, rnd_data=a.rnd_data, limit=a.limit, grant=a.grant)
             return 0
-        t_items, t_vecs, _t_meta = load_text_cache(out, backend)
+        read_role = "document" if a.command == "text-search" else "symmetric"
+        t_items, t_vecs, _t_meta = load_text_cache(out, backend, role=read_role, dim=a.dim)
         if a.command == "text-dupes":
             sem_thr = DESC_CLUSTER_COSINE if a.semantic is None else a.semantic
             print(json.dumps(text_dupes(t_items, t_vecs, semantic=sem_thr), indent=1))
         elif a.command == "text-search":
             if not a.text:
                 raise DeskError("INPUT_BAD_ARGUMENT", "text-search needs --text")
-            q = emb.texts([a.text], "query")[0]
+            q_role = "code_query" if command_task(a.command, a.task) == "code" else "query"
+            q = emb.texts([a.text], q_role)[0]
             for hit in text_search(t_items, t_vecs, q, k=a.k):
                 label = hit["outcome"] or hit["run_id"] or "unrecorded"
                 print(f"{hit['cosine']:.4f}  {label:12s}  {hit['path']}")
@@ -1797,7 +2069,7 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         index(project, out, emb, limit=a.limit, grant=a.grant, strict=a.strict,
               images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool)
         return 0
-    items, img, txt, meta = load_cache(out, backend)
+    items, img, txt, meta = load_cache(out, backend, dim=a.dim, vision_tokens=a.vision_tokens)
     subjects = None
     if a.subjects:
         with open(a.subjects, encoding="utf-8") as f:

@@ -380,7 +380,10 @@ class Analyses(Project):
         self.assertTrue(all(np.isfinite(v) and v < 50.0 for v in fit.values()))
 
     def test_eg2_guards_vision_tokens_and_multimodal_embedder(self):
-        self.assertEqual(set(backends.EG2_PREFIX), {"query", "document", "symmetric", "clustering", "classification"})
+        self.assertEqual(
+            set(backends.EG2_PREFIX),
+            {"query", "code_query", "document", "symmetric", "clustering", "classification"},
+        )
         self.assertEqual(backends.EG2_VISION_TOKENS, (70, 140, 280, 560, 1120))
         with self.assertRaises(ValueError):
             backends.EG2Embedder(dim=128)
@@ -1063,19 +1066,68 @@ class TextAndCodeInputTests(unittest.TestCase):
 
     def test_chunk_limits_and_mean_pooling_with_fake_embedder(self):
         self.assertEqual(desk.chunk_text(""), [""])
-        long_text = "x" * 60000  # 10 chunks worth -> capped at 8 chunks of 6,000 chars
+        # Token-counted chunking: default FakeEmbedder max_tokens=8192 -> budget 8188 tokens per chunk
+        long_text = "word " * 80000  # 80,000 tokens -> capped at 8 chunks of 8188 tokens
         chunks = desk.chunk_text(long_text)
         self.assertEqual(len(chunks), 8)
-        self.assertTrue(all(len(c) == 6000 for c in chunks))
+        self.assertTrue(all(len(c.split()) == 8188 for c in chunks))
+
+        # EG2 max_tokens=8000 vs BGE-M3/Qwen3/GTE max_tokens=8192
+        eg2_chunks = desk.chunk_text(long_text, max_tokens=8000, prefix="title: gate.py | text: ")
+        self.assertEqual(len(eg2_chunks), 8)
+        # "title: gate.py | text: " is 5 tokens -> budget = 8000 - 5 - 4 = 7991 tokens
+        self.assertTrue(all(len(c.split()) == 7991 for c in eg2_chunks))
+        bge_chunks = desk.chunk_text(long_text, max_tokens=8192)
+        self.assertEqual(len(bge_chunks), 8)
+        self.assertTrue(all(len(c.split()) == 8188 for c in bge_chunks))
+
+        # Tokenizer with encode/decode (e.g. HF tokenizer / SentenceTransformer)
+        class _FakeTok:
+            def encode(self, s, add_special_tokens=False):
+                return s.split()
+            def decode(self, ids, skip_special_tokens=True):
+                return " ".join(ids)
+
+        class _EmbWithTok:
+            max_tokens = 20
+            tokenizer = _FakeTok()
+
+        tok_chunks = desk.chunk_text(" ".join(f"t{i}" for i in range(50)), emb=_EmbWithTok(), prefix="p1 p2")
+        # budget = 20 - 2 - 4 = 14 tokens -> 50 tokens splits into 4 chunks (14, 14, 14, 8)
+        self.assertEqual([len(c.split()) for c in tok_chunks], [14, 14, 14, 8])
+
+        # Callable tokenizer without decode fallback + offset_mapping fallback
+        class _CallableOnlyTok:
+            def __call__(self, s, **kw):
+                words = s.split()
+                if kw.get("return_offsets_mapping"):
+                    pos = 0
+                    offsets = []
+                    for w in words:
+                        idx = s.find(w, pos)
+                        offsets.append((idx, idx + len(w)))
+                        pos = idx + len(w)
+                    return {"input_ids": list(range(len(words))), "offset_mapping": offsets}
+                return {"input_ids": list(range(len(words)))}
+
+        class _ProcHolder:
+            tokenizer = _CallableOnlyTok()
+
+        class _EmbWithProc:
+            max_tokens = 12
+            processor = _ProcHolder()
+
+        proc_chunks = desk.chunk_text(" ".join(f"w{i}" for i in range(20)), emb=_EmbWithProc())
+        self.assertEqual(len(proc_chunks), 3)
 
         emb = backends.FakeEmbedder()
-        c1 = ("red " * 1500)[:6000]
-        c2 = ("blue " * 1200)[:6000]
+        c1 = "red " * 5000
+        c2 = "blue " * 5000
         two_chunk_text = c1 + c2
-        split = desk.chunk_text(two_chunk_text)
+        split = desk.chunk_text(two_chunk_text, emb=emb)
         self.assertEqual(len(split), 2)
-        expected = backends.unit_rows(emb.texts(split, "query").mean(axis=0))[0]
-        got = desk.embed_file_chunks(emb, split, role="query")
+        expected = backends.unit_rows(emb.texts(split, "document", titles=["doc.py", "doc.py"]).mean(axis=0))[0]
+        got = desk.embed_file_chunks(emb, split, role="document", title="sub/doc.py")
         np.testing.assert_allclose(got, expected, atol=1e-6)
         self.assertAlmostEqual(float(np.linalg.norm(got)), 1.0, places=5)
 
@@ -1343,6 +1395,135 @@ class TextAndCodeInputTests(unittest.TestCase):
             )
         self.assertEqual(seen_kw[0]["vram_budget"], 20000)
         self.assertEqual(seen_kw[0]["wait"], 10.0)
+
+    def test_dual_role_vectors_code_query_cache_paths_and_meta_invalidation(self):
+        src = os.path.join(self.tmp, "src_dual")
+        self._write(src, "dir/alpha.py", "red green")
+        self._write(src, "dir/beta.py", "blue")
+        out_dual = os.path.join(self.tmp, "out_dual")
+
+        emb = backends.FakeEmbedder()
+        desk.text_index(out_dual, emb, source=src, log=lambda *a: None)
+        tdir = desk.text_cache_dir(out_dual, "fake")
+        self.assertTrue(os.path.isfile(os.path.join(tdir, "texts.npy")))
+        self.assertTrue(os.path.isfile(os.path.join(tdir, "texts_symmetric.npy")))
+
+        # Verify texts.npy used document role with base name title, and texts_symmetric.npy used symmetric role without title
+        roles_and_prefixes = [
+            (c["role"], backends.format_eg2_prefix(c["role"], c["titles"][0] if c["titles"] else None))
+            for c in emb.seen_calls
+        ]
+        self.assertIn(("document", "title: alpha.py | text: "), roles_and_prefixes)
+        self.assertIn(("document", "title: beta.py | text: "), roles_and_prefixes)
+        self.assertIn(("symmetric", "task: sentence similarity | query: "), roles_and_prefixes)
+        items_doc, vecs_doc, _meta_doc = desk.load_text_cache(out_dual, "fake", role="document")
+        _items_sym, vecs_sym, _ = desk.load_text_cache(out_dual, "fake", role="symmetric")
+        self.assertEqual(len(items_doc), 2)
+        alpha_idx = next(i for i, it in enumerate(items_doc) if it.name == "alpha.py")
+        expected_doc = desk.embed_file_chunks(emb, ["red green"], role="document", title="alpha.py")
+        expected_sym = desk.embed_file_chunks(emb, ["red green"], role="symmetric", title=None)
+        np.testing.assert_allclose(vecs_doc[alpha_idx], expected_doc, atol=1e-6)
+        np.testing.assert_allclose(vecs_sym[alpha_idx], expected_sym, atol=1e-6)
+        self.assertFalse(np.allclose(vecs_doc[alpha_idx], vecs_sym[alpha_idx]))
+
+        # File longer than 49,024 chars (old char read limit) is read past that point by text_index
+        src_long = os.path.join(self.tmp, "src_long_read")
+        long_body = ("green " * 9000) + ("blue " * 2000)  # 54,000 chars of green, then blue past char 49,024
+        self.assertGreater(len(long_body), 49024)
+        self._write(src_long, "big.py", long_body)
+        out_long = os.path.join(self.tmp, "out_long_read")
+        desk.text_index(out_long, backends.FakeEmbedder(), source=src_long, log=lambda *a: None)
+        _, long_vecs, _ = desk.load_text_cache(out_long, "fake", role="document")
+        # Channel 2 is 'blue' in FakeEmbedder; only present if text_index read past 54,000 chars into chunk 2
+        self.assertGreater(float(long_vecs[0][2]), 0.1)
+
+        # Unprefixed backend (e.g. gte-modernbert) writes only texts.npy and load_text_cache(role="symmetric") falls back to texts.npy
+        class _UnprefixedStub(backends.FakeEmbedder):
+            has_symmetric_vectors = False
+
+            def __init__(self):
+                super().__init__(dim=768)
+                self.name = "gte-modernbert"
+                self.revision = "gte-rev"
+                self.max_tokens = 8192
+
+        out_bge = os.path.join(self.tmp, "out_bge")
+        desk.text_index(out_bge, _UnprefixedStub(), source=src, log=lambda *a: None)
+        bge_tdir = desk.text_cache_dir(out_bge, "gte-modernbert")
+        self.assertTrue(os.path.isfile(os.path.join(bge_tdir, "texts.npy")))
+        self.assertFalse(os.path.isfile(os.path.join(bge_tdir, "texts_symmetric.npy")))
+        _, bge_sym_vecs, _ = desk.load_text_cache(out_bge, "gte-modernbert", role="symmetric")
+        self.assertEqual(bge_sym_vecs.shape[0], 2)
+
+        # text-search uses "code_query" when --task code and "query" otherwise
+        emb_spy = backends.FakeEmbedder()
+        with contextlib.redirect_stdout(io.StringIO()):
+            desk.main(
+                ["text-search", "--out", out_dual, "--backend", "fake", "--task", "code", "--text", "red"],
+                make=lambda b, **kw: emb_spy,
+            )
+        self.assertEqual(emb_spy.seen_calls[-1]["role"], "code_query")
+        self.assertEqual(backends.format_eg2_prefix(emb_spy.seen_calls[-1]["role"]), "task: code retrieval | query: ")
+        with contextlib.redirect_stdout(io.StringIO()):
+            desk.main(
+                ["text-search", "--out", out_dual, "--backend", "fake", "--task", "text", "--text", "red"],
+                make=lambda b, **kw: emb_spy,
+            )
+        self.assertEqual(emb_spy.seen_calls[-1]["role"], "query")
+        self.assertEqual(backends.format_eg2_prefix(emb_spy.seen_calls[-1]["role"]), "task: search result | query: ")
+
+        # Non-default dim and vision_tokens in cache_dir and text_cache_dir
+        self.assertEqual(desk.cache_dir(out_dual, "eg2", dim=768, vision_tokens=280), os.path.join(out_dual, "eg2"))
+        self.assertEqual(desk.cache_dir(out_dual, "eg2", dim=256, vision_tokens=280), os.path.join(out_dual, "eg2-d256"))
+        self.assertEqual(desk.cache_dir(out_dual, "eg2", dim=512, vision_tokens=560), os.path.join(out_dual, "eg2-d512-vt560"))
+        self.assertEqual(desk.text_cache_dir(out_dual, "eg2", dim=768), os.path.join(out_dual, "eg2", "text"))
+        self.assertEqual(desk.text_cache_dir(out_dual, "eg2", dim=256), os.path.join(out_dual, "eg2-d256", "text"))
+
+        # CLI text-index and text-search with --dim 256 use the dim-scoped cache path
+        with contextlib.redirect_stdout(io.StringIO()):
+            desk.main(["text-index", "--source", src, "--out", out_dual, "--backend", "fake", "--dim", "256"])
+        _, vecs_256, meta_256 = desk.load_text_cache(out_dual, "fake", dim=256)
+        self.assertEqual(vecs_256.shape, (2, 256))
+        self.assertEqual(meta_256["dim"], 256)
+
+        # 7-field meta.json invalidation check for text_index
+        for field, mutated in (
+            ("revision", "other-rev"),
+            ("dim", 999),
+            ("vision_tokens", 1120),
+            ("max_tokens", 4096),
+            ("max_chunks", 4),
+            ("role", "other"),
+            ("dtype", "float16"),
+        ):
+            # Restore clean cache first
+            desk.text_index(out_dual, emb, source=src, log=lambda *a: None)
+            meta_path = os.path.join(tdir, "meta.json")
+            with open(meta_path, encoding="utf-8") as f:
+                m = json.load(f)
+            m[field] = mutated
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(m, f)
+            re_meta = desk.text_index(out_dual, emb, source=src, log=lambda *a: None)
+            self.assertEqual(re_meta["embedded_now"], 2, f"Expected recompute when text meta.{field} changed")
+
+        # 7-field meta.json invalidation check for image index
+        img_src = os.path.join(self.tmp, "img_src_meta")
+        os.makedirs(os.path.join(img_src, "outputs", "w1"), exist_ok=True)
+        from PIL import Image
+        Image.new("RGB", (16, 16), (220, 20, 20)).save(os.path.join(img_src, "outputs", "w1", "a.png"))
+        out_img = os.path.join(self.tmp, "out_img_meta")
+        desk.index(img_src, out_img, emb, log=lambda *a: None)
+        img_meta_path = os.path.join(desk.cache_dir(out_img, "fake"), "meta.json")
+        with open(img_meta_path, encoding="utf-8") as f:
+            im = json.load(f)
+        for k in ("revision", "dim", "vision_tokens", "max_tokens", "max_chunks", "role", "dtype"):
+            self.assertIn(k, im)
+        im["vision_tokens"] = 1120
+        with open(img_meta_path, "w", encoding="utf-8") as f:
+            json.dump(im, f)
+        re_img_meta = desk.index(img_src, out_img, emb, log=lambda *a: None)
+        self.assertEqual(re_img_meta["embedded_now"], 1)
 
 
 if __name__ == "__main__":

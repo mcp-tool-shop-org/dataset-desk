@@ -21,6 +21,7 @@ class EmbedderSpec:
     loader: str
     vram_mib: int
     dim: int = 768
+    max_tokens: int = 0
 
     @property
     def loader_kind(self) -> str:
@@ -52,11 +53,12 @@ REGISTRY: dict[str, EmbedderSpec] = {
         name="eg2",
         repo="google/embeddinggemma-2",
         revision="914f7f89142e33e77833254d9c9b90c3cef7303b",
-        licence="Apache-2.0",
+        licence="Apache-2.0; deployments follow the Gemma Prohibited Use Policy",
         modalities=("text", "image"),
         loader="eg2",
         vram_mib=12550,
         dim=768,
+        max_tokens=8000,
     ),
     "siglip2": EmbedderSpec(
         name="siglip2",
@@ -67,6 +69,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         loader="siglip2",
         vram_mib=5340,
         dim=1152,
+        max_tokens=64,
     ),
     "bge-m3": EmbedderSpec(
         name="bge-m3",
@@ -77,6 +80,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         loader="sentence_transformer",
         vram_mib=1674,
         dim=1024,
+        max_tokens=8192,
     ),
     "qwen3-emb-0.6b": EmbedderSpec(
         name="qwen3-emb-0.6b",
@@ -87,6 +91,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         loader="sentence_transformer",
         vram_mib=3814,
         dim=1024,
+        max_tokens=8192,
     ),
     "gte-modernbert": EmbedderSpec(
         name="gte-modernbert",
@@ -97,6 +102,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         loader="sentence_transformer",
         vram_mib=954,
         dim=768,
+        max_tokens=8192,
     ),
     "dinov2": EmbedderSpec(
         name="dinov2",
@@ -107,6 +113,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         loader="dinov2",
         vram_mib=636,
         dim=768,
+        max_tokens=0,
     ),
 }
 
