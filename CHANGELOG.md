@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Large projects no longer run out of memory or take hours.** Measured on synthetic sets, before → after:
+  - the near-duplicate search (dHash, flip-aware) was a Python loop over every pair: 27 s at 4,000 images, about 5
+    hours at 100,000. It is now vectorised in blocks: 0.7 s at 4,000, 4.4 minutes at 100,000. Same pairs, same order.
+  - `look_fit` built an n × n × 30 array: 3.6 GB at 4,000 images, so it crashed long before 100,000. It now works in
+    blocks with a matrix-product distance: 3.1 minutes at 100,000, under 400 MB.
+  - `outliers` built the full n × n similarity matrix (about 76 GB at 100,000). It now works in blocks: 21 s at
+    50,000.
+  - The description gate kept every pair of identical captions in memory, and compared every description with every
+    other one. It now indexes content words, so only descriptions that share a word are compared: about 6× faster,
+    with identical output (checked on 300 random record sets).
+- Every pairwise block is capped at about 64 MiB (`BLOCK_BYTES`).
+
+### Known limits
+
+- The description gate's exact `max_content_jaccard` for every record is still quadratic when a few content words
+  appear in most descriptions (74 s at 32,000 records on a heavy-vocabulary synthetic set). A faster exact threshold
+  check that changes what that field reports is a design question, open.
+
 ## [0.1.3] - 2026-10-20
 
 ### Fixed

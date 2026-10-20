@@ -32,11 +32,14 @@ Pinned arithmetic:
 
 from __future__ import annotations
 
+import bisect
 import hashlib
+import itertools
 import json
 import os
 import pathlib
 import re
+from collections import Counter
 from typing import Callable
 
 STOPWORDS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stopwords.txt")
@@ -358,7 +361,7 @@ def audit_records(
     seen_group_sigs: set[tuple[str, tuple[str, ...]]] = set()
     exact_member_ids: dict[str, list[str]] = {}
     exact_group_sizes: dict[str, int] = {}
-    same_exact_pair: set[frozenset[str]] = set()
+    exact_keys: dict[str, set[tuple[str, str]]] = {}  # rid -> the exact groups it belongs to (pairs are implied)
 
     for label_source, bucket in (("active", by_norm_text), ("judgment.explanation", by_norm_jexp)):
         for norm_val, ids in bucket.items():
@@ -376,9 +379,8 @@ def audit_records(
                 for rid in ids:
                     exact_member_ids.setdefault(rid, []).append(raw_text_for_norm[norm_val])
                     exact_group_sizes[rid] = max(exact_group_sizes.get(rid, 1), len(ids))
-                for i in range(len(ids)):
-                    for j in range(i + 1, len(ids)):
-                        same_exact_pair.add(frozenset((ids[i], ids[j])))
+                for rid in ids:
+                    exact_keys.setdefault(rid, set()).add((label_source, norm_val))
 
     exact_groups.sort(key=lambda g: (-g["count"], g["normalized"]))
 
@@ -388,19 +390,27 @@ def audit_records(
     near_member_ids: set[str] = set()
     max_cjaccard_by_id: dict[str, float] = {str(e["id"]): 0.0 for e in target_list}
     ids_ordered = [str(e["id"]) for e in target_list]
+    # Only pairs that share a content word are compared: any other pair has Jaccard 0, which never raises a record's
+    # maximum and never reaches the threshold. Pairs are visited in the same (i, j) order as a full double loop.
+    postings: dict[str, list[int]] = {}
+    for j, rid in enumerate(ids_ordered):
+        for w in cword_sets[rid]:
+            postings.setdefault(w, []).append(j)
     for i in range(len(ids_ordered)):
         ia = ids_ordered[i]
         ca = cword_sets[ia]
         if not ca:
             continue
-        for j in range(i + 1, len(ids_ordered)):
+        inter_by_j = Counter(itertools.chain.from_iterable(
+            postings[w][bisect.bisect_right(postings[w], i):] for w in ca))
+        keys_a = exact_keys.get(ia)
+        for j in sorted(inter_by_j):
+            n_inter = inter_by_j[j]
             ib = ids_ordered[j]
-            if frozenset((ia, ib)) in same_exact_pair:
+            if keys_a and keys_a & exact_keys.get(ib, set()):
                 continue
             cb = cword_sets[ib]
-            if not cb:
-                continue
-            sim = len(ca & cb) / len(ca | cb)
+            sim = n_inter / (len(ca) + len(cb) - n_inter)
             if sim > max_cjaccard_by_id[ia]:
                 max_cjaccard_by_id[ia] = round(sim, 6)
             if sim > max_cjaccard_by_id[ib]:

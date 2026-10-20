@@ -398,6 +398,66 @@ def flip_hamming(a: Item, b: Item) -> int:
     return d0
 
 
+# ---- many-image paths: vectorised and memory-bounded, with the same results as the per-pair functions above ----
+
+BLOCK_BYTES = 1 << 26   # about 64 MiB: the most any one block of a pairwise computation holds at once
+_POP8 = np.array([bin(i).count("1") for i in range(256)], dtype=np.uint8)
+_HAS_BITWISE_COUNT = hasattr(np, "bitwise_count")  # NumPy 2.0+; older NumPy uses the byte table
+
+
+def _block_rows(n_cols: int, bytes_per_cell: int) -> int:
+    """Rows per block so a (rows, n_cols) block of bytes_per_cell-byte cells stays under BLOCK_BYTES."""
+    return max(1, BLOCK_BYTES // max(1, n_cols * bytes_per_cell))
+
+
+def _hash_words(hexes: list[str]) -> np.ndarray:
+    """(n, 4) uint64 from 256-bit hex hashes. An empty hash gives a zero row; callers mask it out."""
+    out = np.zeros((len(hexes), 4), dtype=np.uint64)
+    for i, h in enumerate(hexes):
+        if h:
+            out[i] = np.frombuffer(int(h, 16).to_bytes(32, "big"), dtype=">u8")
+    return out
+
+
+def _hamming_block(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """(len(a), len(b)) Hamming distances between rows of two _hash_words arrays."""
+    x = np.bitwise_xor(a[:, None, :], b[None, :, :])
+    if _HAS_BITWISE_COUNT:
+        return np.bitwise_count(x).sum(axis=2, dtype=np.int32)
+    return _POP8[x.view(np.uint8)].sum(axis=2, dtype=np.int32)
+
+
+def near_pairs_within(items: list[Item], near: int):
+    """Yield (a, b, flip_hamming) for a < b with both hashes present and flip_hamming <= near, in (a, b) order:
+    the same pairs and order as a loop over flip_hamming, block by block so it scales to many images."""
+    n = len(items)
+    has = np.array([bool(it.dhash) for it in items])
+    has_flip = np.array([bool(it.dhash_flip) for it in items])
+    H = _hash_words([it.dhash for it in items])
+    F = _hash_words([it.dhash_flip for it in items])
+    any_flip = bool(has_flip.any())
+    need_row_flip = any_flip and not bool(has_flip.all())
+    rows = _block_rows(n, 4 * 8 * 3)
+    for i in range(0, n, rows):
+        j = min(n, i + rows)
+        cols = slice(i, n)  # a < b, so a block of rows only meets columns from its own first row on
+        d = _hamming_block(H[i:j], H[cols])
+        if any_flip:
+            d_bf = _hamming_block(H[i:j], F[cols])
+            bf = has_flip[cols][None, :]
+            if need_row_flip:
+                d_af = _hamming_block(F[i:j], H[cols])
+                af = has_flip[i:j][:, None]
+                d = np.where(bf, np.minimum(d, d_bf), np.where(af, np.minimum(d, d_af), d))
+            else:
+                d = np.where(bf, np.minimum(d, d_bf), d)
+        r = np.arange(i, j)[:, None]
+        c = np.arange(i, n)[None, :]
+        ok = (c > r) & has[i:j][:, None] & has[cols][None, :] & (d <= near)
+        for ra, cb in zip(*np.nonzero(ok), strict=True):
+            yield int(i + ra), int(i + cb), int(d[ra, cb])
+
+
 _STEM_ASSET_VIEW_RE = re.compile(r"^(.+)__(y-?\d+_e-?\d+(?:_.*)?)$")
 
 
@@ -960,16 +1020,7 @@ def dupes(
     else:
         rule = "near+cosine"
         eff_semantic = SEMANTIC if semantic is None else float(semantic)
-        near_pairs = []
-        for a in range(len(items)):
-            if not items[a].dhash:
-                continue
-            for b in range(a + 1, len(items)):
-                if not items[b].dhash:
-                    continue
-                h = flip_hamming(items[a], items[b])
-                if h <= near and not _same_asset_diff_view(a, b):
-                    near_pairs.append((a, b, h))
+        near_pairs = [(a, b, h) for a, b, h in near_pairs_within(items, near) if not _same_asset_diff_view(a, b)]
         near_set = {(a, b) for a, b, _ in near_pairs}
         sem_pairs = []
         if has_vecs:
@@ -1046,14 +1097,21 @@ def outliers(items: list[Item], img: np.ndarray, k: int = 5, n: int = 15) -> dic
     A = approved_idx(items)
     if len(A) < 2 or img.ndim != 2 or img.shape[1] == 0:
         return {"approved": len(A), "least_typical": [], "nearest_canon": [], "furthest_from_canon": []}
-    S = img[A] @ img[A].T
-    np.fill_diagonal(S, -np.inf)
+    XA = img[A]
     kk = min(k, len(A) - 1)
-    fit = np.sort(S, axis=1)[:, -kk:].mean(axis=1)
+    rows = _block_rows(len(A), XA.itemsize)
+    fit = np.empty(len(A), dtype=XA.dtype)
+    for i in range(0, len(A), rows):
+        S = XA[i:i + rows] @ XA.T
+        r = np.arange(S.shape[0])
+        S[r, i + r] = -np.inf
+        top = np.sort(np.partition(S, S.shape[1] - kk, axis=1)[:, -kk:], axis=1)
+        fit[i:i + S.shape[0]] = top.mean(axis=1)
     least = [(A[i], float(fit[i])) for i in np.argsort(fit)[:n]]
     others = [i for i in range(len(items)) if items[i].status != "approved"]
-    near = img[others] @ img[A].T if others else np.zeros((0, len(A)))
-    best = near.max(axis=1) if others else np.zeros(0)
+    best = np.zeros(len(others), dtype=XA.dtype)
+    for i in range(0, len(others), rows):
+        best[i:i + rows] = (img[others[i:i + rows]] @ XA.T).max(axis=1)
     order = np.argsort(best)
     return {"approved": len(A), "k": kk, "least_typical": least,
             "nearest_canon": [(others[i], float(best[i])) for i in order[::-1][:n]],
@@ -1069,10 +1127,20 @@ def look_fit(items: list[Item], k: int = 5) -> dict[int, float]:
         return {}
     X = np.array([items[i].palette for i in A], dtype=np.float32)
     X = (X - X.mean(axis=0)) / np.maximum(X.std(axis=0), 0.02)
-    D = np.sqrt(((X[:, None, :] - X[None, :, :]) ** 2).sum(-1))
-    np.fill_diagonal(D, np.inf)
     kk = min(k, len(A) - 1)
-    return {A[i]: float(v) for i, v in enumerate(np.sort(D, axis=1)[:, :kk].mean(axis=1))}
+    # Euclidean distance as |x|^2 + |y|^2 - 2 x.y, in float64 and block by block: a matrix product instead of an
+    # n x n x 30 difference array, so memory stays bounded and many images take seconds, not minutes.
+    X64 = X.astype(np.float64)
+    sq = (X64 * X64).sum(axis=1)
+    rows = _block_rows(len(A), 8)
+    fit = np.empty(len(A), dtype=np.float64)
+    for i in range(0, len(A), rows):
+        D2 = sq[i:i + rows, None] + sq[None, :] - 2.0 * (X64[i:i + rows] @ X64.T)
+        D = np.sqrt(np.maximum(D2, 0.0))
+        r = np.arange(D.shape[0])
+        D[r, i + r] = np.inf
+        fit[i:i + D.shape[0]] = np.sort(np.partition(D, kk - 1, axis=1)[:, :kk], axis=1).mean(axis=1)
+    return {A[i]: float(v) for i, v in enumerate(fit)}
 
 
 def reading(items: list[Item], img: np.ndarray, k: int = 5) -> list[dict]:
