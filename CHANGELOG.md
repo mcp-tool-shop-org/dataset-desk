@@ -64,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - The description gate kept every pair of identical captions in memory, and compared every description with every
     other one. It now indexes content words, so only descriptions that share a word are compared: about 6× faster,
     with identical output (checked on 300 random record sets).
+  - `report`'s swap check no longer builds an m × m comparison, and it and the caption check rank descriptions in
+    blocks, so large described sets no longer run out of memory or take hours.
 - Every pairwise block is capped at about 64 MiB (`BLOCK_BYTES`).
 
 ### Known limits

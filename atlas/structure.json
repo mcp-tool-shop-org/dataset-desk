@@ -43,7 +43,7 @@
       "files": [
         {
           "constantOnly": true,
-          "hash": "bc0afd1202166f01900ac7768fb7d06faae75bf4b8c30b9f297ad6ca466d0b78",
+          "hash": "fc076c7cdb678acc027668541fee1564963eec334533ff63991de5929c03a2d0",
           "path": "dataset_desk/__init__.py"
         },
         {
@@ -305,15 +305,15 @@
             {
               "in": "link_target",
               "kind": "except",
-              "line": 164
+              "line": 167
             },
             {
               "in": "load_project_records",
               "kind": "except",
-              "line": 616
+              "line": 626
             }
           ],
-          "hash": "61fe35b49679a4323dee0b9453531714b33bf34279a71745d3363b2a9f986ce0",
+          "hash": "02f482e5c3d89b1f2d430db8c7418b10cf504e983ae26d03ac1c61688ab49ec2",
           "importsFiles": [
             "dataset_desk/__init__.py",
             "dataset_desk/backends.py"
@@ -354,6 +354,7 @@
             "lower_priority",
             "main",
             "mid_rank",
+            "near_pairs_within",
             "outliers",
             "pairs_at_least",
             "reading",
@@ -393,265 +394,265 @@
             {
               "in": "load_records",
               "kind": "except",
-              "line": 437
+              "line": 497
             },
             {
               "in": "load_wave_metadata",
               "kind": "except",
-              "line": 509
+              "line": 569
             },
             {
               "in": "load_wave_metadata",
               "kind": "except",
-              "line": 532
+              "line": 592
             },
             {
               "in": "_load_scan_cache",
               "kind": "except",
-              "line": 557
+              "line": 617
             },
             {
               "in": "scan",
               "kind": "except",
-              "line": 649
+              "line": 709
             },
             {
               "in": "scan",
               "kind": "raise",
-              "line": 651
+              "line": 711
             },
             {
               "in": "load_cache",
               "kind": "except",
-              "line": 776
+              "line": 836
             },
             {
               "in": "load_cache",
               "kind": "raise",
-              "line": 778
+              "line": 838
             },
             {
               "in": "index",
               "kind": "except",
-              "line": 832
+              "line": 892
             },
             {
               "in": "_resolve_tokenizer",
               "kind": "raise",
-              "line": 1451
+              "line": 1582
             },
             {
               "in": "_encode_token_ids",
               "kind": "except",
-              "line": 1461
+              "line": 1592
             },
             {
               "in": "_encode_token_ids",
               "kind": "except",
-              "line": 1466
+              "line": 1597
             },
             {
               "in": "chunk_text",
               "kind": "except",
-              "line": 1527
+              "line": 1658
             },
             {
               "in": "_check_not_private_path",
               "kind": "raise",
-              "line": 1570
+              "line": 1701
             },
             {
               "in": "_check_out_not_inside",
               "kind": "except",
-              "line": 1576
+              "line": 1707
             },
             {
               "in": "_check_out_not_inside",
               "kind": "raise",
-              "line": 1579
+              "line": 1710
             },
             {
               "in": "scan_text_source",
               "kind": "raise",
-              "line": 1587
+              "line": 1718
             },
             {
               "in": "scan_text_source",
               "kind": "except",
-              "line": 1601
+              "line": 1732
             },
             {
               "in": "scan_text_source",
               "kind": "raise",
-              "line": 1604
+              "line": 1735
             },
             {
               "in": "_read_run_outcome",
               "kind": "except",
-              "line": 1627
+              "line": 1758
             },
             {
               "in": "scan_rnd_data",
               "kind": "raise",
-              "line": 1645
-            },
-            {
-              "in": "scan_rnd_data",
-              "kind": "except",
-              "line": 1662
-            },
-            {
-              "in": "scan_rnd_data",
-              "kind": "raise",
-              "line": 1663
-            },
-            {
-              "in": "scan_rnd_data",
-              "kind": "raise",
-              "line": 1670
-            },
-            {
-              "in": "scan_rnd_data",
-              "kind": "raise",
-              "line": 1681
-            },
-            {
-              "in": "scan_rnd_data",
-              "kind": "raise",
-              "line": 1686
-            },
-            {
-              "in": "scan_rnd_data",
-              "kind": "raise",
-              "line": 1693
+              "line": 1776
             },
             {
               "in": "scan_rnd_data",
               "kind": "except",
-              "line": 1701
+              "line": 1793
             },
             {
               "in": "scan_rnd_data",
               "kind": "raise",
-              "line": 1704
+              "line": 1794
             },
             {
               "in": "scan_rnd_data",
               "kind": "raise",
-              "line": 1709
+              "line": 1801
             },
             {
-              "in": "load_text_cache",
+              "in": "scan_rnd_data",
               "kind": "raise",
-              "line": 1800
+              "line": 1812
             },
             {
-              "in": "load_text_cache",
+              "in": "scan_rnd_data",
+              "kind": "raise",
+              "line": 1817
+            },
+            {
+              "in": "scan_rnd_data",
+              "kind": "raise",
+              "line": 1824
+            },
+            {
+              "in": "scan_rnd_data",
               "kind": "except",
-              "line": 1810
-            },
-            {
-              "in": "load_text_cache",
-              "kind": "raise",
-              "line": 1811
-            },
-            {
-              "in": "text_index",
-              "kind": "raise",
               "line": 1832
             },
             {
+              "in": "scan_rnd_data",
+              "kind": "raise",
+              "line": 1835
+            },
+            {
+              "in": "scan_rnd_data",
+              "kind": "raise",
+              "line": 1840
+            },
+            {
+              "in": "load_text_cache",
+              "kind": "raise",
+              "line": 1931
+            },
+            {
+              "in": "load_text_cache",
+              "kind": "except",
+              "line": 1941
+            },
+            {
+              "in": "load_text_cache",
+              "kind": "raise",
+              "line": 1942
+            },
+            {
+              "in": "text_index",
+              "kind": "raise",
+              "line": 1963
+            },
+            {
               "in": "text_index",
               "kind": "except",
-              "line": 1871
+              "line": 2002
             },
             {
               "in": "text_dupes",
               "kind": "raise",
-              "line": 1952
+              "line": 2083
             },
             {
               "in": "_token_counter",
               "kind": "except",
-              "line": 2095
+              "line": 2226
             },
             {
               "in": "_token_counter",
               "kind": "raise",
-              "line": 2096
-            },
-            {
-              "in": "main",
-              "kind": "raise",
-              "line": 2183
-            },
-            {
-              "in": "main",
-              "kind": "raise",
-              "line": 2188
-            },
-            {
-              "in": "main",
-              "kind": "raise",
-              "line": 2193
-            },
-            {
-              "in": "main",
-              "kind": "raise",
-              "line": 2211
-            },
-            {
-              "in": "main",
-              "kind": "except",
               "line": 2227
             },
             {
               "in": "main",
               "kind": "raise",
-              "line": 2230
+              "line": 2314
             },
             {
               "in": "main",
               "kind": "raise",
-              "line": 2235
+              "line": 2319
             },
             {
               "in": "main",
               "kind": "raise",
-              "line": 2262
+              "line": 2324
             },
             {
               "in": "main",
               "kind": "raise",
-              "line": 2265
+              "line": 2342
+            },
+            {
+              "in": "main",
+              "kind": "except",
+              "line": 2358
             },
             {
               "in": "main",
               "kind": "raise",
-              "line": 2276
+              "line": 2361
+            },
+            {
+              "in": "main",
+              "kind": "raise",
+              "line": 2366
+            },
+            {
+              "in": "main",
+              "kind": "raise",
+              "line": 2393
+            },
+            {
+              "in": "main",
+              "kind": "raise",
+              "line": 2396
+            },
+            {
+              "in": "main",
+              "kind": "raise",
+              "line": 2407
             },
             {
               "in": "run",
               "kind": "except",
-              "line": 2294
+              "line": 2425
             },
             {
               "in": "run",
               "kind": "except",
-              "line": 2297
+              "line": 2428
             },
             {
               "in": "run",
               "kind": "except",
-              "line": 2300
+              "line": 2431
             },
             {
               "in": "run",
               "kind": "raise",
-              "line": 2302
+              "line": 2433
             }
           ],
-          "hash": "c9d446ce93576c48f0bc7ba5dd77e434cb235a2d5608f21fdecc14df3e80de2b",
+          "hash": "108d6216eeaede74e14a862f7158ab2f167f72ea68f55249e500e656f57c06ea",
           "importsFiles": [
             "dataset_desk/__init__.py",
             "dataset_desk/backends.py",
@@ -898,7 +899,7 @@
             {
               "calls": [
                 {
-                  "line": 778,
+                  "line": 838,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -949,7 +950,7 @@
                   "via": "_palette"
                 },
                 {
-                  "line": 778,
+                  "line": 838,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -957,12 +958,12 @@
                   "via": "load_cache"
                 },
                 {
-                  "line": 836,
+                  "line": 896,
                   "name": "images",
                   "target": null
                 },
                 {
-                  "line": 852,
+                  "line": 912,
                   "name": "texts",
                   "target": null
                 }
@@ -975,7 +976,7 @@
             {
               "calls": [
                 {
-                  "line": 1215,
+                  "line": 1346,
                   "name": "normalize_text",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -990,7 +991,7 @@
             {
               "calls": [
                 {
-                  "line": 1261,
+                  "line": 1392,
                   "name": "link_target",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1023,35 +1024,35 @@
                   "via": "check_multimodal_pool"
                 },
                 {
-                  "line": 1283,
+                  "line": 1414,
                   "name": "load_project_records",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 1285,
+                  "line": 1416,
                   "name": "audit_records",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 1291,
+                  "line": 1422,
                   "name": "draft_flagged_records",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 1293,
+                  "line": 1424,
                   "name": "write_review_files",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 1215,
+                  "line": 1346,
                   "name": "normalize_text",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1067,14 +1068,14 @@
             {
               "calls": [
                 {
-                  "line": 1445,
+                  "line": 1576,
                   "name": "_extract_model_tokenizer",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 1451,
+                  "line": 1582,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1089,7 +1090,7 @@
             {
               "calls": [
                 {
-                  "line": 1445,
+                  "line": 1576,
                   "name": "_extract_model_tokenizer",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1097,7 +1098,7 @@
                   "via": "_resolve_tokenizer"
                 },
                 {
-                  "line": 1451,
+                  "line": 1582,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1113,12 +1114,12 @@
             {
               "calls": [
                 {
-                  "line": 1560,
+                  "line": 1691,
                   "name": "texts",
                   "target": null
                 },
                 {
-                  "line": 1563,
+                  "line": 1694,
                   "name": "unit_rows",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1134,7 +1135,7 @@
               "calls": [
                 {
                   "branch": "\"rnd-data-private\" in parts or \"blobs\" in parts",
-                  "line": 1570,
+                  "line": 1701,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1150,7 +1151,7 @@
               "calls": [
                 {
                   "branch": "inside",
-                  "line": 1579,
+                  "line": 1710,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1166,7 +1167,7 @@
               "calls": [
                 {
                   "branch": "\"rnd-data-private\" in parts or \"blobs\" in parts",
-                  "line": 1570,
+                  "line": 1701,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1175,7 +1176,7 @@
                 },
                 {
                   "branch": "not os.path.isdir(src_abs)",
-                  "line": 1587,
+                  "line": 1718,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1183,7 +1184,7 @@
                 },
                 {
                   "branch": "not in_root",
-                  "line": 1604,
+                  "line": 1735,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1199,7 +1200,7 @@
               "calls": [
                 {
                   "branch": "\"rnd-data-private\" in parts or \"blobs\" in parts",
-                  "line": 1570,
+                  "line": 1701,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1208,14 +1209,14 @@
                 },
                 {
                   "branch": "not os.path.isdir(runs_dir)",
-                  "line": 1645,
+                  "line": 1776,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   }
                 },
                 {
-                  "line": 1663,
+                  "line": 1794,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1223,7 +1224,7 @@
                 },
                 {
                   "branch": "\"rnd-data-private\" in str(manifest.get(\"source\") or \"\").low…",
-                  "line": 1670,
+                  "line": 1801,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1231,7 +1232,7 @@
                 },
                 {
                   "branch": "\"rnd-data-private\" in store.lower() or \"private\" in store.l…",
-                  "line": 1681,
+                  "line": 1812,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1239,7 +1240,7 @@
                 },
                 {
                   "branch": "os.path.isabs(raw_loc) or os.path.isabs(loc) or \"..\" in loc…",
-                  "line": 1686,
+                  "line": 1817,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1247,7 +1248,7 @@
                 },
                 {
                   "branch": "not loc.startswith(\"runs/\")",
-                  "line": 1693,
+                  "line": 1824,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1255,7 +1256,7 @@
                 },
                 {
                   "branch": "not in_runs",
-                  "line": 1704,
+                  "line": 1835,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1263,7 +1264,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(real)",
-                  "line": 1709,
+                  "line": 1840,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1279,14 +1280,14 @@
               "calls": [
                 {
                   "branch": "not os.path.isfile(sym_path)",
-                  "line": 1800,
+                  "line": 1931,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   }
                 },
                 {
-                  "line": 1811,
+                  "line": 1942,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1302,7 +1303,7 @@
               "calls": [
                 {
                   "branch": "bool(source) == bool(rnd_data)",
-                  "line": 1832,
+                  "line": 1963,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1310,7 +1311,7 @@
                 },
                 {
                   "branch": "inside",
-                  "line": 1579,
+                  "line": 1710,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1319,7 +1320,7 @@
                 },
                 {
                   "branch": "\"rnd-data-private\" in parts or \"blobs\" in parts",
-                  "line": 1570,
+                  "line": 1701,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1328,7 +1329,7 @@
                 },
                 {
                   "branch": "not os.path.isdir(src_abs)",
-                  "line": 1587,
+                  "line": 1718,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1337,7 +1338,7 @@
                 },
                 {
                   "branch": "not in_root",
-                  "line": 1604,
+                  "line": 1735,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1346,7 +1347,7 @@
                 },
                 {
                   "branch": "not os.path.isdir(runs_dir)",
-                  "line": 1645,
+                  "line": 1776,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1354,7 +1355,7 @@
                   "via": "scan_rnd_data"
                 },
                 {
-                  "line": 1663,
+                  "line": 1794,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1363,7 +1364,7 @@
                 },
                 {
                   "branch": "\"rnd-data-private\" in str(manifest.get(\"source\") or \"\").low…",
-                  "line": 1670,
+                  "line": 1801,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1372,7 +1373,7 @@
                 },
                 {
                   "branch": "\"rnd-data-private\" in store.lower() or \"private\" in store.l…",
-                  "line": 1681,
+                  "line": 1812,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1381,7 +1382,7 @@
                 },
                 {
                   "branch": "os.path.isabs(raw_loc) or os.path.isabs(loc) or \"..\" in loc…",
-                  "line": 1686,
+                  "line": 1817,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1390,7 +1391,7 @@
                 },
                 {
                   "branch": "not loc.startswith(\"runs/\")",
-                  "line": 1693,
+                  "line": 1824,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1399,7 +1400,7 @@
                 },
                 {
                   "branch": "not in_runs",
-                  "line": 1704,
+                  "line": 1835,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1408,7 +1409,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(real)",
-                  "line": 1709,
+                  "line": 1840,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1417,7 +1418,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(sym_path)",
-                  "line": 1800,
+                  "line": 1931,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1425,7 +1426,7 @@
                   "via": "load_text_cache"
                 },
                 {
-                  "line": 1811,
+                  "line": 1942,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1433,14 +1434,14 @@
                   "via": "load_text_cache"
                 },
                 {
-                  "line": 1886,
+                  "line": 2017,
                   "name": "format_eg2_prefix",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 1445,
+                  "line": 1576,
                   "name": "_extract_model_tokenizer",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1448,7 +1449,7 @@
                   "via": "_resolve_tokenizer"
                 },
                 {
-                  "line": 1451,
+                  "line": 1582,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1456,13 +1457,13 @@
                   "via": "_resolve_tokenizer"
                 },
                 {
-                  "line": 1560,
+                  "line": 1691,
                   "name": "texts",
                   "target": null,
                   "via": "embed_file_chunks"
                 },
                 {
-                  "line": 1563,
+                  "line": 1694,
                   "name": "unit_rows",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1470,7 +1471,7 @@
                   "via": "embed_file_chunks"
                 },
                 {
-                  "line": 1891,
+                  "line": 2022,
                   "name": "format_eg2_prefix",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1486,7 +1487,7 @@
               "calls": [
                 {
                   "branch": "backend is not None and backend != calibrated",
-                  "line": 1952,
+                  "line": 2083,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1501,7 +1502,7 @@
             {
               "calls": [
                 {
-                  "line": 2076,
+                  "line": 2207,
                   "name": "resolve_backend",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1516,14 +1517,14 @@
             {
               "calls": [
                 {
-                  "line": 2094,
+                  "line": 2225,
                   "name": "load_siglip2_tokenizer",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 2096,
+                  "line": 2227,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1538,7 +1539,7 @@
             {
               "calls": [
                 {
-                  "line": 2076,
+                  "line": 2207,
                   "name": "resolve_backend",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1546,21 +1547,21 @@
                   "via": "command_backend"
                 },
                 {
-                  "line": 2166,
+                  "line": 2297,
                   "name": "check_device",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 2167,
+                  "line": 2298,
                   "name": "validate_embedder_options",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 2168,
+                  "line": 2299,
                   "name": "cap_threads",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1568,7 +1569,7 @@
                 },
                 {
                   "branch": "a.source and a.rnd_data",
-                  "line": 2183,
+                  "line": 2314,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1576,7 +1577,7 @@
                 },
                 {
                   "branch": "a.command in text_cmds",
-                  "line": 1570,
+                  "line": 1701,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1585,7 +1586,7 @@
                 },
                 {
                   "branch": "not a.out and not src_root",
-                  "line": 2188,
+                  "line": 2319,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1593,7 +1594,7 @@
                 },
                 {
                   "branch": "a.command in text_cmds",
-                  "line": 1579,
+                  "line": 1710,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1602,7 +1603,7 @@
                 },
                 {
                   "branch": "backend == \"none\" and a.command == \"text-search\"",
-                  "line": 2193,
+                  "line": 2324,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1610,7 +1611,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1832,
+                  "line": 1963,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1619,7 +1620,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1886,
+                  "line": 2017,
                   "name": "format_eg2_prefix",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1628,7 +1629,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1445,
+                  "line": 1576,
                   "name": "_extract_model_tokenizer",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1637,7 +1638,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1451,
+                  "line": 1582,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1646,14 +1647,14 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1560,
+                  "line": 1691,
                   "name": "texts",
                   "target": null,
                   "via": "embed_file_chunks"
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1563,
+                  "line": 1694,
                   "name": "unit_rows",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1662,7 +1663,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1891,
+                  "line": 2022,
                   "name": "format_eg2_prefix",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1671,7 +1672,7 @@
                 },
                 {
                   "branch": "a.command in text_cmds",
-                  "line": 1952,
+                  "line": 2083,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1680,7 +1681,7 @@
                 },
                 {
                   "branch": "not a.text",
-                  "line": 2211,
+                  "line": 2342,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1688,7 +1689,7 @@
                 },
                 {
                   "branch": "out_inside",
-                  "line": 2230,
+                  "line": 2361,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1714,7 +1715,7 @@
                 },
                 {
                   "branch": "backend == \"none\" and a.command in (\"search\", \"coverage\")",
-                  "line": 2235,
+                  "line": 2366,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1744,7 +1745,7 @@
             {
               "calls": [
                 {
-                  "line": 2076,
+                  "line": 2207,
                   "name": "resolve_backend",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1752,7 +1753,7 @@
                   "via": "command_backend"
                 },
                 {
-                  "line": 2166,
+                  "line": 2297,
                   "name": "check_device",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1760,7 +1761,7 @@
                   "via": "main"
                 },
                 {
-                  "line": 2167,
+                  "line": 2298,
                   "name": "validate_embedder_options",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1768,7 +1769,7 @@
                   "via": "main"
                 },
                 {
-                  "line": 2168,
+                  "line": 2299,
                   "name": "cap_threads",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1777,7 +1778,7 @@
                 },
                 {
                   "branch": "a.source and a.rnd_data",
-                  "line": 2183,
+                  "line": 2314,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1786,7 +1787,7 @@
                 },
                 {
                   "branch": "a.command in text_cmds",
-                  "line": 1570,
+                  "line": 1701,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1795,7 +1796,7 @@
                 },
                 {
                   "branch": "not a.out and not src_root",
-                  "line": 2188,
+                  "line": 2319,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1804,7 +1805,7 @@
                 },
                 {
                   "branch": "a.command in text_cmds",
-                  "line": 1579,
+                  "line": 1710,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1813,7 +1814,7 @@
                 },
                 {
                   "branch": "backend == \"none\" and a.command == \"text-search\"",
-                  "line": 2193,
+                  "line": 2324,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1822,7 +1823,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1832,
+                  "line": 1963,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1831,7 +1832,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1886,
+                  "line": 2017,
                   "name": "format_eg2_prefix",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1840,7 +1841,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1445,
+                  "line": 1576,
                   "name": "_extract_model_tokenizer",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1849,7 +1850,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1451,
+                  "line": 1582,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1858,14 +1859,14 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1560,
+                  "line": 1691,
                   "name": "texts",
                   "target": null,
                   "via": "embed_file_chunks"
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1563,
+                  "line": 1694,
                   "name": "unit_rows",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1874,7 +1875,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 1891,
+                  "line": 2022,
                   "name": "format_eg2_prefix",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -1883,7 +1884,7 @@
                 },
                 {
                   "branch": "a.command in text_cmds",
-                  "line": 1952,
+                  "line": 2083,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1892,7 +1893,7 @@
                 },
                 {
                   "branch": "not a.text",
-                  "line": 2211,
+                  "line": 2342,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1901,7 +1902,7 @@
                 },
                 {
                   "branch": "out_inside",
-                  "line": 2230,
+                  "line": 2361,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1928,7 +1929,7 @@
                 },
                 {
                   "branch": "backend == \"none\" and a.command in (\"search\", \"coverage\")",
-                  "line": 2235,
+                  "line": 2366,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2010,7 +2011,7 @@
       "testRunners": [
         "unittest"
       ],
-      "testedBy": 4,
+      "testedBy": 5,
       "unresolvedSites": 0
     },
     {
@@ -2030,7 +2031,7 @@
           "path": ".gitignore"
         },
         {
-          "hash": "ea835372145a4eddd9f4beabe4a2339583bad938af10bc0a16be09b9a23978f2",
+          "hash": "cdf910b2e15bd0b44f0473677f2c769d1194a07d193155b565e2a2ed68970c04",
           "path": "CHANGELOG.md"
         },
         {
@@ -2038,35 +2039,35 @@
           "path": "LICENSE"
         },
         {
-          "hash": "088ecdd7a4d42ee5c52df84d5d9ba323ea1279ed2aea8003f2abe05e09bfb7cf",
+          "hash": "d60dd6bf6fb56ba83fb36e905e21889e3e5f949570bc6cf3616476868044b48a",
           "path": "README.es.md"
         },
         {
-          "hash": "388dd27f498af86d4f5ec2aaf9c9fcee8ee9476d96438cabaedbf02c1a48cb0d",
+          "hash": "cbe499d3ab78f20c2d62b9d7ca882d1631cefd9a0cadb79f063dd303c34b8c5f",
           "path": "README.fr.md"
         },
         {
-          "hash": "f404a26c6a058b70381800aaaebc962f975f5ed938f23393d07b79ce46783cd7",
+          "hash": "d7ab9afc08cc1bf6c9d824cce1eadc963db69990b966c5ab0458a9c76684e11d",
           "path": "README.hi.md"
         },
         {
-          "hash": "f178dcd0cc67fe2607a761f9a49edd74460268b4e949f374ffd08e79374b7662",
+          "hash": "a9193022e2e117b2c2ee329ce1a395bd46bbbe81026adb3a949cbf1d168a3c34",
           "path": "README.it.md"
         },
         {
-          "hash": "387d53e1cbc1080011b5b5881db38c94dfc3e15f17a115af6a508e40a946c2e1",
+          "hash": "48ccc50440ad71d277c19580091881b94c967385ca87f20ed2e5c51fc83e7050",
           "path": "README.ja.md"
         },
         {
-          "hash": "cd63dc56f681a792e0d73bd86cbeb8c3738ae7570b1fbffd8e44f062fe2ec373",
+          "hash": "875b8f89dbf92cdce85b6b1c97020b307d6144d7600cada6ebbb65ba627fa633",
           "path": "README.md"
         },
         {
-          "hash": "e668e09e1a839923d2caaf59cc4c1d5aa1bf5adf9a3527467eedcd1fee54fb74",
+          "hash": "de11cc141ac9e727852c744e1be9517c82d36452942ce3821e623e769cacdeb9",
           "path": "README.pt-BR.md"
         },
         {
-          "hash": "7010bedc0bf956f4e9e6d90e90e4551df74d900a509129ee1b5d201e32df0efb",
+          "hash": "3f840fa7a6e6f3b64c13257a9bdb34bcd6dd152bfa7196a6d945cb0639ee2733",
           "path": "README.zh.md"
         },
         {
@@ -2086,11 +2087,11 @@
           "path": "codecov.yml"
         },
         {
-          "hash": "7adaf9a02495391e4e375f49b2ebbd1c80563b1568fe290594a098ae98abfc6b",
+          "hash": "eceed0674925ce24aa8768ec51cdb831f738abe9abc13b67886689f266440b5c",
           "path": "pyproject.toml"
         },
         {
-          "hash": "db56e9e9a0dfd29c56e0c516fee5c87fce607ad2fc6123eccf66cfa69e5b9586",
+          "hash": "e753b425f6bbd96420ca554b58926788ee5563469a773db7dcf92909ed05af22",
           "path": "uv.lock"
         },
         {
@@ -2142,7 +2143,7 @@
           "path": "site/src/content.config.ts"
         },
         {
-          "hash": "7fff9481bffa4440c5848bc3aedbe0cc43442bccbcbcf7873523060acdec6948",
+          "hash": "139f12e21cbad57a3a82d9cda5a4ee549e898f4130ccb8fc05ceaefea696427a",
           "path": "site/src/content/docs/handbook/architecture.md"
         },
         {
@@ -2154,19 +2155,19 @@
           "path": "site/src/content/docs/handbook/getting-started.md"
         },
         {
-          "hash": "735e6e89ac70a1690d6a4b274b801cc4933cc4b21705e90eb7ef6cf0cb842ef9",
+          "hash": "f338c6e384a5fcb306d85b2cea26e0d9d91817e4c87b8c2373bc86e83e35dfda",
           "path": "site/src/content/docs/handbook/index.md"
         },
         {
-          "hash": "b5bf13b17230581cab8134ee4682b48dfb0e496be87d69ee1de4de843f0c4a44",
+          "hash": "b14dda529030f825e6a6d4395e0c1365bdad5beff0d0288d15b8f781c3a42c3d",
           "path": "site/src/content/docs/handbook/reference.md"
         },
         {
-          "hash": "c14b20221397fbb432490931427f9b3c95bcf02f751ccf8adf364a9089947027",
+          "hash": "38ecbb0c057ef294121b00e650828ef298d194afd29ca81d7dee9856ad234fab",
           "path": "site/src/content/docs/handbook/security.md"
         },
         {
-          "hash": "6c1a40880286c27c65fff35c2d7fb778ac2b864efce9b7e195c0ef43509d9db0",
+          "hash": "d47e100289f6ec92b4e8468f611e06d03527dbb9b52d535ba6c6f4190ee447d8",
           "path": "site/src/content/docs/handbook/usage.md"
         },
         {
@@ -2183,7 +2184,7 @@
         },
         {
           "constantOnly": true,
-          "hash": "4a2537da2907c6629e2b15cee2963c0ece28541f465e18dd51d2c1f4712cdb55",
+          "hash": "4a5be5c05b98476d45630b4e08cd7c9ccd8fbcf7470dc946c6d4b563dcde9948",
           "path": "site/src/site-config.ts"
         },
         {
@@ -2310,6 +2311,26 @@
             "tests/fakes.py"
           ],
           "path": "tests/test_gate_edges.py",
+          "testFramework": "unittest"
+        },
+        {
+          "exports": [
+            "captions_reference",
+            "flip_bits",
+            "look_fit_reference",
+            "make_items",
+            "near_reference",
+            "outliers_reference",
+            "rand_hash",
+            "swap_check_reference",
+            "unit_vectors"
+          ],
+          "hash": "51da08bc6e5371456920768ea22cc2dc121f1c3524f45843eaba98365d9bb73b",
+          "importsFiles": [
+            "dataset_desk/__init__.py",
+            "dataset_desk/desk.py"
+          ],
+          "path": "tests/test_scale.py",
           "testFramework": "unittest"
         }
       ],
@@ -2443,7 +2464,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 5
+          "files": 6
         }
       ],
       "readers": [],
@@ -2496,7 +2517,7 @@
         },
         {
           "coverage": true,
-          "files": 5,
+          "files": 6,
           "job": "ci",
           "runner": "unittest",
           "step": "Coverage (floor 90)"
@@ -2940,8 +2961,8 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "25d9cdd529dbc526e602d95b5ef99bf30a8a44ec",
-    "tracked": 53
+    "commit": "30802b906438ec58fa0db8866edc74878d8e5ffa",
+    "tracked": 54
   },
   "landings": [
     {
@@ -3013,6 +3034,6 @@
   "overlaps": [],
   "submodules": [],
   "symlinks": [],
-  "testFiles": 5,
+  "testFiles": 6,
   "unassigned": []
 }

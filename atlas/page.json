@@ -18,49 +18,33 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 2,
-      "changed": 24,
+      "added": 1,
+      "changed": 20,
       "moved": 0,
-      "parts": 5,
+      "parts": 4,
       "removed": 0
     },
     "items": [
       {
-        "kind": "door",
-        "sentence": "Release (.github/workflows/release.yml) is a new door. It starts when a release is published; or by hand. It checks dataset_desk/.",
-        "subjects": [
-          ".github/workflows/release.yml",
-          "dataset_desk/"
-        ]
-      },
-      {
-        "kind": "landing",
-        "sentence": "pyproject.toml is now read by .github/workflows/release.yml.",
-        "subjects": [
-          "pyproject.toml",
-          ".github/workflows/release.yml"
-        ]
-      },
-      {
         "kind": "counts",
-        "sentence": "2 files added and 24 changed content, across 5 parts.",
+        "sentence": "Nothing structural changed since 2026-10-20; 1 file added and 20 changed content.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "20d81ade2ed053eeb6e0d15f16a26d13089aa824",
-      "generatedAt": "2026-10-20T01:53:57.440Z"
+      "commit": "25d9cdd529dbc526e602d95b5ef99bf30a8a44ec",
+      "generatedAt": "2026-10-20T05:12:03.826Z"
     },
-    "unchanged": false
+    "unchanged": true
   },
   "changesTogether": [],
   "changesTogetherNote": [
     "Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "25d9cdd529dbc526e602d95b5ef99bf30a8a44ec",
+  "commit": "30802b906438ec58fa0db8866edc74878d8e5ffa",
   "defaultBranch": "main",
-  "derived": "5 parts, mostly Python (12 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 4 doors; the busiest is CI, which reaches 3 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.",
+  "derived": "5 parts, mostly Python (13 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 4 doors; the busiest is CI, which reaches 3 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.",
   "doors": [
     {
       "checks": [
@@ -87,7 +71,7 @@
         {
           "boundary": "tests",
           "depth": 0,
-          "files": 5
+          "files": 6
         }
       ],
       "runs": [
@@ -200,7 +184,7 @@
   "edges": [],
   "engine": "1.24.0",
   "generated": [],
-  "generatedAt": "2026-10-20T05:12:03.826Z",
+  "generatedAt": "2026-10-20T06:33:02.665Z",
   "limits": [
     "1 read uses a path built at run time and is not named here.",
     "5 writes and 19 reads go to a path their caller passes, not to this repository.",
@@ -227,9 +211,9 @@
   "startReason": "This path follows dataset-desk (a command people run) from its entry, since CI runs only tests and checks.",
   "summary": "dataset-desk: a review desk for visual datasets — duplicates, outliers, search, and a model-free description gate.",
   "summaryFrom": "person",
-  "testFiles": 5,
+  "testFiles": 6,
   "testedBy": {
-    "dataset_desk": 4
+    "dataset_desk": 5
   },
   "unnamedWrites": 0,
   "unread": [],

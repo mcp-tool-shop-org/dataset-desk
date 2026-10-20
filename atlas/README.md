@@ -1,18 +1,16 @@
 # dataset-desk: how it works
 
-Mapped at 2026-10-20 from commit 25d9cdd by Atlas 1.24.0.
+Mapped at 2026-10-20 from commit 30802b9 by Atlas 1.24.0.
 
 ## What this is
 
 dataset-desk: a review desk for visual datasets — duplicates, outliers, search, and a model-free description gate. (written by a person)
 
-5 parts, mostly Python (12 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 4 doors; the busiest is CI, which reaches 3 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.
+5 parts, mostly Python (13 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 4 doors; the busiest is CI, which reaches 3 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.
 
-## What changed since 2026-10-20 (20d81ad)
+## What changed since 2026-10-20 (25d9cdd)
 
-- Release (.github/workflows/release.yml) is a new door. It starts when a release is published; or by hand. It checks dataset_desk/.
-- pyproject.toml is now read by .github/workflows/release.yml.
-- 2 files added and 24 changed content, across 5 parts.
+Nothing structural changed since 2026-10-20; 1 file added and 20 changed content.
 
 ## What comes in
 
