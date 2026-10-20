@@ -56,7 +56,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         licence="Apache-2.0; deployments follow the Gemma Prohibited Use Policy",
         modalities=("text", "image"),
         loader="eg2",
-        vram_mib=12550,
+        vram_mib=12550,  # provisional: multimodal peak; text-only long-text peak at default batch was 8,426 MiB (rung 2b)
         dim=768,
         max_tokens=8000,
     ),
@@ -78,7 +78,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         licence="MIT",
         modalities=("text",),
         loader="sentence_transformer",
-        vram_mib=1674,
+        vram_mib=7488,  # provisional: long-text peak at max_tokens=8192, default batch=8, bf16 (rung 2b)
         dim=1024,
         max_tokens=8192,
     ),
@@ -89,7 +89,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         licence="Apache-2.0",
         modalities=("text",),
         loader="sentence_transformer",
-        vram_mib=3814,
+        vram_mib=14470,  # provisional: long-text peak at max_tokens=8192, default batch=8, bf16 (rung 2b)
         dim=1024,
         max_tokens=8192,
     ),
@@ -100,7 +100,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         licence="Apache-2.0",
         modalities=("text",),
         loader="sentence_transformer",
-        vram_mib=954,
+        vram_mib=6544,  # provisional: long-text peak at max_tokens=8192, default batch=8, bf16 (rung 2b)
         dim=768,
         max_tokens=8192,
     ),
@@ -117,10 +117,11 @@ REGISTRY: dict[str, EmbedderSpec] = {
     ),
 }
 
-# Provisional task defaults from calibration rung 1 on the 5090.
+# Provisional task defaults from calibration rungs 1 and 2 on the 5090.
 TASK_DEFAULTS: dict[str, str] = {
     "images": "siglip2",
     "image-variety": "dinov2",
+    "dupes": "dinov2",  # provisional: DINOv2 two-signal duplicate rule (rung 2)
     "text": "bge-m3",
     "code": "eg2",
 }

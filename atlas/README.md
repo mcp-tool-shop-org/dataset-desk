@@ -1,22 +1,25 @@
 # dataset-desk: how it works
 
-Mapped at 2026-10-20 from commit 20d81ad by Atlas 1.24.0.
+Mapped at 2026-10-20 from commit 25d9cdd by Atlas 1.24.0.
 
 ## What this is
 
 dataset-desk: a review desk for visual datasets — duplicates, outliers, search, and a model-free description gate. (written by a person)
 
-5 parts, mostly Python (11 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 3 doors; the busiest is CI, which reaches 3 parts. It deploys a site to GitHub Pages. People run dataset-desk.
+5 parts, mostly Python (12 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 4 doors; the busiest is CI, which reaches 3 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.
 
-## What changed since 2026-10-15 (44b0fdb)
+## What changed since 2026-10-20 (20d81ad)
 
-Nothing structural changed since 2026-10-15; 1 file changed content.
+- Release (.github/workflows/release.yml) is a new door. It starts when a release is published; or by hand. It checks dataset_desk/.
+- pyproject.toml is now read by .github/workflows/release.yml.
+- 2 files added and 24 changed content, across 5 parts.
 
 ## What comes in
 
 1. **CI.** On a pull request to main; on a push to main touching 7 paths; or by hand. Runs verify.sh and tests/; checks dataset_desk/.
 2. **Deploy site to GitHub Pages.** On a push to main touching 2 paths; or by hand. Runs site/astro.config.mjs and site/src/.
-3. **dataset-desk** (a command people run). Runs dataset_desk/desk.py.
+3. **Release.** When a release is published; or by hand. Checks dataset_desk/.
+4. **dataset-desk** (a command people run). Runs dataset_desk/desk.py.
 
 ## What happens through CI
 
@@ -31,11 +34,13 @@ CI writes nothing this map can see.
 
 **Deploy site to GitHub Pages** runs site/astro.config.mjs and site/src/, and deploys the site.
 
+**Release** checks dataset_desk/ and publishes to PyPI and uploads dist/*.tar.gz and dist/*.whl to the release on a release event.
+
 **dataset-desk** (a command people run) runs dataset_desk/desk.py.
 
 ## What breaks what
 
-- **dataset_desk** is imported only from tests, by 1 part (tests), and sits on the path of 2 doors.
+- **dataset_desk** is imported only from tests, by 1 part (tests), and sits on the path of 3 doors.
 
 ## What tends to change together
 
@@ -72,8 +77,8 @@ Read those in order to follow one run of dataset-desk end to end. This path foll
 ## What this map cannot see
 
 - 1 read uses a path built at run time and is not named here.
-- 5 writes and 13 reads go to a path their caller passes, not to this repository.
-- 4 writes and 2 reads go to the directory the command is run in (desk-out/), not to this repository.
+- 5 writes and 19 reads go to a path their caller passes, not to this repository.
+- 7 writes and 4 reads go to the directory the command is run in (desk-out/), not to this repository.
 - Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions.
 
 Regenerate with `npx --yes @dogfood-lab/atlas map`.

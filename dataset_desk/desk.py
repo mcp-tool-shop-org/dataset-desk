@@ -53,12 +53,17 @@ CODE_EXT = frozenset({".py", ".sh", ".toml", ".yml", ".yaml"})
 TEXT_CHUNK_CHARS = 6000
 TEXT_MAX_CHUNKS = 8
 NUL_PROBE_BYTES = 4096
-NEAR_BITS = 10        # dHash Hamming distance (of 256 bits) for a near-duplicate, as in the multimodal design
-# The cosine at which a pair is flagged for review as a semantic duplicate. SemDeDup's band was 0.93-0.97 in CLIP
-# space; it belongs to that embedder, so recalibrate it for each one from the top-1 neighbour percentiles in the
-# report. Flags are for review only: nothing is removed automatically.
-SEMANTIC = 0.95
-DESC_CLUSTER_COSINE = 0.90
+SCAN_V = 2  # scan.jsonl row schema version (v2 adds dhash_flip)
+
+# Every duplicate threshold below is provisional and named after the calibration rung that measured it.
+NEAR_BITS = 26          # provisional (rung 2, recall 0.81): lite flip_hamming threshold (disagree bits of 256)
+TWO_SIGNAL_BITS = 44    # provisional (rung 2, recall 0.91, 0.00 cross-project FP): DINOv2 two-signal flip_hamming ceiling
+DINOV2_COS_LOW = 0.94   # provisional (rung 2, recall 0.91, 0.00 cross-project FP): DINOv2 two-signal low cosine floor
+DINOV2_COS_HIGH = 0.985 # provisional (rung 2, recall 0.91, 0.00 cross-project FP): DINOv2 unconditional cosine floor
+SEMANTIC = 0.95         # provisional (rung 1/2): fallback cosine threshold for non-DINOv2 or explicit --semantic runs
+CODE_SEMANTIC = 0.95    # provisional (rung 2b, 17 seeds: positives >= 0.976, hard negatives <= 0.931): EG2 code dupes
+TEXT_SEMANTIC = 0.98    # provisional (rung 2b, recall 0.94, FP 0.01): bge-m3 text dupes
+DESC_CLUSTER_COSINE = 0.90  # provisional (rung 1): display-only description cluster cosine
 
 # The four projects in the EmbeddingGemma 2 vs SigLIP2 multimodal retrieval experiment.
 # Embedding their descriptions or running the embedding fit check on them is refused until the counted run finishes,
@@ -141,6 +146,7 @@ class Item:
     paths: list           # project-relative, every byte-identical copy
     folders: list
     dhash: str = ""       # 256 bits as 64 hex digits
+    dhash_flip: str = ""  # 256 bits as 64 hex digits of the image flipped left-to-right
     record: dict | None = None  # id, status, explanation, judgment_note, failure_modes, prompt of the copy
     palette: list | None = None  # 30 numbers: 24 HSV colour/tone + 6 native surface/brushwork/FFT metrics
 
@@ -165,12 +171,26 @@ def dhash(path: str, size: int = 16) -> str:
         return _dhash(im, size)
 
 
+def dhash_flip(path: str, size: int = 16) -> str:
+    """The difference hash of the image flipped left to right, computed from the flipped image itself."""
+    from PIL import Image
+
+    with Image.open(path) as im:
+        return _dhash_flip(im, size)
+
+
 def _dhash(im, size: int = 16) -> str:
     from PIL import Image
 
     g = np.asarray(im.convert("L").resize((size + 1, size), Image.Resampling.LANCZOS), dtype=np.int16)
     bits = (g[:, 1:] > g[:, :-1]).flatten()
     return f"{int(''.join('1' if b else '0' for b in bits), 2):0{size * size // 4}x}"
+
+
+def _dhash_flip(im, size: int = 16) -> str:
+    from PIL import Image
+
+    return _dhash(im.transpose(Image.Transpose.FLIP_LEFT_RIGHT), size)
 
 
 def _conv1d_axis0(a: np.ndarray, k: np.ndarray) -> np.ndarray:
@@ -355,8 +375,44 @@ def image_stats(path: str) -> tuple[str, list, dict]:
         return _dhash(im), _palette(im), png_meta
 
 
+def _scan_image_stats(path: str) -> tuple[str, str, list, dict]:
+    from PIL import Image
+
+    with Image.open(path) as im:
+        png_meta = _png_prompt_meta(im)
+        return _dhash(im), _dhash_flip(im), _palette(im), png_meta
+
+
 def hamming(a: str, b: str) -> int:
     return (int(a, 16) ^ int(b, 16)).bit_count()
+
+
+def flip_hamming(a: Item, b: Item) -> int:
+    """min(hamming(a.dhash, b.dhash), hamming(a.dhash, b.dhash_flip)), falling back to the plain hash when
+    dhash_flip is empty on in-memory test items."""
+    d0 = hamming(a.dhash, b.dhash)
+    if b.dhash_flip:
+        return min(d0, hamming(a.dhash, b.dhash_flip))
+    if a.dhash_flip:
+        return min(d0, hamming(a.dhash_flip, b.dhash))
+    return d0
+
+
+_STEM_ASSET_VIEW_RE = re.compile(r"^(.+)__(y-?\d+_e-?\d+(?:_.*)?)$")
+
+
+def _asset_view(item: Item) -> tuple[str | None, str | None]:
+    """Return (asset, view) per field: from the record when present, else parsed from paths[0]'s file stem."""
+    rec = item.record or {}
+    rec_asset = rec.get("asset_id") or None
+    rec_view = rec.get("render_id") or None
+    stem_asset, stem_view = None, None
+    if item.paths:
+        stem = os.path.splitext(os.path.basename(item.paths[0]))[0]
+        m = _STEM_ASSET_VIEW_RE.match(stem)
+        if m:
+            stem_asset, stem_view = m.group(1), m.group(2)
+    return (rec_asset or stem_asset, rec_view or stem_view)
 
 
 def _record_priority(rec: dict) -> tuple[int, str]:
@@ -369,7 +425,7 @@ def _record_priority(rec: dict) -> tuple[int, str]:
 
 def load_records(project: str) -> tuple[dict, list]:
     """asset_path -> the record's id, status, explanation (canon.subject, or judgment.explanation ONLY when status is
-    approved), judgment_note, failure_modes, and prompt; plus the records that couldn't be read."""
+    approved), judgment_note, failure_modes, prompt, asset_id and render_id; plus the records that couldn't be read."""
     recs, problems = {}, []
     rdir = os.path.join(project, "records")
     for name in sorted(os.listdir(rdir)) if os.path.isdir(rdir) else []:
@@ -406,6 +462,8 @@ def load_records(project: str) -> tuple[dict, list]:
             "canon_subject": subj or None,
             "source": source,
             "prompt": prov.get("prompt"),
+            "asset_id": prov.get("asset_id") or None,
+            "render_id": prov.get("render_id") or None,
             "recorded": True,
         }
         if modes:
@@ -488,7 +546,13 @@ def _load_scan_cache(out: str | None) -> dict[str, dict]:
             for line in f:
                 if line.strip():
                     row = json.loads(line)
-                    if row.get("sha256") and len(row.get("palette") or []) == 30:
+                    if (
+                        row.get("scan_v") == SCAN_V
+                        and row.get("sha256")
+                        and row.get("dhash")
+                        and row.get("dhash_flip")
+                        and len(row.get("palette") or []) == 30
+                    ):
                         cache[row["sha256"]] = row
     except (OSError, json.JSONDecodeError):
         return {}
@@ -509,7 +573,8 @@ def scan(project: str, strict: bool = False, out: str | None = None) -> tuple[li
     """Every image under outputs/<folder>/, merged by content. Files at the top of outputs/ (contact sheets and
     composites) are left out, as in the multimodal design. Joins records/*.json, outputs/<wave>/generation.json,
     outputs/<wave>/_curation.json, and embedded ComfyUI PNG tEXt prompt metadata. Reuses <out>/scan.jsonl across
-    backends and runs so dHash and the 30d native-resolution look channel are computed once per unique sha256."""
+    backends and runs so dHash, dhash_flip and the 30d native-resolution look channel are computed once per unique
+    sha256."""
     recs, problems = load_records(project)
     wave_meta = load_wave_metadata(project)
     scan_cache = _load_scan_cache(out)
@@ -536,7 +601,10 @@ def scan(project: str, strict: bool = False, out: str | None = None) -> tuple[li
                     cand = recs[rel]
                     if it.record is None or not it.record.get("recorded"):
                         merged = dict(it.record or {})
-                        merged.update({k: v for k, v in cand.items() if v is not None or k == "explanation"})
+                        merged.update({
+                            k: v for k, v in cand.items()
+                            if v is not None or k in ("explanation", "asset_id", "render_id")
+                        })
                         it.record = merged
                     elif it.record.get("id") != cand.get("id"):
                         problems.append(
@@ -545,7 +613,7 @@ def scan(project: str, strict: bool = False, out: str | None = None) -> tuple[li
                         if _record_priority(cand) < _record_priority(it.record):
                             merged = dict(it.record)
                             for k in ("id", "status", "explanation", "judgment_note", "canon_subject", "source",
-                                      "prompt", "failure_modes", "recorded"):
+                                      "prompt", "asset_id", "render_id", "failure_modes", "recorded"):
                                 if k in cand:
                                     merged[k] = cand[k]
                                 else:
@@ -570,13 +638,14 @@ def scan(project: str, strict: bool = False, out: str | None = None) -> tuple[li
         cached = scan_cache.get(it.sha256)
         if cached is not None:
             dh = cached["dhash"]
+            dh_flip = cached["dhash_flip"]
             pal = cached["palette"]
             png_meta = cached.get("png_meta") or {}
             dt = float(cached.get("look_seconds") or 0.0)
         else:
             t0 = time.perf_counter()
             try:
-                dh, pal, png_meta = image_stats(os.path.join(project, it.paths[0]))
+                dh, dh_flip, pal, png_meta = _scan_image_stats(os.path.join(project, it.paths[0]))
             except Exception as e:
                 if strict:
                     raise
@@ -585,7 +654,7 @@ def scan(project: str, strict: bool = False, out: str | None = None) -> tuple[li
             dt = time.perf_counter() - t0
             look_seconds += dt
             look_computed_now += 1
-        it.dhash, it.palette = dh, pal
+        it.dhash, it.dhash_flip, it.palette = dh, dh_flip, pal
         if png_meta:
             if it.record is None:
                 it.record = {"id": None, "status": None, "explanation": None,
@@ -595,8 +664,10 @@ def scan(project: str, strict: bool = False, out: str | None = None) -> tuple[li
                     it.record[k] = v
         valid_items.append(it)
         cache_rows.append({
+            "scan_v": SCAN_V,
             "sha256": it.sha256,
             "dhash": dh,
+            "dhash_flip": dh_flip,
             "palette": pal,
             "png_meta": png_meta,
             "look_seconds": round(dt, 6),
@@ -692,6 +763,7 @@ def load_cache(
     *,
     dim: int | None = None,
     vision_tokens: int | None = None,
+    project: str | None = None,
 ) -> tuple[list[Item], np.ndarray, dict, dict]:
     d = cache_dir(out, backend, dim=dim, vision_tokens=vision_tokens)
     try:
@@ -702,8 +774,12 @@ def load_cache(
         img = np.load(os.path.join(d, "images.npy"))
         tv = np.load(os.path.join(d, "texts.npy"))
     except OSError as err:
-        raise DeskError("STATE_NO_INDEX", f"no {backend} index under {d}; run: dataset-desk index --backend {backend}",
-                        cause=err) from err
+        proj_arg = f"--project {project} " if project else ""
+        raise DeskError(
+            "STATE_NO_INDEX",
+            f"no {backend} index under {d}; run: dataset-desk index {proj_arg}--backend {backend}",
+            cause=err,
+        ) from err
     t_shas = meta.pop("text_shas", [])
     c_shas = meta.pop("cluster_text_shas", [])
     c_path = os.path.join(d, "cluster_texts.npy")
@@ -844,18 +920,76 @@ def clusters(n: int, pairs) -> list[list[int]]:
     return [g for g in groups.values() if len(g) > 1]
 
 
-def dupes(items: list[Item], img: np.ndarray, near: int = NEAR_BITS, semantic: float = SEMANTIC) -> dict:
+def dupes(
+    items: list[Item],
+    img: np.ndarray,
+    near: int = NEAR_BITS,
+    semantic: float | None = None,
+    backend: str | None = None,
+) -> dict:
     exact = [it for it in items if len(it.paths) > 1]
-    hs = [int(it.dhash, 16) for it in items]
-    near_pairs = [(a, b, h) for a in range(len(hs)) for b in range(a + 1, len(hs))
-                  if (h := (hs[a] ^ hs[b]).bit_count()) <= near]
-    near_set = {(a, b) for a, b, _ in near_pairs}
     has_vecs = img.ndim == 2 and img.shape[1] > 0
-    sem_pairs = [(a, b, s) for a, b, s in pairs_at_least(img, semantic) if (a, b) not in near_set] if has_vecs else []
-    return {"exact": exact, "near": near_pairs, "semantic": sem_pairs,
-            "semantic_groups": clusters(len(items), [(a, b) for a, b, _ in sem_pairs]),
-            "thresholds": {"near_bits": near, "semantic_cosine": semantic},
-            "top1_percentiles": top1_percentiles(img) if has_vecs else {}}
+    views = [_asset_view(it) for it in items]
+    skipped_view_pairs: set[tuple[int, int]] = set()
+
+    def _same_asset_diff_view(a: int, b: int) -> bool:
+        aa, va = views[a]
+        ab, vb = views[b]
+        if aa and ab and aa == ab and va and vb and va != vb:
+            skipped_view_pairs.add((min(a, b), max(a, b)))
+            return True
+        return False
+
+    if backend == "dinov2" and semantic is None:
+        rule = "dinov2-two-signal"
+        near_pairs: list[tuple[int, int, int]] = []
+        sem_pairs: list[tuple[int, int, float]] = []
+        if has_vecs:
+            for a, b, s in pairs_at_least(img, DINOV2_COS_LOW):
+                fh = flip_hamming(items[a], items[b]) if (items[a].dhash and items[b].dhash) else 256
+                if (s >= DINOV2_COS_LOW and fh <= TWO_SIGNAL_BITS) or s >= DINOV2_COS_HIGH:
+                    if not _same_asset_diff_view(a, b):
+                        sem_pairs.append((a, b, s))
+        thresholds = {
+            "near_bits": TWO_SIGNAL_BITS,
+            "semantic_cosine": DINOV2_COS_LOW,
+            "dinov2_cos_low": DINOV2_COS_LOW,
+            "dinov2_cos_high": DINOV2_COS_HIGH,
+            "two_signal_bits": TWO_SIGNAL_BITS,
+        }
+    else:
+        rule = "near+cosine"
+        eff_semantic = SEMANTIC if semantic is None else float(semantic)
+        near_pairs = []
+        for a in range(len(items)):
+            if not items[a].dhash:
+                continue
+            for b in range(a + 1, len(items)):
+                if not items[b].dhash:
+                    continue
+                h = flip_hamming(items[a], items[b])
+                if h <= near and not _same_asset_diff_view(a, b):
+                    near_pairs.append((a, b, h))
+        near_set = {(a, b) for a, b, _ in near_pairs}
+        sem_pairs = []
+        if has_vecs:
+            for a, b, s in pairs_at_least(img, eff_semantic):
+                if (a, b) in near_set:
+                    continue
+                if not _same_asset_diff_view(a, b):
+                    sem_pairs.append((a, b, s))
+        thresholds = {"near_bits": near, "semantic_cosine": eff_semantic}
+
+    return {
+        "exact": exact,
+        "near": near_pairs,
+        "semantic": sem_pairs,
+        "semantic_groups": clusters(len(items), [(a, b) for a, b, _ in sem_pairs]),
+        "rule": rule,
+        "view_pairs_skipped": len(skipped_view_pairs),
+        "thresholds": thresholds,
+        "top1_percentiles": top1_percentiles(img) if has_vecs else {},
+    }
 
 
 def top1_percentiles(img: np.ndarray, chunk: int = 1024) -> dict:
@@ -1142,7 +1276,7 @@ def report(project: str, out: str, items: list[Item], img: np.ndarray, txt: dict
     check_multimodal_pool(project, meta.get("backend", "eg2"), images_only=eff_images_only,
                           allow_multimodal_pool=allow_multimodal_pool)
     has_vecs = img.ndim == 2 and img.shape[1] > 0
-    d = dupes(items, img)
+    d = dupes(items, img, backend=meta.get("backend"))
     o = outliers(items, img) if has_vecs else {"approved": len(approved_idx(items)), "least_typical": [],
                                                "nearest_canon": [], "furthest_from_canon": []}
     c = captions(items, img, txt) if (has_vecs and not eff_images_only) else {"described": 0}
@@ -1792,11 +1926,38 @@ def text_index(
     return meta
 
 
-def text_dupes(items: list[TextItem], vecs: np.ndarray, semantic: float = DESC_CLUSTER_COSINE) -> dict:
-    """Exact and semantic duplicates at or above `semantic` (default DESC_CLUSTER_COSINE); paths, scores and labels only."""
+def text_dupes(
+    items: list[TextItem],
+    vecs: np.ndarray,
+    semantic: float | None = None,
+    task: str = "text",
+    backend: str | None = None,
+) -> dict:
+    """Exact and semantic duplicates at or above `semantic` (defaults to CODE_SEMANTIC for code on eg2,
+    TEXT_SEMANTIC for text on bge-m3); paths, scores, labels and top1_percentiles only."""
+    if task == "code":
+        keep = [
+            i for i, it in enumerate(items)
+            if (it.suffix or os.path.splitext(it.name or (it.paths[0] if it.paths else ""))[1]).lower() in CODE_EXT
+        ]
+        items = [items[i] for i in keep]
+        if vecs.ndim == 2 and len(vecs) > 0:
+            vecs = vecs[keep]
+
+    if semantic is not None:
+        eff_semantic = float(semantic)
+    else:
+        calibrated = "eg2" if task == "code" else "bge-m3"
+        if backend is not None and backend != calibrated:
+            raise DeskError(
+                "INPUT_BAD_ARGUMENT",
+                f"REFUSED: backend {backend!r} has no calibrated threshold for task {task!r}; pass --semantic",
+            )
+        eff_semantic = CODE_SEMANTIC if task == "code" else TEXT_SEMANTIC
+
     exact = [it.paths for it in items if len(it.paths) > 1]
     has_vecs = vecs.ndim == 2 and vecs.shape[1] > 0
-    sem_raw = list(pairs_at_least(vecs, semantic)) if has_vecs else []
+    sem_raw = list(pairs_at_least(vecs, eff_semantic)) if has_vecs else []
     pairs = [
         {
             "a": items[a].paths[0],
@@ -1819,7 +1980,8 @@ def text_dupes(items: list[TextItem], vecs: np.ndarray, semantic: float = DESC_C
         "pairs": pairs,
         "semantic": semantic_tuples,
         "semantic_groups": sem_groups,
-        "threshold": semantic,
+        "threshold": eff_semantic,
+        "top1_percentiles": top1_percentiles(vecs) if has_vecs else {},
     }
 
 
@@ -1900,6 +2062,8 @@ def command_task(command: str, task: str | None = None) -> str:
     """Return the task name for a CLI command unless overridden by `--task`."""
     if task:
         return task
+    if command == "dupes":
+        return "dupes"
     if command == "lineage":
         return "code"
     if command in ("text-index", "text-dupes", "text-search"):
@@ -1977,7 +2141,8 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
     ap.add_argument("--vision-tokens", dest="vision_tokens", type=int, default=None,
                     help="vision soft tokens per image for eg2/fake (70, 140, 280, 560, 1120; default: 280)")
     ap.add_argument("--semantic", type=float, default=None,
-                    help="cosine threshold for semantic duplicates (default: 0.90 for text-dupes, 0.95 for dupes)")
+                    help="cosine threshold override for semantic duplicates (default: DINOv2 two-signal or 0.95 for "
+                         "dupes, 0.98 for text-dupes on bge-m3, 0.95 for --task code on eg2)")
     ap.add_argument("--limit", type=int, help="index only the first N unique items (a smoke test)")
     ap.add_argument("--strict", action="store_true", help="halt immediately on an unreadable image file")
     ap.add_argument("--count-tokens", action="store_true",
@@ -2036,10 +2201,11 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
             text_index(out, emb, source=a.source, rnd_data=a.rnd_data, limit=a.limit, grant=a.grant)
             return 0
         read_role = "document" if a.command == "text-search" else "symmetric"
-        t_items, t_vecs, _t_meta = load_text_cache(out, backend, role=read_role, dim=a.dim)
+        t_items, t_vecs, t_meta = load_text_cache(out, backend, role=read_role, dim=a.dim)
         if a.command == "text-dupes":
-            sem_thr = DESC_CLUSTER_COSINE if a.semantic is None else a.semantic
-            print(json.dumps(text_dupes(t_items, t_vecs, semantic=sem_thr), indent=1))
+            t_task = command_task(a.command, a.task)
+            print(json.dumps(text_dupes(t_items, t_vecs, semantic=a.semantic, task=t_task,
+                                        backend=t_meta.get("backend") or backend), indent=1))
         elif a.command == "text-search":
             if not a.text:
                 raise DeskError("INPUT_BAD_ARGUMENT", "text-search needs --text")
@@ -2078,17 +2244,18 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         index(project, out, emb, limit=a.limit, grant=a.grant, strict=a.strict,
               images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool)
         return 0
-    items, img, txt, meta = load_cache(out, backend, dim=a.dim, vision_tokens=a.vision_tokens)
+    items, img, txt, meta = load_cache(out, backend, dim=a.dim, vision_tokens=a.vision_tokens, project=a.project)
     subjects = None
     if a.subjects:
         with open(a.subjects, encoding="utf-8") as f:
             subjects = [s.strip() for s in f if s.strip() and not s.startswith("#")]
     if a.command == "dupes":
-        sem_cut = SEMANTIC if a.semantic is None else a.semantic
-        d = dupes(items, img, semantic=sem_cut)
+        d = dupes(items, img, semantic=a.semantic, backend=meta.get("backend") or backend)
         print(json.dumps({"exact": [it.paths for it in d["exact"]],
                           "near": [(items[x].paths[0], items[y].paths[0], h) for x, y, h in d["near"]],
                           "semantic": [(items[x].paths[0], items[y].paths[0], round(s, 4)) for x, y, s in d["semantic"]],
+                          "rule": d["rule"],
+                          "view_pairs_skipped": d["view_pairs_skipped"],
                           "thresholds": d["thresholds"], "top1_percentiles": d["top1_percentiles"]}, indent=1))
     elif a.command == "search":
         if not a.text and not a.image:

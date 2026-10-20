@@ -641,6 +641,14 @@ class RegistryAndNewBackendsTests(TmpCase):
             "gte-modernbert": 8192,
             "dinov2": 0,
         }
+        expected_vram_mib = {
+            "eg2": 12550,
+            "siglip2": 5340,
+            "bge-m3": 7488,
+            "qwen3-emb-0.6b": 14470,
+            "gte-modernbert": 6544,
+            "dinov2": 636,
+        }
         for name, spec in registry.REGISTRY.items():
             self.assertEqual(spec.name, name)
             self.assertEqual(len(spec.revision), 40)
@@ -649,7 +657,7 @@ class RegistryAndNewBackendsTests(TmpCase):
             self.assertTrue(spec.repo and "/" in spec.repo)
             self.assertTrue(spec.modalities)
             self.assertTrue(spec.loader)
-            self.assertGreater(spec.vram_mib, 0)
+            self.assertEqual(spec.vram_mib, expected_vram_mib[name])
             self.assertEqual(spec.max_tokens, expected_max_tokens[name])
             self.assertEqual(spec.vram_budget, spec.vram_mib)
             self.assertEqual(spec.vram_budget_mib, spec.vram_mib)
@@ -664,10 +672,11 @@ class RegistryAndNewBackendsTests(TmpCase):
     def test_task_defaults_and_resolution(self):
         self.assertEqual(
             registry.TASK_DEFAULTS,
-            {"images": "siglip2", "image-variety": "dinov2", "text": "bge-m3", "code": "eg2"},
+            {"images": "siglip2", "image-variety": "dinov2", "dupes": "dinov2", "text": "bge-m3", "code": "eg2"},
         )
         self.assertEqual(registry.resolve_backend(None, "images"), "siglip2")
         self.assertEqual(registry.resolve_backend(None, "image-variety"), "dinov2")
+        self.assertEqual(registry.resolve_backend(None, "dupes"), "dinov2")
         self.assertEqual(registry.resolve_backend(None, "text"), "bge-m3")
         self.assertEqual(registry.resolve_backend(None, "code"), "eg2")
         self.assertEqual(registry.resolve_backend("qwen3-emb-0.6b", "text"), "qwen3-emb-0.6b")

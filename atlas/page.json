@@ -6,7 +6,7 @@
   ],
   "breaks": [
     {
-      "doors": 2,
+      "doors": 3,
       "importedBy": [],
       "importedByTests": [
         "tests"
@@ -18,33 +18,49 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 0,
-      "changed": 1,
+      "added": 2,
+      "changed": 24,
       "moved": 0,
-      "parts": 1,
+      "parts": 5,
       "removed": 0
     },
     "items": [
       {
+        "kind": "door",
+        "sentence": "Release (.github/workflows/release.yml) is a new door. It starts when a release is published; or by hand. It checks dataset_desk/.",
+        "subjects": [
+          ".github/workflows/release.yml",
+          "dataset_desk/"
+        ]
+      },
+      {
+        "kind": "landing",
+        "sentence": "pyproject.toml is now read by .github/workflows/release.yml.",
+        "subjects": [
+          "pyproject.toml",
+          ".github/workflows/release.yml"
+        ]
+      },
+      {
         "kind": "counts",
-        "sentence": "Nothing structural changed since 2026-10-15; 1 file changed content.",
+        "sentence": "2 files added and 24 changed content, across 5 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "44b0fdb3a79a63a4f1b76a00d6064c7128f2cfe7",
-      "generatedAt": "2026-10-15T23:30:07.819Z"
+      "commit": "20d81ade2ed053eeb6e0d15f16a26d13089aa824",
+      "generatedAt": "2026-10-20T01:53:57.440Z"
     },
-    "unchanged": true
+    "unchanged": false
   },
   "changesTogether": [],
   "changesTogetherNote": [
     "Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "20d81ade2ed053eeb6e0d15f16a26d13089aa824",
+  "commit": "25d9cdd529dbc526e602d95b5ef99bf30a8a44ec",
   "defaultBranch": "main",
-  "derived": "5 parts, mostly Python (11 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 3 doors; the busiest is CI, which reaches 3 parts. It deploys a site to GitHub Pages. People run dataset-desk.",
+  "derived": "5 parts, mostly Python (12 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 4 doors; the busiest is CI, which reaches 3 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.",
   "doors": [
     {
       "checks": [
@@ -61,7 +77,7 @@
         {
           "boundary": "dataset_desk",
           "depth": 0,
-          "files": 6
+          "files": 7
         },
         {
           "boundary": "root",
@@ -122,6 +138,36 @@
       ]
     },
     {
+      "checks": [
+        "dataset_desk/"
+      ],
+      "checksCount": 1,
+      "checksMore": 0,
+      "file": ".github/workflows/release.yml",
+      "id": ".github/workflows/release.yml",
+      "landings": [],
+      "name": "Release",
+      "pushes": false,
+      "reach": [
+        {
+          "boundary": "dataset_desk",
+          "depth": 0,
+          "files": 7
+        }
+      ],
+      "runs": [],
+      "runsCount": 0,
+      "runsMore": 0,
+      "sends": [
+        "publishes to PyPI and uploads dist/*.tar.gz and dist/*.whl to the release on a release event"
+      ],
+      "stages": [],
+      "triggers": [
+        "when a release is published",
+        "or by hand"
+      ]
+    },
+    {
       "checks": [],
       "checksCount": 0,
       "checksMore": 0,
@@ -135,7 +181,7 @@
         {
           "boundary": "dataset_desk",
           "depth": 0,
-          "files": 5
+          "files": 6
         }
       ],
       "runs": [
@@ -154,11 +200,11 @@
   "edges": [],
   "engine": "1.24.0",
   "generated": [],
-  "generatedAt": "2026-10-20T01:53:57.440Z",
+  "generatedAt": "2026-10-20T05:12:03.826Z",
   "limits": [
     "1 read uses a path built at run time and is not named here.",
-    "5 writes and 13 reads go to a path their caller passes, not to this repository.",
-    "4 writes and 2 reads go to the directory the command is run in (desk-out/), not to this repository.",
+    "5 writes and 19 reads go to a path their caller passes, not to this repository.",
+    "7 writes and 4 reads go to the directory the command is run in (desk-out/), not to this repository.",
     "Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions."
   ],
   "mainDoor": ".github/workflows/ci.yml",
