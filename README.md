@@ -139,7 +139,7 @@ Report a vulnerability as described in [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.2.1, a public prototype.** The code is tested offline: 197 tests and 96% line coverage, with small stand-ins for the model libraries.
+**v0.2.2, a public prototype.** The code is tested offline: 197 tests and 96% line coverage, with small stand-ins for the model libraries.
 - **Calibration:** the studio's runs on its own data, on an RTX 5090, set the duplicate thresholds, which are provisional and rest on one pool per kind. The VRAM figures are conservative whole-card figures, CUDA context included, measured on an RTX 5090; other cards and corpora may differ. The code thresholds rest on 17 planted copies. The method and the data are in [newsletter issue 16](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
 - **Large projects:** duplicates, outliers and the look channel work in bounded blocks. On synthetic sets, the near-duplicate search and the look channel take minutes at 100,000 images, where they took hours or ran out of memory. The description gate's near-duplicate check uses an exact prefix filter, so it only compares descriptions that could reach 0.85. The first scan is about 2× faster per image, with identical results, and runs in parallel under `--threads`.
 - **Expect the command line to change before 1.0.**

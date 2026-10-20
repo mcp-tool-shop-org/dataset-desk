@@ -26,7 +26,7 @@ Um estilo LoRA aprende com suas imagens de treinamento e suas legendas. Dois def
 - **Repetições.** A mesma imagem salva duas vezes, ou duas renderizações com apenas alguns pixels de diferença, ensinam a mesma imagem duas vezes.
 - **Descrições que não são descrições.** Uma legenda copiada do prompt de geração ou uma regra colada em 54 imagens não diz nada ao modelo sobre a imagem. Pior ainda, se esse texto for usado posteriormente para testar a pesquisa, ele mede a recuperação do prompt, e não a compreensão da imagem.
 
-O dataset-desk encontra ambos em uma pasta de projeto, sem alterá-la. Ele gera um relatório e uma fila de revisão para que uma pessoa possa agir. **Nada é removido automaticamente.**
+O dataset-desk identifica ambos em uma pasta de projeto, sem alterá-la. Ele gera um relatório e uma fila de revisão para que alguém possa agir. **Nada é removido automaticamente.**
 
 ## O que ele faz
 
@@ -75,7 +75,7 @@ pip install "dataset-desk[models]"
 
 No Windows com uma GPU NVIDIA, instale primeiro uma versão CUDA do torch de `https://download.pytorch.org`; o torch do PyPI para Windows é apenas para CPU.
 
-Os modelos são obtidos do Hugging Face em revisões fixas na primeira vez que são usados e, em seguida, são carregados do seu cache. Cada tarefa tem um padrão, e `--backend` escolhe outro:
+Os modelos são obtidos do Hugging Face nas revisões fixadas na primeira vez que são usados e, em seguida, são carregados do seu cache. Cada tarefa tem um padrão, e `--backend` escolhe outro:
 
 | Backend | Modelo | Padrão para |
 |---|---|---|
@@ -113,7 +113,7 @@ dataset-desk text-index  --source path/to/folder --out desk-out/texts --task cod
 dataset-desk text-search --source path/to/folder --out desk-out/texts --task code --text "where the cache is written"
 ```
 
-`dataset-desk --help` lista todas as sinalizações. Códigos de saída: `0` ok, `1` um erro do usuário ou uma recusa, `2` um erro inesperado. Erros são impressos como `error <CODE>: <message>` com uma linha `hint:`; `--debug` adiciona o rastreamento da pilha.
+`dataset-desk --help` lista todas as sinalizações. Códigos de saída: `0` ok, `1` um erro do usuário ou uma recusa, `2` um erro inesperado. Os erros são impressos como `error <CODE>: <message>` com uma linha `hint:`; `--debug` adiciona o rastreamento da pilha.
 
 **O layout do projeto que ele lê** é o de [style-dataset-lab](https://github.com/mcp-tool-shop-org/style-dataset-lab):
 
@@ -131,7 +131,7 @@ Um projeto sem `records/` também funciona, desde que as imagens estejam em past
 - **O que ele grava:** apenas em `--out`: seu cache de digitalização, caches de incorporação, o relatório, `description-review.jsonl` e a planilha. Ele rejeita um `--out` dentro do projeto (`PERM_OUT_INSIDE_PROJECT`), para que um projeto nunca seja modificado.
 - **O que ele nunca toca:** qualquer coisa fora dessas duas pastas. Ele não exclui nada, em lugar nenhum.
 - **Rede:** a versão lite nunca a usa. Um backend de modelo busca seus pesos fixos do Hugging Face na primeira utilização, a menos que `HF_HUB_OFFLINE=1` esteja definido; o gerador é carregado com `HF_HUB_OFFLINE=1` e `local_files_only=True` a cada vez. Nenhum modelo executa código remoto.
-- **Permissões:** uma conta de usuário comum. Uma GPU precisa de `--device` mais um `--grant`, para que uma placa compartilhada não seja usada por engano. Antes de carregar um modelo, um governador de VRAM verifica se a memória já em uso mais a necessidade medida do modelo se encaixa em `--vram-budget` (padrão de 26.624 MiB). Ele nunca remove nada; `--wait` verifica até que o carregamento se encaixe.
+- **Permissões:** uma conta de usuário comum. Uma GPU precisa de `--device` mais um `--grant`, para que uma placa compartilhada não seja usada por engano. Antes de carregar um modelo, um governador de VRAM verifica se a memória já em uso, mais a necessidade medida do modelo, se encaixa em `--vram-budget` (padrão de 26.624 MiB). Ele nunca remove nada; `--wait` verifica até que o carregamento se encaixe.
 - **Segredos e telemetria:** ele não lê credenciais e não coleta nem envia telemetria.
 - **Etapas protegidas:** em projetos bloqueados para um benchmark em execução, as incorporações de descrição e qualquer aceitação de descrições baseada em modelo são rejeitadas, a menos que `--allow-multimodal-pool` seja aprovado, para que as consultas do benchmark não sejam moldadas pelos modelos que ele mede.
 
@@ -139,7 +139,7 @@ Relate uma vulnerabilidade conforme descrito em [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.2.1, um protótipo público.** O código é testado offline: 197 testes e 96% de cobertura de linhas, com pequenas substituições para as bibliotecas de modelo.
+**v0.2.2, um protótipo público.** O código é testado offline: 197 testes e 96% de cobertura de linhas, com pequenas substituições para as bibliotecas de modelo.
 - **Calibração:** as execuções do estúdio em seus próprios dados, em uma RTX 5090, definem os limites de duplicação, que são provisórios e se baseiam em um pool por tipo. As cifras de VRAM são cifras conservadoras de placa inteira, incluindo o contexto CUDA, medidas em uma RTX 5090; outras placas e corpora podem ser diferentes. Os limites de código se baseiam em 17 cópias plantadas. O método e os dados estão em [newsletter issue 16](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
 - **Projetos grandes:** duplicatas, outliers e o canal de pesquisa funcionam em blocos delimitados. Em conjuntos sintéticos, a pesquisa de quase duplicatas e o canal de pesquisa levam minutos em 100.000 imagens, onde antes levavam horas ou ficavam sem memória. A verificação de quase duplicatas do filtro de descrição usa um filtro de prefixo exato, para que ele compare apenas descrições que possam atingir 0,85. A primeira digitalização é cerca de 2 vezes mais rápida por imagem, com resultados idênticos, e é executada em paralelo em `--threads`.
 - **Espere que a linha de comando mude antes da versão 1.0.**

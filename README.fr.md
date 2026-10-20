@@ -22,42 +22,42 @@
 
 ## Pourquoi
 
-Un style LoRA apprend à partir de ses images d’entraînement et de leurs légendes. Deux défauts mineurs nuisent aux deux :
+Un style LoRA apprend à partir de ses images d'entraînement et de leurs légendes. Deux défauts mineurs nuisent aux deux :
 - **Répétitions.** La même image enregistrée deux fois, ou deux rendus décalés de quelques pixels, enseignent la même image deux fois.
-- **Descriptions qui ne sont pas des descriptions.** Une légende copiée à partir de l’invite de génération, ou une légende générique collée sur 54 images, n’apporte aucune information sur l’image. Pire encore, si ce texte est utilisé ultérieurement pour tester la recherche, il mesure le rappel de l’invite, et non la compréhension de l’image.
+- **Descriptions qui ne sont pas des descriptions.** Une légende copiée à partir de l'invite de génération, ou une légende générique collée sur 54 images, n'apporte aucune information sur l'image. Pire encore, si ce texte est utilisé ultérieurement pour tester la recherche, il mesure le rappel de l'invite, et non la compréhension de l'image.
 
-dataset-desk détecte les deux, dans un dossier de projet, sans le modifier. Il génère un rapport et une file d’attente de révision pour qu’une personne puisse agir. **Rien n’est supprimé automatiquement.**
+dataset-desk détecte les deux, dans un dossier de projet, sans le modifier. Il génère un rapport et une file d'attente de révision pour qu'une personne puisse agir. **Rien n'est supprimé automatiquement.**
 
-## Ce qu’il fait
+## Ce qu'il fait
 
 | Commande | Ce que vous obtenez |
 |---|---|
-| `index` | Analyse le projet (enregistrements, métadonnées d’ondes, données de génération PNG) et intègre chaque image unique dans une mémoire cache sous `--out` |
-| `dupes` | Copies identiques au niveau de l’octet (sha256), quasi-doublons (dHash 256 bits prenant en compte les miroirs) et doublons sémantiques (cosinus d’intégration), au format JSON. Sur un index DINOv2, il utilise une règle à deux signaux calibrée. Deux vues du même objet ne sont jamais associées. |
-| `search` | Les images les plus proches d’une description (`--text`), d’une image (`--image`) ou des deux |
+| `index` | Analyse le projet (enregistrements, métadonnées des ondes, données de génération PNG) et intègre chaque image unique dans une mémoire cache sous `--out` |
+| `dupes` | Copies identiques au niveau de l'octet (sha256), quasi-doublons (dHash 256 bits tenant compte des miroirs) et doublons sémantiques (cosinus d'intégration), au format JSON. Sur un index DINOv2, il utilise une règle à deux signaux calibrée. Deux vues du même objet ne sont jamais associées. |
+| `search` | Les images les plus proches d'une description (`--text`), d'une image (`--image`) ou des deux |
 | `coverage` | Les meilleures images pour chaque sujet dans une liste de sujets souhaités, afin que les lacunes soient visibles |
-| `report` | Un rapport Markdown : doublons, les images approuvées les moins typiques en termes de contenu et d’apparence, l’audit des descriptions et si chaque description trouve sa propre image |
-| `text-index` | Intègre les fichiers texte et de code d’un dossier `--source` (ou d’une copie de données rnd), en comptant les blocs avec le tokenizer du modèle |
+| `report` | Un rapport Markdown : doublons, les images approuvées les moins typiques en termes de contenu et d'apparence, l'audit des descriptions et si chaque description trouve sa propre image |
+| `text-index` | Intègre les fichiers texte et code d'un dossier `--source` (ou d'une copie de rnd-data), en comptant les blocs avec le tokenizer du modèle |
 | `text-dupes` | Fichiers exacts et quasi-doublons. `--task code` compare uniquement les scripts. |
-| `text-search` | Les fichiers les plus proches d’une requête (`--text`). `--task code` utilise l’invite de récupération de code du modèle. |
+| `text-search` | Les fichiers les plus proches d'une requête (`--text`). `--task code` utilise l'invite de récupération de code du modèle. |
 | `lineage` | Versions du même script dans différentes exécutions, classées par similarité |
 
-**Les seuils** proviennent de la calibration du studio sur ses propres données. Chacun d’eux est marqué comme provisoire dans le code, avec la mesure à partir de laquelle il a été obtenu :
+**Les seuils** proviennent de la calibration du studio sur ses propres données. Chacun d'eux est marqué comme provisoire dans le code, avec la mesure à partir de laquelle il a été obtenu :
 - **Images :** sur un index DINOv2, une paire est un doublon lorsque `(cosine ≥ 0.94 and the mirror-aware dHash is within 44 bits) or cosine ≥ 0.985`. Les autres index utilisent le dHash dans une plage de 26 bits, plus un cosinus ≥ 0,95.
-- **Texte :** 0,98 avec bge-m3, et 0,95 pour le code avec EmbeddingGemma 2. Tout autre modèle nécessite `--semantic`.
+- **Texte :** 0,98 avec bge-m3, et 0,95 pour le code avec EmbeddingGemma 2. Tout autre modèle nécessite `--semantic`.
 
-Deux rendus du même objet provenant d’angles de caméra différents ne sont jamais des doublons. La vue provient de `provenance.asset_id` et `render_id` de chaque enregistrement, ou de noms de fichiers tels que `<asset>__y<yaw>_e<elev>`.
+Deux rendus du même objet provenant d'angles de caméra différents ne sont jamais des doublons. La vue provient de `provenance.asset_id` et `render_id` de chaque enregistrement, ou de noms de fichiers tels que `<asset>__y<yaw>_e<elev>`.
 
-**La porte de description** s’exécute sans aucun modèle. Une description est signalée lorsqu’elle :
-- fait écho à son invite : elle est égale à l’invite ou se trouve à l’intérieur, partage une séquence de 6 mots ou plus avec celle-ci, ou 90 % ou plus de ses mots (80 % ou plus de ses mots de contenu) y apparaissent ;
-- englobe la ligne de sujet de l’enregistrement : une séquence de 4 mots ou plus `canon.subject` apparaît comme une séquence contiguë de ses mots ;
+**La porte de description** s'exécute sans aucun modèle. Une description est signalée lorsqu'elle :
+- fait écho à son invite : elle est égale à l'invite ou se trouve à l'intérieur, partage une séquence de 6 mots ou plus avec celle-ci, ou 90 % ou plus de ses mots (80 % ou plus de ses mots de contenu) y apparaissent ;
+- englobe la ligne de sujet de l'enregistrement : une séquence de 4 mots ou plus `canon.subject` apparaît comme une séquence continue de ses mots ;
 - est trop courte : moins de 8 mots ou moins de 5 mots de contenu ;
-- duplique une autre description dans l’ensemble : identique une fois la ponctuation supprimée, ou un Jaccard de mots de contenu de 0,85 ou plus ;
+- duplique une autre description dans l'ensemble : identique une fois la ponctuation supprimée, ou un Jaccard des mots de contenu de 0,85 ou plus ;
 - est trop longue pour SigLIP2 : plus de 64 jetons (la seule vérification qui nécessite un tokenizer ; les enregistrements non vérifiés ne sont jamais marqués comme valides).
 
-Les enregistrements signalés sont envoyés à `description-review.jsonl` et à une **feuille de travail aveugle** : chaque image signalée à côté de 3 à 5 images sœurs visuellement les plus proches, sans invite, sans ligne de sujet et sans ancien texte visible, de sorte que la personne qui la réécrit décrive l’image. Un rédacteur facultatif ([plain-sight](https://github.com/mcp-tool-shop-org/plain-sight), Florence-2) peut rédiger une première ébauche à partir des seuls pixels ; les ébauches sont enregistrées sous `captioner_assisted`, et une personne les modifie.
+Les enregistrements signalés sont envoyés à `description-review.jsonl` et à une **feuille de travail aveugle** : chaque image signalée à côté de 3 à 5 images sœurs visuellement les plus proches, sans invite, sans ligne de sujet et sans ancien texte visible, de sorte que la personne qui la réécrit décrive l'image. Un rédacteur facultatif ([plain-sight](https://github.com/mcp-tool-shop-org/plain-sight), Florence-2) peut rédiger une première ébauche à partir des pixels seuls ; les ébauches sont enregistrées sous `captioner_assisted`, et une personne les modifie.
 
-**Le canal d’apparence** est composé de 30 nombres par image (palette, tonalité et texture à la résolution native), de sorte que « le rendu de celle-ci est incorrect » s’affiche séparément de « le sujet de celle-ci est inhabituel ».
+**Le canal d'apparence** est composé de 30 nombres par image (palette, tonalité et texture à la résolution native), de sorte que « le rendu de celle-ci est incorrect » s'affiche séparément de « le sujet de celle-ci est inhabituel ».
 
 ## Installation
 
@@ -65,17 +65,17 @@ Les enregistrements signalés sont envoyés à `description-review.jsonl` et à 
 pip install dataset-desk
 ```
 
-Cela donne la **version légère** : uniquement numpy et Pillow, pas de torch. Les vérifications de doublons, le canal d’apparence, la porte de description et le rapport fonctionnent tous dans cette version (`--backend none`).
+Cela donne la **version légère** : uniquement numpy et Pillow, pas de torch. Les vérifications de doublons, le canal d'apparence, la porte de description et le rapport fonctionnent tous dans cette version (`--backend none`).
 
-Pour l’index d’intégration (recherche, couverture, doublons sémantiques, vérification de l’adéquation de la description), ajoutez les bibliothèques du modèle :
+Pour l'index d'intégration (recherche, couverture, doublons sémantiques, vérification de l'adéquation de la description), ajoutez les bibliothèques du modèle :
 
 ```bash
 pip install "dataset-desk[models]"
 ```
 
-Sous Windows avec une carte graphique NVIDIA, installez d’abord une version CUDA de torch à partir de `https://download.pytorch.org` ; la version Windows de torch de PyPI est uniquement pour CPU.
+Sur Windows avec une GPU NVIDIA, installez d'abord une version CUDA de torch à partir de `https://download.pytorch.org` ; la version Windows de torch de PyPI est uniquement CPU.
 
-Les modèles sont récupérés sur Hugging Face aux révisions fixées la première fois qu’ils sont utilisés, puis chargés à partir de votre cache. Chaque tâche a une valeur par défaut, et `--backend` en choisit une autre :
+Les modèles sont récupérés sur Hugging Face aux révisions fixées la première fois qu'ils sont utilisés, puis chargés à partir de votre cache. Chaque tâche a une valeur par défaut, et `--backend` en choisit une autre :
 
 | Backend | Modèle | Valeur par défaut pour |
 |---|---|---|
@@ -85,9 +85,9 @@ Les modèles sont récupérés sur Hugging Face aux révisions fixées la premi�
 | `eg2` | [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) | code (`--task code`, `lineage`) |
 | `qwen3-emb-0.6b`, `gte-modernbert` | [Qwen3-Embedding 0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B), [gte-modernbert-base](https://huggingface.co/Alibaba-NLP/gte-modernbert-base) | — |
 
-EmbeddingGemma 2 est utilisé de la manière indiquée dans sa fiche de modèle : un préfixe de tâche par commande, un chargement uniquement pour le texte pour le texte et `--dim 768|512|256`. Définissez `HF_HUB_OFFLINE=1` pour interdire les téléchargements. Le rédacteur plain-sight est toujours hors ligne : il ne télécharge jamais.
+EmbeddingGemma 2 est utilisé comme indiqué dans sa fiche de modèle : un préfixe de tâche par commande, chargement uniquement du texte pour le texte et `--dim 768|512|256`. Définissez `HF_HUB_OFFLINE=1` pour interdire les téléchargements. Le rédacteur plain-sight est toujours hors ligne : il ne télécharge jamais.
 
-**Fonctionne sur :** Python 3.11 et 3.12, sous Windows et Linux. CPU par défaut, avec chaque pool de threads limité (4 threads, sauf si `--threads` en indique autrement), et une exécution de modèle réduit le processus à une priorité inférieure à la normale, afin qu’il puisse partager une machine.
+**Fonctionne sur :** Python 3.11 et 3.12, sur Windows et Linux. CPU par défaut, avec chaque pool de threads limité (4 threads, sauf si `--threads` en indique autrement), et une exécution de modèle réduit le processus à une priorité inférieure à la normale, afin qu'il puisse partager une machine.
 
 ## Utilisation
 
@@ -113,9 +113,9 @@ dataset-desk text-index  --source path/to/folder --out desk-out/texts --task cod
 dataset-desk text-search --source path/to/folder --out desk-out/texts --task code --text "where the cache is written"
 ```
 
-`dataset-desk --help` répertorie tous les indicateurs. Codes de sortie : `0` ok, `1` une erreur utilisateur ou un refus, `2` une erreur inattendue. Les erreurs s’affichent sous la forme `error <CODE>: <message>` avec une ligne `hint:` ; `--debug` ajoute la trace de la pile.
+`dataset-desk --help` répertorie tous les indicateurs. Codes de sortie : `0` ok, `1` une erreur utilisateur ou un refus, `2` une erreur inattendue. Les erreurs s'affichent sous la forme `error <CODE>: <message>` avec une ligne `hint:` ; `--debug` ajoute la trace de la pile.
 
-**La disposition du projet qu’il lit** est celle de [style-dataset-lab](https://github.com/mcp-tool-shop-org/style-dataset-lab) :
+**La disposition du projet qu'il lit** est celle de [style-dataset-lab](https://github.com/mcp-tool-shop-org/style-dataset-lab) :
 
 ```text
 project/
@@ -123,25 +123,25 @@ project/
   outputs/<wave>/*.png            the images; a wave's generation.json and _curation.json are read when present
 ```
 
-Un projet sans `records/` fonctionne également, tant que les images se trouvent dans des dossiers sous `outputs/` (les fichiers situés en haut de `outputs/` sont ignorés en tant que feuilles de contact) : chaque image est « non enregistrée », et les vérifications de doublons et d’apparence sont toujours effectuées.
+Un projet sans `records/` fonctionne également, tant que les images se trouvent dans des dossiers sous `outputs/` (les fichiers situés en haut de `outputs/` sont ignorés en tant que feuilles de contact) : chaque image est « non enregistrée », et les vérifications de doublons et d'apparence sont toujours effectuées.
 
 ## Modèle de menace et confiance
 
-- **Ce qu’il lit :** le dossier de projet que vous nommez avec `--project` : images, `records/*.json`, métadonnées des ondes et les données de génération intégrées dans les fichiers PNG. Les commandes de texte lisent le dossier `--source` ou la branche `--rnd-data` que vous nommez. Elles refusent le composant privé et les espaces de stockage de rnd-data, et elles n’affichent que les chemins relatifs.
+- **Ce qu’il lit :** le dossier de projet que vous nommez avec `--project` : images, `records/*.json`, métadonnées des ondes et les données de génération intégrées dans les fichiers PNG. Les commandes de texte lisent le dossier `--source` ou la branche `--rnd-data` que vous nommez. Elles refusent les données privées et les dépôts de données de rnd-data, et elles n’affichent que les chemins relatifs.
 - **Ce qu’il écrit :** uniquement dans `--out` : son cache d’analyse, les caches d’intégration, le rapport, `description-review.jsonl` et la feuille de calcul. Il refuse un `--out` à l’intérieur du projet (`PERM_OUT_INSIDE_PROJECT`), de sorte qu’un projet n’est jamais modifié.
 - **Ce qu’il ne touche jamais :** tout ce qui se trouve en dehors de ces deux dossiers. Il ne supprime rien, nulle part.
 - **Réseau :** la version allégée ne l’utilise jamais. Un moteur de modèle récupère ses poids pré-enregistrés depuis Hugging Face lors de la première utilisation, à moins que `HF_HUB_OFFLINE=1` ne soit défini ; le module de génération est chargé avec `HF_HUB_OFFLINE=1` et `local_files_only=True` à chaque fois. Aucun modèle n’exécute de code à distance.
-- **Autorisations :** un compte d’utilisateur ordinaire. Une GPU a besoin de `--device` plus un `--grant`, afin qu’une carte partagée ne soit pas utilisée par erreur. Avant de charger un modèle, un contrôleur de VRAM vérifie que la mémoire déjà utilisée plus les besoins mesurés du modèle sont inférieurs à `--vram-budget` (par défaut : 26 624 MiB). Il ne supprime jamais rien ; `--wait` effectue des vérifications jusqu’à ce que le chargement soit effectué.
-- **Secrets et télémétrie :** il ne lit aucun identifiant et ne collecte ni n’envoie aucune télémétrie.
-- **Étapes sécurisées :** pour les projets verrouillés pour un test de performance en cours, les intégrations de descriptions et toute acceptation de descriptions basée sur un modèle sont refusées, à moins que `--allow-multimodal-pool` ne soit transmis, afin que les requêtes du test de performance ne soient pas influencées par les modèles qu’il mesure.
+- **Autorisations :** un compte d’utilisateur ordinaire. Une GPU a besoin de `--device` plus un `--grant`, afin qu’une carte partagée ne soit pas utilisée par erreur. Avant de charger un modèle, un contrôleur de VRAM vérifie que la mémoire déjà utilisée, plus les besoins mesurés du modèle, rentrent dans `--vram-budget` (par défaut : 26 624 MiB). Il ne supprime jamais rien ; `--wait` effectue des vérifications jusqu’à ce que le chargement soit effectué.
+- **Secrets et télémétrie :** il ne lit aucune information d’identification et ne collecte ni n’envoie aucune télémétrie.
+- **Étapes sécurisées :** pour les projets verrouillés pour un test de performance en cours, les intégrations de descriptions et toute acceptation de descriptions basée sur un modèle sont refusées, à moins que `--allow-multimodal-pool` ne soit transmis, de sorte que les requêtes du test de performance ne soient pas influencées par les modèles qu’il mesure.
 
 Signalez une vulnérabilité comme décrit dans [SECURITY.md](SECURITY.md).
 
 ## État
 
-**v0.2.1, un prototype public.** Le code est testé hors ligne : 197 tests et 96 % de couverture des lignes, avec de petits éléments de substitution pour les bibliothèques de modèles.
-- **Calibrage :** les exécutions du studio sur ses propres données, sur une RTX 5090, ont défini les seuils de duplication, qui sont provisoires et reposent sur un seul ensemble par type. Les chiffres de VRAM sont des chiffres conservateurs pour la carte entière, contexte CUDA inclus, mesurés sur une RTX 5090 ; d’autres cartes et corpus peuvent différer. Les seuils de code reposent sur 17 copies implantées. La méthode et les données sont disponibles dans [le numéro 16 de la newsletter](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
-- **Grands projets :** les doublons, les valeurs aberrantes et le canal de recherche fonctionnent dans des blocs limités. Sur les ensembles synthétiques, la recherche de quasi-doublons et le canal de recherche prennent quelques minutes pour 100 000 images, alors qu’ils prenaient des heures ou manquaient de mémoire. La vérification des quasi-doublons de la porte de description utilise un filtre de préfixe exact, de sorte qu’elle ne compare que les descriptions qui pourraient atteindre 0,85. La première analyse est environ deux fois plus rapide par image, avec des résultats identiques, et s’exécute en parallèle sous `--threads`.
+**v0.2.2, un prototype public.** Le code est testé hors ligne : 197 tests et 96 % de couverture des lignes, avec de petits éléments de substitution pour les bibliothèques de modèles.
+- **Calibrage :** les exécutions du studio sur ses propres données, sur une RTX 5090, ont défini les seuils de duplication, qui sont provisoires et reposent sur un seul ensemble par type. Les chiffres de VRAM sont des chiffres conservateurs pour la carte entière, contexte CUDA inclus, mesurés sur une RTX 5090 ; d’autres cartes et corpus peuvent différer. Les seuils de code reposent sur 17 copies implantées. La méthode et les données sont disponibles dans [newsletter issue 16](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
+- **Grands projets :** les doublons, les valeurs aberrantes et le canal de recherche fonctionnent dans des blocs délimités. Sur les ensembles synthétiques, la recherche de doublons et le canal de recherche prennent quelques minutes pour 100 000 images, alors qu’ils prenaient des heures ou manquaient de mémoire. La vérification des doublons du filtre de description utilise un filtre de préfixe exact, de sorte qu’il ne compare que les descriptions qui pourraient atteindre 0,85. La première analyse est environ deux fois plus rapide par image, avec des résultats identiques, et s’exécute en parallèle sous `--threads`.
 - **Attendez-vous à ce que la ligne de commande change avant la version 1.0.**
 
 Le document de conception, sa base de recherche et son historique de révision sont disponibles dans la bibliothèque de recherche du studio : [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).

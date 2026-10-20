@@ -33,10 +33,10 @@ dataset-desk detecta ambos, en una carpeta de proyecto, sin modificarla. Escribe
 | Comando | Qué se obtiene |
 |---|---|
 | `index` | Escanea el proyecto (registros, metadatos de onda, datos de generación PNG) e incluye cada imagen única en una caché en `--out` |
-| `dupes` | Copias idénticas (sha256), duplicados cercanos (un dHash de 256 bits con detección de reflejos) y duplicados semánticos (coseno de incrustación), en formato JSON. En un índice DINOv2, utiliza una regla calibrada de dos señales. Dos vistas del mismo objeto nunca se emparejan. |
+| `dupes` | Copias idénticas (sha256), duplicados cercanos (un dHash de 256 bits con conocimiento de espejo) y duplicados semánticos (coseno de incrustación), en formato JSON. En un índice DINOv2, utiliza una regla calibrada de dos señales. Dos vistas del mismo objeto nunca se emparejan. |
 | `search` | Las imágenes más cercanas a una descripción (`--text`), una imagen (`--image`) o ambas juntas |
-| `coverage` | Las mejores imágenes para cada sujeto en una lista de sujetos deseados, para que se muestren los espacios vacíos |
-| `report` | Un informe en Markdown: duplicados, las imágenes aprobadas menos típicas por contenido y apariencia, la auditoría de la descripción y si cada descripción encuentra su propia imagen |
+| `coverage` | Las mejores imágenes para cada sujeto en una lista de sujetos deseados, para que se muestren los huecos |
+| `report` | Un informe en Markdown: duplicados, las imágenes aprobadas menos típicas por contenido y por apariencia, la auditoría de la descripción y si cada descripción encuentra su propia imagen |
 | `text-index` | Incluye los archivos de texto y código de una carpeta `--source` (o una copia de rnd-data), contando los fragmentos con el tokenizador del modelo |
 | `text-dupes` | Archivos exactos y casi duplicados. `--task code` compara solo los scripts. |
 | `text-search` | Los archivos más cercanos a una consulta (`--text`). `--task code` utiliza el mensaje de recuperación de código del modelo. |
@@ -44,7 +44,7 @@ dataset-desk detecta ambos, en una carpeta de proyecto, sin modificarla. Escribe
 
 **Los umbrales** provienen de la calibración del estudio con sus propios datos. Cada uno está marcado como provisional en el código, con la medida de la que proviene:
 - **Imágenes:** en un índice DINOv2, un par es un duplicado cuando `(cosine ≥ 0.94 and the mirror-aware dHash is within 44 bits) or cosine ≥ 0.985`. Otros índices utilizan el dHash dentro de 26 bits, más un coseno ≥ 0,95.
-- **Texto:** 0,98 con bge-m3 y 0,95 para código con EmbeddingGemma 2. Cualquier otro modelo necesita `--semantic`.
+- **Texto:** 0,98 con bge-m3, y 0,95 para código con EmbeddingGemma 2. Cualquier otro modelo necesita `--semantic`.
 
 Dos renders del mismo objeto desde diferentes ángulos de cámara nunca son duplicados. La vista proviene del `provenance.asset_id` y el `render_id` de cada registro, o de nombres de archivo como `<asset>__y<yaw>_e<elev>`.
 
@@ -55,9 +55,9 @@ Dos renders del mismo objeto desde diferentes ángulos de cámara nunca son dupl
 - duplica otra descripción en el conjunto: idéntica una vez que se elimina la puntuación, o un Jaccard de palabras de contenido de 0,85 o más;
 - es demasiado larga para SigLIP2: más de 64 tokens (la única comprobación que necesita un tokenizador; los registros no comprobados nunca se marcan como válidos).
 
-Los registros marcados se envían a `description-review.jsonl` y a una **hoja de trabajo ciega**: cada imagen marcada junto a 3–5 hermanos visualmente más cercanos, sin ningún mensaje, sin ninguna línea de asunto y sin ningún texto antiguo a la vista, para que la persona que la reescriba describa la imagen. Un redactor opcional ([plain-sight](https://github.com/mcp-tool-shop-org/plain-sight), Florence-2) puede escribir un primer borrador solo a partir de los píxeles; los borradores se registran como `captioner_assisted` y una persona los edita.
+Los registros marcados se envían a `description-review.jsonl` y a una **hoja de trabajo ciega**: cada imagen marcada junto a 3-5 hermanos visualmente más cercanos, sin ningún mensaje, sin ninguna línea de asunto y sin ningún texto antiguo a la vista, para que la persona que la reescriba describa la imagen. Un redactor opcional ([plain-sight](https://github.com/mcp-tool-shop-org/plain-sight), Florence-2) puede escribir un primer borrador solo a partir de los píxeles; los borradores se registran como `captioner_assisted`, y una persona los edita.
 
-**El canal de apariencia** son 30 números por imagen (paleta, tono y textura en resolución nativa), por lo que "el renderizado de esta imagen es incorrecto" se muestra por separado de "el sujeto de esta imagen es extraño".
+**El canal de apariencia** son 30 números por imagen (paleta, tono y textura en resolución nativa), por lo que "el renderizado de esta no es correcto" se muestra por separado de "el sujeto de esta es extraño".
 
 ## Instalación
 
@@ -75,7 +75,7 @@ pip install "dataset-desk[models]"
 
 En Windows con una GPU NVIDIA, instale primero una versión de CUDA de torch desde `https://download.pytorch.org`; torch de PyPI es solo para CPU.
 
-Los modelos se obtienen de Hugging Face en las revisiones fijadas la primera vez que se utilizan y, a continuación, se cargan desde su caché. Cada tarea tiene un valor predeterminado, y `--backend` elige otro:
+Los modelos se obtienen de Hugging Face en las revisiones fijadas la primera vez que se utilizan, y luego se cargan desde su caché. Cada tarea tiene un valor predeterminado, y `--backend` elige otro:
 
 | Backend | Modelo | Predeterminado para |
 |---|---|---|
@@ -87,7 +87,7 @@ Los modelos se obtienen de Hugging Face en las revisiones fijadas la primera vez
 
 EmbeddingGemma 2 se utiliza de la manera que indica su tarjeta de modelo: un prefijo de tarea por comando, carga solo de texto para texto y `--dim 768|512|256`. Establezca `HF_HUB_OFFLINE=1` para prohibir las descargas. El redactor de plain-sight siempre está desconectado: nunca descarga.
 
-**Se ejecuta en:** Python 3.11 y 3.12, en Windows y Linux. CPU de forma predeterminada, con cada grupo de subprocesos limitado (4 subprocesos a menos que `--threads` indique lo contrario), y una ejecución del modelo reduce el proceso a una prioridad inferior a la normal, para que pueda compartir una máquina.
+**Se ejecuta en:** Python 3.11 y 3.12, en Windows y Linux. CPU por defecto, con cada grupo de subprocesos limitado (4 subprocesos a menos que `--threads` indique lo contrario), y una ejecución del modelo reduce el proceso a una prioridad inferior a la normal, para que pueda compartir una máquina.
 
 ## Uso
 
@@ -123,24 +123,24 @@ project/
   outputs/<wave>/*.png            the images; a wave's generation.json and _curation.json are read when present
 ```
 
-Un proyecto sin `records/` también funciona, siempre y cuando las imágenes estén en carpetas debajo de `outputs/` (los archivos en la parte superior de `outputs/` se omiten como hojas de contacto): cada imagen es "no registrada" y las comprobaciones de duplicados y apariencia siguen funcionando.
+Un proyecto sin `records/` también funciona, siempre y cuando las imágenes estén en carpetas debajo de `outputs/` (los archivos en la parte superior de `outputs/` se omiten como hojas de contacto): cada imagen es "no registrada", y las comprobaciones de duplicados y apariencia aún se ejecutan.
 
 ## Modelo de amenazas y confianza
 
-- **Lo que lee:** la carpeta del proyecto que nombra con `--project`: imágenes, `records/*.json`, metadatos de onda y los datos de generación incrustados en los archivos PNG. Los comandos de texto leen la carpeta `--source` o la versión `--rnd-data` que usted nombra. Rechazan el componente privado y los almacenes de datos de rnd-data, y solo imprimen rutas relativas.
-- **Lo que escribe:** solo en `--out`: su caché de escaneo, cachés de incrustación, el informe, `description-review.jsonl` y la hoja de cálculo. Rechaza un `--out` dentro del proyecto (`PERM_OUT_INSIDE_PROJECT`), por lo que un proyecto nunca se modifica.
+- **Lo que lee:** la carpeta del proyecto que nombra con `--project`: imágenes, `records/*.json`, metadatos de onda y los datos de generación incrustados en los archivos PNG. Los comandos de texto leen la carpeta `--source` o el `--rnd-data` que haya especificado. Rechazan el componente privado y los almacenes de datos de rnd-data, y solo imprimen rutas relativas.
+- **Lo que escribe:** solo en `--out`: su caché de escaneo, cachés de incrustación, el informe, `description-review.jsonl` y la hoja de cálculo. Rechaza cualquier `--out` dentro del proyecto (`PERM_OUT_INSIDE_PROJECT`), por lo que un proyecto nunca se modifica.
 - **Lo que nunca toca:** nada fuera de esas dos carpetas. No elimina nada, en ninguna parte.
-- **Red:** la versión ligera nunca la utiliza. Un backend de modelo obtiene sus pesos predefinidos de Hugging Face en el primer uso, a menos que se establezca `HF_HUB_OFFLINE=1`; el generador se carga con `HF_HUB_OFFLINE=1` y `local_files_only=True` cada vez. Ningún modelo ejecuta código remoto.
-- **Permisos:** una cuenta de usuario normal. Una GPU necesita `--device` más un ID `--grant`, para que una tarjeta compartida no se utilice por error. Antes de cargar un modelo, un controlador de VRAM comprueba que la memoria que ya está en uso más la necesidad medida del modelo quepan dentro de `--vram-budget` (valor predeterminado: 26.624 MiB). Nunca elimina nada; `--wait` realiza sondeos hasta que la carga se ajuste.
+- **Red:** la versión ligera nunca la utiliza. Un backend de modelo obtiene sus pesos predefinidos de Hugging Face la primera vez que se utiliza, a menos que se establezca `HF_HUB_OFFLINE=1`; el generador se carga con `HF_HUB_OFFLINE=1` y `local_files_only=True` cada vez. Ningún modelo ejecuta código remoto.
+- **Permisos:** una cuenta de usuario normal. Una GPU necesita `--device` más un `--grant`, para que una tarjeta compartida no se utilice por error. Antes de cargar un modelo, un controlador de VRAM comprueba que la memoria que ya se está utilizando más las necesidades medidas del modelo quepan dentro de `--vram-budget` (valor predeterminado: 26.624 MiB). Nunca elimina nada; `--wait` realiza sondeos hasta que la carga se ajuste.
 - **Secretos y telemetría:** no lee ninguna credencial y no recopila ni envía ninguna telemetría.
-- **Pasos protegidos:** en los proyectos bloqueados para una prueba de rendimiento en curso, se rechazan las incrustaciones de descripción y cualquier aceptación de descripciones basada en el modelo, a menos que se pase `--allow-multimodal-pool`, para que las consultas de la prueba de rendimiento no se vean influenciadas por los modelos que mide.
+- **Pasos protegidos:** en los proyectos bloqueados para una prueba de rendimiento en curso, se rechazan las incrustaciones de descripción y cualquier aceptación de descripciones basada en modelos, a menos que se pase `--allow-multimodal-pool`, para que las consultas de la prueba de rendimiento no se vean influenciadas por los modelos que se miden.
 
 Informe de una vulnerabilidad según lo descrito en [SECURITY.md](SECURITY.md).
 
 ## Estado
 
-**v0.2.1, un prototipo público.** El código se prueba sin conexión: 197 pruebas y una cobertura de líneas del 96 %, con pequeños sustitutos para las bibliotecas de modelos.
-- **Calibración:** las ejecuciones del estudio en sus propios datos, en una RTX 5090, establecen los umbrales de duplicación, que son provisionales y se basan en un grupo por tipo. Las cifras de VRAM son cifras conservadoras de toda la tarjeta, incluido el contexto CUDA, medidas en una RTX 5090; otras tarjetas y corpus pueden diferir. Los umbrales de código se basan en 17 copias plantadas. El método y los datos se encuentran en [newsletter issue 16](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
+**v0.2.2, un prototipo público.** El código se prueba sin conexión: 197 pruebas y una cobertura de líneas del 96 %, con pequeños sustitutos para las bibliotecas de modelos.
+- **Calibración:** las ejecuciones del estudio en sus propios datos, en una RTX 5090, establecen los umbrales de duplicados, que son provisionales y se basan en un grupo por tipo. Las cifras de VRAM son cifras conservadoras de toda la tarjeta, incluido el contexto CUDA, medidas en una RTX 5090; otras tarjetas y corpus pueden diferir. Los umbrales del código se basan en 17 copias plantadas. El método y los datos se encuentran en [newsletter issue 16](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
 - **Proyectos grandes:** los duplicados, los valores atípicos y el canal de búsqueda funcionan en bloques delimitados. En conjuntos sintéticos, la búsqueda de duplicados cercanos y el canal de búsqueda tardan minutos con 100.000 imágenes, mientras que antes tardaban horas o se quedaban sin memoria. La comprobación de duplicados cercanos de la puerta de descripción utiliza un filtro de prefijo exacto, por lo que solo compara las descripciones que podrían alcanzar 0,85. El primer escaneo es aproximadamente 2 veces más rápido por imagen, con resultados idénticos, y se ejecuta en paralelo bajo `--threads`.
 - **Espere que la línea de comandos cambie antes de la versión 1.0.**
 
@@ -159,7 +159,7 @@ CI mantiene la cobertura de líneas en el 90 % o más.
 
 ## Licencia
 
-[MIT](LICENSE). Los modelos que puede cargar no forman parte de este paquete, y cada uno tiene su propia licencia; lea la tarjeta del modelo antes de usarlo.
+[MIT](LICENSE). Los modelos que puede cargar no forman parte de este paquete, y cada uno tiene su propia licencia; lea la tarjeta del modelo antes de utilizarlo.
 
 ---
 

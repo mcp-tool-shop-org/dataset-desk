@@ -7,7 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-20
+
+0.2.1 was tagged on GitHub but never published to PyPI. 0.2.2 ships 0.2.1's changes, listed below, with one
+security update to the release pipeline.
+
+### Security
+- The release workflow now pins `pypa/gh-action-pypi-publish` v1.14.3 (commit 7245906f), which includes the fix for
+  [GHSA-5xjx-3w67-w9x9](https://github.com/pypa/gh-action-pypi-publish/security/advisories/GHSA-5xjx-3w67-w9x9)
+  (pypa#427: certifi and sigstore upgraded) and hash-checks the action's
+  runtime dependencies. It follows the
+  [eMudhra/emSign CA certificate incident](https://discuss.python.org/t/information-for-python-users-regarding-emudhra-emsign-ca-certificate-security-incident/109576)
+  (2026-10-20). 0.2.1's release run, which used v1.14.2, was stopped before upload.
+
+### Changed
+- `registry.REGISTRY`: the `vram_mib` figures are now **conservative whole-card figures**. Each is the larger of the
+  highest real-run peak measured and the earlier reserved figure plus that backend's measured CUDA context, on an
+  RTX 5090, so `need_mib = vram_mib + 1,024 MiB` covers CUDA context overhead on a shared GPU.
+  - A real run's peak can exceed a short synthetic one, because the allocator's reserved pool grows over many
+    batches; the 1,024 MiB margin is the buffer for that.
+  - Other cards and corpora may differ.
+
+  | backend | vram_mib | source |
+  |---|---|---|
+  | dinov2 | 1,272 | registered 636 + context 636 |
+  | siglip2 | 6,207 | 0.2.0 dogfood's whole-card peak on real images |
+  | gte-modernbert | 7,112 | registered 6,544 + context 568 |
+  | bge-m3 | 8,442 | 0.2.0 dogfood's whole-card peak on rnd-data text |
+  | eg2 | 13,119 | registered 12,550 (multimodal) + context 569 |
+  | qwen3-emb-0.6b | 15,065 | registered 14,470 + context 595 |
+
+- `desk.scan`: about 2× faster per image on one thread, with identical results (`scan.jsonl` rows and `SCAN_V = 2`
+  are unchanged). The first uncached scan runs in parallel under `--threads` (a `ProcessPoolExecutor` when
+  `threads > 1` and there are at least 8 uncached images), and since the CLI's default is `--threads 4`, a default
+  run is now parallel.
+- `description_gate.audit_records`: replaced the full-postings Jaccard candidate loop with rare-first prefix filtering
+  (`L - ceil(tau * L) + 1`), producing identical `near_pairs` and `near_groups`.
+- `desk.mid_rank` and `desk._rank_descriptions`: with `_RANK_TIE_EPS = 1e-6`, tied image vectors now stay tied
+  whatever the BLAS block size.
+- `desk.lineage`: keeps only the top k pairs per file name, in bounded memory.
+  - Its cosines come from a blocked float32 matrix product.
+  - So a pair whose cosine sits on a 4-decimal rounding boundary can differ from 0.2.0 by 0.0001, and the order of
+    such near-ties can differ with it.
+- `desk.pairs_at_least`, `desk.top1_percentiles`, `desk.coverage`: bounded block sizing via `_block_rows` and
+  single-slice `XA = img[A]`.
+- `backends.transformers_warnings_off`: also disables and restores transformers' weight-loading progress bars across all model loaders.
+
+### Changed field: `max_content_jaccard`
+- `description_gate.audit_records`: a record's `max_content_jaccard` is now the exact value at ≥ 0.85 and `null`
+  below. The flags are unchanged.
+
+### Fixed
+- `backends._vram_info_mib`: catches CPU-only torch builds when `--device cuda` is requested and raises `ENV_NO_CUDA_TORCH` with a hint to install CUDA torch from `https://download.pytorch.org` or pass `--device cpu`.
+- `desk.check_multimodal_pool`, `desk.index`, `desk.report`: image-only backends (`dinov2`) no longer require `--images-only` on locked multimodal benchmark pools when called from Python or CLI.
+
 ## [0.2.1] - 2026-10-20
+
+Not published to PyPI: superseded by 0.2.2 (publish-action security update). Its changes ship in 0.2.2.
 
 ### Changed
 - `registry.REGISTRY`: the `vram_mib` figures are now **conservative whole-card figures**. Each is the larger of the
