@@ -109,6 +109,7 @@ dataset-desk text-dupes  --source my-notes --out desk-out/notes
 dataset-desk text-index  --source my-scripts --out desk-out/scripts --task code   # EmbeddingGemma 2, for code
 dataset-desk text-dupes  --source my-scripts --out desk-out/scripts --task code
 dataset-desk text-search --source my-scripts --out desk-out/scripts --task code --text "where the cache is written"
+dataset-desk text-index  --rnd-data rnd-data --out desk-out/rnd-data --task code   # lineage reads the code index
 dataset-desk lineage     --rnd-data rnd-data --out desk-out/rnd-data
 ```
 
