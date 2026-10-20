@@ -1175,7 +1175,7 @@
           "path": ".gitignore"
         },
         {
-          "hash": "6e1df79afe9bba653300da72a8a3683f1180c8f6c01f4e3a83f1a7bb9e49865f",
+          "hash": "96b0d26589e9184ccdf6262d9f1ed5ec02570d18520f0531b81b7a6987363e96",
           "path": "CHANGELOG.md"
         },
         {
@@ -1872,7 +1872,7 @@
   ],
   "engine": "1.24.0",
   "generatedFrom": {
-    "commit": "44b0fdb3a79a63a4f1b76a00d6064c7128f2cfe7",
+    "commit": "20d81ade2ed053eeb6e0d15f16a26d13089aa824",
     "tracked": 51
   },
   "landings": [
