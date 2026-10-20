@@ -31,9 +31,11 @@ import argparse
 import hashlib
 import json
 import os
+import pathlib
+import re
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from dataset_desk import backends  # noqa: E402 — must run before numpy imports so BLAS thread env vars are capped
 
@@ -41,11 +43,16 @@ from dataset_desk import backends  # noqa: E402 — must run before numpy import
 backends.cap_threads(backends._argv_threads())
 
 import numpy as np  # noqa: E402
-from dataset_desk import description_gate  # noqa: E402
+from dataset_desk import description_gate, registry  # noqa: E402
 from dataset_desk.errors import EXIT_RUNTIME, DeskError  # noqa: E402
 from dataset_desk import __version__  # noqa: E402
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+TEXT_EXT = frozenset({".md", ".txt", ".json", ".jsonl", ".log", ".out", ".py", ".sh", ".toml", ".yml", ".yaml", ""})
+CODE_EXT = frozenset({".py", ".sh", ".toml", ".yml", ".yaml"})
+TEXT_CHUNK_CHARS = 6000
+TEXT_MAX_CHUNKS = 8
+NUL_PROBE_BYTES = 4096
 NEAR_BITS = 10        # dHash Hamming distance (of 256 bits) for a near-duplicate, as in the multimodal design
 # The cosine at which a pair is flagged for review as a semantic duplicate. SemDeDup's band was 0.93-0.97 in CLIP
 # space; it belongs to that embedder, so recalibrate it for each one from the top-1 neighbour percentiles in the
@@ -616,31 +623,77 @@ def scan(project: str, strict: bool = False, out: str | None = None) -> tuple[li
 
 # ---- the cache: one folder per backend under --out ------------------------------------------------------------
 
-def cache_dir(out: str, backend: str) -> str:
-    return os.path.join(out, backend)
+def _default_dim_for_backend(backend: str) -> int:
+    if backend in registry.REGISTRY:
+        return registry.REGISTRY[backend].dim
+    if backend == "fake":
+        return 4
+    return 0
 
 
-def save_cache(out: str, backend: str, items: list[Item], img: np.ndarray, txt: dict, meta: dict,
-               cluster_txt: dict | None = None) -> None:
-    d = cache_dir(out, backend)
+def _default_vision_tokens_for_backend(backend: str) -> int:
+    if backend == "siglip2":
+        return 729
+    if backend == "dinov2":
+        return 256
+    if backend in ("eg2", "fake"):
+        return 280
+    return 0
+
+
+def cache_dir(
+    out: str,
+    backend: str,
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+) -> str:
+    parts = [backend]
+    def_dim = _default_dim_for_backend(backend)
+    if dim is not None and dim > 0 and dim != def_dim:
+        parts.append(f"d{dim}")
+    def_vt = _default_vision_tokens_for_backend(backend)
+    if vision_tokens is not None and vision_tokens > 0 and vision_tokens != def_vt:
+        parts.append(f"vt{vision_tokens}")
+    return os.path.join(out, "-".join(parts))
+
+
+def save_cache(
+    out: str,
+    backend: str,
+    items: list[Item],
+    img: np.ndarray,
+    txt: dict,
+    meta: dict,
+    cluster_txt: dict | None = None,
+    *,
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+) -> None:
+    d = cache_dir(out, backend, dim=dim, vision_tokens=vision_tokens)
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "items.jsonl"), "w", encoding="utf-8") as f:
         for it in items:
             f.write(json.dumps(asdict(it), ensure_ascii=False) + "\n")
     np.save(os.path.join(d, "images.npy"), img)
-    dim = int(img.shape[1]) if img.ndim == 2 else 0
+    vec_dim = int(img.shape[1]) if img.ndim == 2 else 0
     shas = sorted(txt)
     np.save(os.path.join(d, "texts.npy"),
-            np.vstack([txt[s] for s in shas]) if shas else np.zeros((0, dim), np.float32))
+            np.vstack([txt[s] for s in shas]) if shas else np.zeros((0, vec_dim), np.float32))
     cshas = sorted(cluster_txt or {})
     np.save(os.path.join(d, "cluster_texts.npy"),
-            np.vstack([cluster_txt[s] for s in cshas]) if cshas else np.zeros((0, dim), np.float32))
+            np.vstack([cluster_txt[s] for s in cshas]) if cshas else np.zeros((0, vec_dim), np.float32))
     with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as f:
         json.dump({**meta, "text_shas": shas, "cluster_text_shas": cshas}, f, indent=1)
 
 
-def load_cache(out: str, backend: str) -> tuple[list[Item], np.ndarray, dict, dict]:
-    d = cache_dir(out, backend)
+def load_cache(
+    out: str,
+    backend: str,
+    *,
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+) -> tuple[list[Item], np.ndarray, dict, dict]:
+    d = cache_dir(out, backend, dim=dim, vision_tokens=vision_tokens)
     try:
         with open(os.path.join(d, "meta.json"), encoding="utf-8") as f:
             meta = json.load(f)
@@ -664,16 +717,29 @@ def index(project: str, out: str, emb, limit: int | None = None, grant: str | No
           strict: bool = False, images_only: bool = False, allow_multimodal_pool: bool = False,
           log=print) -> dict:
     """Embed every unique image, and every approved record's description as a search query. Reuses vectors already
-    cached for the same backend, revision and vision token budget, and shares scan.jsonl across backends."""
+    cached for the same backend, revision and settings, and shares scan.jsonl across backends."""
     check_multimodal_pool(project, emb.name, images_only=images_only, allow_multimodal_pool=allow_multimodal_pool)
     items, stats = scan(project, strict=strict, out=out)
     if limit:
         items = items[:limit]
     old_img, old_txt, old_ctxt = {}, {}, {}
-    vtokens = getattr(emb, "vision_tokens", 280)
+    vtokens = int(getattr(emb, "vision_tokens", 280))
+    emb_dim = int(getattr(emb, "dim", 0))
+    max_tokens = int(getattr(emb, "max_tokens", 0))
+    dtype_name = getattr(emb, "dtype_name", "float32")
+    index_role = "query"
+    expected_meta = {
+        "revision": emb.revision,
+        "dim": emb_dim,
+        "vision_tokens": vtokens,
+        "max_tokens": max_tokens,
+        "max_chunks": TEXT_MAX_CHUNKS,
+        "role": index_role,
+        "dtype": dtype_name,
+    }
     try:
-        o_items, o_img, o_txt, o_meta = load_cache(out, emb.name)
-        if o_meta.get("revision") == emb.revision and o_meta.get("vision_tokens", 280) == vtokens:
+        o_items, o_img, o_txt, o_meta = load_cache(out, emb.name, dim=emb_dim, vision_tokens=vtokens)
+        if all(o_meta.get(k) == v for k, v in expected_meta.items()):
             old_img = dict(zip((it.sha256 for it in o_items), o_img, strict=True))
             cur_exp = {x.sha256: (x.record or {}).get("explanation") for x in items}
             old_txt = {
@@ -697,8 +763,10 @@ def index(project: str, out: str, emb, limit: int | None = None, grant: str | No
             old_img[it.sha256] = v
     t_img = time.time() - t0
 
+    can_text = "text" in getattr(emb, "modalities", ("text", "image"))
+    eff_images_only = bool(images_only or emb.name == "none" or not can_text)
     described = []
-    if not images_only and emb.name != "none":
+    if not eff_images_only:
         described = [
             it for it in items
             if it.status == "approved" and (it.record or {}).get("explanation") and it.sha256 not in old_txt
@@ -710,22 +778,26 @@ def index(project: str, out: str, emb, limit: int | None = None, grant: str | No
             for it, cv in zip(described, emb.texts(texts_list, "clustering"), strict=True):
                 old_ctxt[it.sha256] = cv
 
-    dim = getattr(emb, "dim", 0)
+    dim = int(getattr(emb, "dim", 0))
     img = np.vstack([old_img[it.sha256] for it in items]) if (items and dim > 0) else np.zeros((len(items), dim), np.float32)
     keep = (
         {it.sha256 for it in items if it.status == "approved" and (it.record or {}).get("explanation")}
-        if (not images_only and emb.name != "none")
+        if not eff_images_only
         else set()
     )
     txt = {s: v for s, v in old_txt.items() if s in keep}
     cluster_txt = {s: v for s, v in old_ctxt.items() if s in keep}
+    final_dim = int(img.shape[1]) if items else dim
     meta = {
         "backend": emb.name,
         "revision": emb.revision,
-        "dim": int(img.shape[1]) if items else 0,
+        "dim": final_dim,
         "vision_tokens": vtokens,
-        "dtype": getattr(emb, "dtype_name", "float32"),
-        "images_only": bool(images_only or emb.name == "none"),
+        "max_tokens": max_tokens,
+        "max_chunks": TEXT_MAX_CHUNKS,
+        "role": index_role,
+        "dtype": getattr(emb, "dtype_name", dtype_name),
+        "images_only": eff_images_only,
         "project": os.path.abspath(project),
         "grant": grant,
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -736,9 +808,9 @@ def index(project: str, out: str, emb, limit: int | None = None, grant: str | No
         **{k: v for k, v in stats.items() if k != "problems"},
         "problems": stats["problems"],
     }
-    save_cache(out, emb.name, items, img, txt, meta, cluster_txt=cluster_txt)
+    save_cache(out, emb.name, items, img, txt, meta, cluster_txt=cluster_txt, dim=final_dim, vision_tokens=vtokens)
     log(f"indexed {len(items)} unique images ({len(todo)} new, {t_img:.1f} s) and {len(txt)} descriptions "
-        f"with {emb.name}; cache: {cache_dir(out, emb.name)}")
+        f"with {emb.name}; cache: {cache_dir(out, emb.name, dim=final_dim, vision_tokens=vtokens)}")
     return meta
 
 
@@ -1190,6 +1262,656 @@ def report(project: str, out: str, items: list[Item], img: np.ndarray, txt: dict
     return path
 
 
+# ---- text and code input: --source and --rnd-data ---------------------------------------------------------------
+
+@dataclass
+class TextItem:
+    sha256: str
+    paths: list[str]
+    name: str = ""
+    suffix: str = ""
+    run_id: str | None = None
+    outcome: str | None = None
+    occurrences: list[dict] = field(default_factory=list)
+    chunks: int = 1
+
+
+def _has_nul_first_4kb(path: str) -> bool:
+    with open(path, "rb") as f:
+        return b"\x00" in f.read(NUL_PROBE_BYTES)
+
+
+_TOKEN_SPAN_RE = re.compile(r"\S{1,6}\s*|\s+")
+
+
+class _SpanTokenizer:
+    """Deterministic span tokenizer used when an offline/stand-in embedder has no HF tokenizer attached."""
+
+    def spans(self, text: str) -> list[tuple[int, int]]:
+        return [m.span() for m in _TOKEN_SPAN_RE.finditer(text)]
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        return list(range(len(self.spans(text))))
+
+    def __call__(self, text: str, **_kw) -> dict:
+        return {"input_ids": self.encode(text)}
+
+
+_FALLBACK_TOKENIZER = _SpanTokenizer()
+
+
+def _resolve_tokenizer(emb=None, tokenizer=None):
+    if tokenizer is not None:
+        return tokenizer
+    if emb is None:
+        return _FALLBACK_TOKENIZER
+    tok = getattr(emb, "tokenizer", None)
+    if tok is not None:
+        return tok
+    tok = backends._extract_model_tokenizer(getattr(emb, "model", None), getattr(emb, "processor", None))
+    if tok is not None:
+        return tok
+    emb_name = getattr(emb, "name", None)
+    if emb_name in ("fake", "none") or type(emb) in (backends.FakeEmbedder, backends.NoneEmbedder):
+        return _FALLBACK_TOKENIZER
+    raise DeskError(
+        "INPUT_BAD_ARGUMENT",
+        f"REFUSED: backend {emb_name or type(emb).__name__!r} has no tokenizer for token-counted chunking",
+    )
+
+
+def _encode_token_ids(tok, text: str) -> list:
+    if hasattr(tok, "encode"):
+        try:
+            return list(tok.encode(text, add_special_tokens=False))
+        except TypeError:
+            return list(tok.encode(text))
+    if callable(tok):
+        try:
+            res = tok(text, add_special_tokens=False, truncation=False, padding=False)
+        except TypeError:
+            res = tok(text)
+        return list(res["input_ids"] if isinstance(res, dict) else res)
+    return _FALLBACK_TOKENIZER.encode(text)
+
+
+def chunk_text(
+    text: str,
+    emb=None,
+    *,
+    max_tokens: int | None = None,
+    prefix: str = "",
+    prefix_tokens: int | None = None,
+    tokenizer=None,
+    max_chunks: int = TEXT_MAX_CHUNKS,
+) -> list[str]:
+    """Split `text` into at most `max_chunks` chunks of at most `max_tokens - prefix_tokens - 4` tokens."""
+    if not text:
+        return [""]
+    if isinstance(emb, int) and max_tokens is None:
+        eff_max_tokens = emb
+        emb = None
+    elif max_tokens is not None:
+        eff_max_tokens = int(max_tokens)
+    elif emb is not None and getattr(emb, "max_tokens", 0) > 0:
+        eff_max_tokens = int(emb.max_tokens)
+    else:
+        eff_max_tokens = registry.REGISTRY["bge-m3"].max_tokens
+
+    tok = _resolve_tokenizer(emb, tokenizer)
+    if prefix_tokens is not None:
+        eff_prefix_tokens = max(0, int(prefix_tokens))
+    elif prefix:
+        eff_prefix_tokens = len(_encode_token_ids(tok, prefix))
+    else:
+        eff_prefix_tokens = 0
+
+    chunk_budget = max(1, eff_max_tokens - eff_prefix_tokens - 4)
+
+    if tok is _FALLBACK_TOKENIZER:
+        spans = tok.spans(text)
+        if len(spans) <= chunk_budget:
+            return [text]
+        chunks: list[str] = []
+        i = 0
+        while i < len(spans) and len(chunks) < max_chunks:
+            end_idx = min(i + chunk_budget, len(spans))
+            chunks.append(text[spans[i][0]:spans[end_idx - 1][1]])
+            i = end_idx
+        return chunks
+
+    if hasattr(tok, "encode") and hasattr(tok, "decode"):
+        ids = _encode_token_ids(tok, text)
+        if len(ids) <= chunk_budget:
+            return [text]
+        chunks = []
+        i = 0
+        while i < len(ids) and len(chunks) < max_chunks:
+            sub_ids = ids[i:i + chunk_budget]
+            try:
+                ch = tok.decode(sub_ids, skip_special_tokens=True)
+            except TypeError:
+                ch = tok.decode(sub_ids)
+            chunks.append(ch)
+            i += chunk_budget
+        return chunks
+
+    spans = _FALLBACK_TOKENIZER.spans(text)
+    if len(_encode_token_ids(tok, text)) <= chunk_budget or not spans:
+        return [text]
+    chunks = []
+    i = 0
+    while i < len(spans) and len(chunks) < max_chunks:
+        lo = i + 1
+        hi = min(i + chunk_budget, len(spans))
+        best = lo
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            cand = text[spans[i][0]:spans[mid - 1][1]]
+            if len(_encode_token_ids(tok, cand)) <= chunk_budget:
+                best = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        chunks.append(text[spans[i][0]:spans[best - 1][1]])
+        i = best
+    return chunks
+
+
+def embed_file_chunks(emb, chunks: list[str], role: str = "document", title: str | None = None) -> np.ndarray:
+    """Embed a file's chunks and return their unit-normalized mean vector."""
+    if not chunks:
+        chunks = [""]
+    titles = [title] * len(chunks) if (title is not None and role == "document") else None
+    vecs = emb.texts(chunks, role, titles=titles) if titles is not None else emb.texts(chunks, role)
+    if vecs.ndim != 2 or vecs.shape[1] == 0:
+        return np.zeros((0,), np.float32)
+    return backends.unit_rows(vecs.mean(axis=0))[0]
+
+
+def _check_not_private_path(path: str) -> None:
+    for candidate in (os.path.abspath(path), os.path.realpath(os.path.abspath(path))):
+        parts = [p.lower() for p in pathlib.Path(candidate).parts]
+        if "rnd-data-private" in parts or "blobs" in parts:
+            raise DeskError("PERM_PRIVATE_SOURCE", f"REFUSED: {path!r} names a private or blob store")
+
+
+def _check_out_not_inside(source_dir: str, out_dir: str) -> None:
+    try:
+        inside = os.path.commonpath([os.path.abspath(source_dir), os.path.abspath(out_dir)]) == os.path.abspath(source_dir)
+    except ValueError:
+        inside = False
+    if inside:
+        raise DeskError("PERM_OUT_INSIDE_PROJECT", "REFUSED: --out is inside the source folder; the desk never writes into a source")
+
+
+def scan_text_source(source: str) -> tuple[list[TextItem], dict]:
+    """Scan every file under `source` whose suffix is in TEXT_EXT, skipping NUL-containing files, distinct by sha256."""
+    _check_not_private_path(source)
+    src_abs = os.path.realpath(os.path.abspath(source))
+    if not os.path.isdir(src_abs):
+        raise DeskError("INPUT_BAD_ARGUMENT", f"source folder {source!r} does not exist")
+    by_sha: dict[str, TextItem] = {}
+    seen_files = 0
+    nul_skipped = 0
+    for root, dirs, files in os.walk(src_abs):
+        dirs[:] = sorted(d for d in dirs if d != ".git")
+        for fname in sorted(files):
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in TEXT_EXT:
+                continue
+            full = os.path.join(root, fname)
+            real = os.path.realpath(full)
+            try:
+                in_root = os.path.commonpath([src_abs, real]) == src_abs
+            except ValueError:
+                in_root = False
+            if not in_root:
+                raise DeskError("PERM_PRIVATE_SOURCE", f"REFUSED: path {fname!r} resolves outside source folder")
+            if _has_nul_first_4kb(real):
+                nul_skipped += 1
+                continue
+            seen_files += 1
+            rel = os.path.relpath(full, src_abs).replace("\\", "/")
+            sha = sha256_file(real)
+            it = by_sha.get(sha)
+            if it is None:
+                it = TextItem(sha256=sha, paths=[], name=fname, suffix=ext)
+                by_sha[sha] = it
+            it.paths.append(rel)
+            it.occurrences.append({"path": rel, "run_id": None, "name": fname, "suffix": ext, "outcome": None})
+    return list(by_sha.values()), {"files": seen_files, "unique": len(by_sha), "nul_skipped": nul_skipped}
+
+
+def _read_run_outcome(run_dir: str) -> str | None:
+    outcome_path = os.path.join(run_dir, "files", "outcome.json")
+    if not os.path.isfile(outcome_path):
+        return None
+    try:
+        with open(outcome_path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    run_sub = obj.get("run")
+    if isinstance(run_sub, dict) and run_sub.get("outcome") is not None:
+        return str(run_sub["outcome"])
+    if obj.get("outcome") is not None:
+        return str(obj["outcome"])
+    return None
+
+
+def scan_rnd_data(checkout: str) -> tuple[list[TextItem], dict]:
+    """Read rnd-data's public files from runs/*/manifest.json copies whose store is 'rnd-data'."""
+    _check_not_private_path(checkout)
+    checkout_abs = os.path.realpath(os.path.abspath(checkout))
+    runs_dir = os.path.join(checkout_abs, "runs")
+    if not os.path.isdir(runs_dir):
+        raise DeskError("PERM_PRIVATE_SOURCE", f"REFUSED: {checkout!r} has no runs/ directory")
+
+    by_sha: dict[str, TextItem] = {}
+    seen_files = 0
+    nul_skipped = 0
+    runs_seen = 0
+
+    for run_folder in sorted(os.listdir(runs_dir)):
+        rdir = os.path.join(runs_dir, run_folder)
+        if not os.path.isdir(rdir):
+            continue
+        mpath = os.path.join(rdir, "manifest.json")
+        if not os.path.isfile(mpath):
+            continue
+        try:
+            with open(mpath, encoding="utf-8") as f:
+                manifest = json.load(f)
+        except (OSError, json.JSONDecodeError) as err:
+            raise DeskError("INPUT_BAD_ARGUMENT", f"invalid manifest {mpath}", cause=err) from err
+
+        if not isinstance(manifest, dict):
+            continue
+        runs_seen += 1
+        run_id = str(manifest.get("id") or run_folder)
+        if "rnd-data-private" in str(manifest.get("source") or "").lower():
+            raise DeskError("PERM_PRIVATE_SOURCE", f"REFUSED: manifest {run_id!r} names rnd-data-private")
+
+        outcome = _read_run_outcome(rdir)
+        for copy in manifest.get("copies") or []:
+            if not isinstance(copy, dict):
+                continue
+            store = str(copy.get("store") or "")
+            raw_loc = str(copy.get("location") or "")
+            loc = raw_loc.replace("\\", "/")
+
+            if "rnd-data-private" in store.lower() or "private" in store.lower() or "rnd-data-private" in loc.lower():
+                raise DeskError(
+                    "PERM_PRIVATE_SOURCE",
+                    f"REFUSED: manifest {run_id!r} names private store or path ({store!r}, {raw_loc!r})",
+                )
+            if os.path.isabs(raw_loc) or os.path.isabs(loc) or ".." in loc.split("/"):
+                raise DeskError(
+                    "PERM_PRIVATE_SOURCE",
+                    f"REFUSED: manifest {run_id!r} location {raw_loc!r} is outside the checkout",
+                )
+            if store != "rnd-data":
+                continue
+            if not loc.startswith("runs/"):
+                raise DeskError(
+                    "PERM_PRIVATE_SOURCE",
+                    f"REFUSED: manifest {run_id!r} rnd-data copy {raw_loc!r} is outside runs/",
+                )
+            candidate = os.path.join(checkout_abs, loc)
+            real = os.path.realpath(os.path.abspath(candidate))
+            try:
+                in_runs = os.path.commonpath([runs_dir, real]) == runs_dir
+            except ValueError:
+                in_runs = False
+            if not in_runs:
+                raise DeskError(
+                    "PERM_PRIVATE_SOURCE",
+                    f"REFUSED: manifest {run_id!r} copy {raw_loc!r} escapes checkout runs/",
+                )
+            if not os.path.isfile(real):
+                raise DeskError(
+                    "PERM_PRIVATE_SOURCE",
+                    f"REFUSED: manifest {run_id!r} copy {raw_loc!r} is missing from checkout",
+                )
+            fname = os.path.basename(loc)
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in TEXT_EXT:
+                continue
+            if _has_nul_first_4kb(real):
+                nul_skipped += 1
+                continue
+            seen_files += 1
+            sha = sha256_file(real)
+            it = by_sha.get(sha)
+            if it is None:
+                it = TextItem(sha256=sha, paths=[], name=fname, suffix=ext, run_id=run_id, outcome=outcome)
+                by_sha[sha] = it
+            it.paths.append(loc)
+            it.occurrences.append({
+                "path": loc,
+                "run_id": run_id,
+                "name": fname,
+                "suffix": ext,
+                "outcome": outcome,
+            })
+
+    return list(by_sha.values()), {
+        "files": seen_files,
+        "unique": len(by_sha),
+        "runs": runs_seen,
+        "nul_skipped": nul_skipped,
+    }
+
+
+def text_cache_dir(
+    out: str,
+    backend: str,
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+) -> str:
+    def_dim = _default_dim_for_backend(backend)
+    folder = f"{backend}-d{dim}" if (dim is not None and dim > 0 and dim != def_dim) else backend
+    return os.path.join(out, folder, "text")
+
+
+def save_text_cache(
+    out: str,
+    backend: str,
+    items: list[TextItem],
+    vecs: np.ndarray,
+    meta: dict,
+    *,
+    symmetric_vecs: np.ndarray | None = None,
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+) -> None:
+    d = text_cache_dir(out, backend, dim=dim, vision_tokens=vision_tokens)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "items.jsonl"), "w", encoding="utf-8") as f:
+        for it in items:
+            f.write(json.dumps(asdict(it), ensure_ascii=False) + "\n")
+    np.save(os.path.join(d, "texts.npy"), vecs)
+    sym_path = os.path.join(d, "texts_symmetric.npy")
+    if symmetric_vecs is not None:
+        np.save(sym_path, symmetric_vecs)
+    elif os.path.isfile(sym_path):
+        os.remove(sym_path)
+    with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=1)
+
+
+def load_text_cache(
+    out: str,
+    backend: str,
+    *,
+    role: str = "document",
+    dim: int | None = None,
+    vision_tokens: int | None = None,
+) -> tuple[list[TextItem], np.ndarray, dict]:
+    d = text_cache_dir(out, backend, dim=dim, vision_tokens=vision_tokens)
+    try:
+        with open(os.path.join(d, "meta.json"), encoding="utf-8") as f:
+            meta = json.load(f)
+        with open(os.path.join(d, "items.jsonl"), encoding="utf-8") as f:
+            items = [TextItem(**json.loads(line)) for line in f if line.strip()]
+        sym_path = os.path.join(d, "texts_symmetric.npy")
+        needs_symmetric = role == "symmetric" and (
+            backend in ("eg2", "fake") or meta.get("role") == "document+symmetric"
+        )
+        if needs_symmetric:
+            if not os.path.isfile(sym_path):
+                raise DeskError(
+                    "STATE_NO_INDEX",
+                    f"no symmetric vectors in {backend} text index under {d}; rerun: dataset-desk text-index --backend {backend}",
+                )
+            vec_file = sym_path
+        elif role == "symmetric" and os.path.isfile(sym_path):
+            vec_file = sym_path
+        else:
+            vec_file = os.path.join(d, "texts.npy")
+        vecs = np.load(vec_file)
+    except OSError as err:
+        raise DeskError(
+            "STATE_NO_INDEX",
+            f"no {backend} text index under {d}; run: dataset-desk text-index --backend {backend}",
+            cause=err,
+        ) from err
+    return items, vecs, meta
+
+
+def text_index(
+    out: str,
+    emb,
+    *,
+    source: str | None = None,
+    rnd_data: str | None = None,
+    limit: int | None = None,
+    grant: str | None = None,
+    log=print,
+) -> dict:
+    """Embed text/code files from --source or --rnd-data into <out>/<backend>/text/, reusing cached vectors by sha256
+    and settings."""
+    if bool(source) == bool(rnd_data):
+        raise DeskError("INPUT_BAD_ARGUMENT", "text-index needs either --source <folder> or --rnd-data <checkout>")
+    root_dir = os.path.realpath(os.path.abspath(source or rnd_data))
+    _check_out_not_inside(root_dir, out)
+    items, stats = scan_text_source(root_dir) if source else scan_rnd_data(root_dir)
+    if limit:
+        items = items[:limit]
+
+    is_prefix_sensitive = bool(getattr(emb, "has_symmetric_vectors", False) or emb.name in ("eg2", "fake"))
+    emb_dim = int(getattr(emb, "dim", 0))
+    vtokens = int(getattr(emb, "vision_tokens", 0))
+    max_tokens = int(getattr(emb, "max_tokens", 0))
+    dtype_name = getattr(emb, "dtype_name", "float32")
+    role_meta = "document+symmetric" if is_prefix_sensitive else "document"
+    expected_meta = {
+        "revision": emb.revision,
+        "dim": emb_dim,
+        "vision_tokens": vtokens,
+        "max_tokens": max_tokens,
+        "max_chunks": TEXT_MAX_CHUNKS,
+        "role": role_meta,
+        "dtype": dtype_name,
+    }
+
+    old_vecs: dict[str, np.ndarray] = {}
+    old_sym_vecs: dict[str, np.ndarray] = {}
+    old_chunks: dict[str, int] = {}
+    try:
+        o_items, o_vecs, o_meta = load_text_cache(out, emb.name, role="document", dim=emb_dim)
+        if all(o_meta.get(k) == v for k, v in expected_meta.items()):
+            if is_prefix_sensitive:
+                sym_file = os.path.join(text_cache_dir(out, emb.name, dim=emb_dim), "texts_symmetric.npy")
+                if os.path.isfile(sym_file):
+                    o_sym = np.load(sym_file)
+                    old_vecs = dict(zip((it.sha256 for it in o_items), o_vecs, strict=True))
+                    old_sym_vecs = dict(zip((it.sha256 for it in o_items), o_sym, strict=True))
+                    old_chunks = {it.sha256: it.chunks for it in o_items}
+            else:
+                old_vecs = dict(zip((it.sha256 for it in o_items), o_vecs, strict=True))
+                old_chunks = {it.sha256: it.chunks for it in o_items}
+    except SystemExit:
+        pass
+
+    t0 = time.time()
+    todo = [it for it in items if it.sha256 not in old_vecs]
+    for it in items:
+        if it.sha256 in old_chunks:
+            it.chunks = old_chunks[it.sha256]
+
+    read_chars = (max_tokens or registry.REGISTRY["bge-m3"].max_tokens) * TEXT_MAX_CHUNKS * 6 + 1024
+    if todo and emb.name != "none":
+        for it in todo:
+            full = os.path.join(root_dir, it.paths[0])
+            with open(full, encoding="utf-8", errors="replace") as f:
+                raw = f.read(read_chars)
+            doc_prefix = backends.format_eg2_prefix("document", it.name) if is_prefix_sensitive else ""
+            ch_doc = chunk_text(raw, emb, prefix=doc_prefix)
+            it.chunks = len(ch_doc)
+            old_vecs[it.sha256] = embed_file_chunks(emb, ch_doc, role="document", title=it.name)
+            if is_prefix_sensitive:
+                sym_prefix = backends.format_eg2_prefix("symmetric")
+                ch_sym = chunk_text(raw, emb, prefix=sym_prefix)
+                old_sym_vecs[it.sha256] = embed_file_chunks(emb, ch_sym, role="symmetric", title=None)
+
+    t_sec = time.time() - t0
+    dim = int(getattr(emb, "dim", 0))
+    if items and emb.name != "none" and old_vecs:
+        vecs = np.vstack([old_vecs[it.sha256] for it in items])
+        dim = int(vecs.shape[1])
+        sym_vecs = np.vstack([old_sym_vecs[it.sha256] for it in items]) if is_prefix_sensitive else None
+    else:
+        vecs = np.zeros((len(items), dim), np.float32)
+        sym_vecs = np.zeros((len(items), dim), np.float32) if (is_prefix_sensitive and emb.name != "none") else None
+
+    meta = {
+        "backend": emb.name,
+        "revision": emb.revision,
+        "dim": dim,
+        "vision_tokens": vtokens,
+        "max_tokens": max_tokens,
+        "max_chunks": TEXT_MAX_CHUNKS,
+        "role": role_meta,
+        "dtype": getattr(emb, "dtype_name", dtype_name),
+        "mode": "source" if source else "rnd-data",
+        "grant": grant,
+        "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "embedded_now": len(todo),
+        "text_seconds": round(t_sec, 2),
+        **stats,
+    }
+    save_text_cache(out, emb.name, items, vecs, meta, symmetric_vecs=sym_vecs, dim=dim)
+    log(
+        f"indexed {len(items)} unique text files ({len(todo)} new, {t_sec:.1f} s) "
+        f"with {emb.name}; cache: {text_cache_dir(out, emb.name, dim=dim)}"
+    )
+    return meta
+
+
+def text_dupes(items: list[TextItem], vecs: np.ndarray, semantic: float = DESC_CLUSTER_COSINE) -> dict:
+    """Exact and semantic duplicates at or above `semantic` (default DESC_CLUSTER_COSINE); paths, scores and labels only."""
+    exact = [it.paths for it in items if len(it.paths) > 1]
+    has_vecs = vecs.ndim == 2 and vecs.shape[1] > 0
+    sem_raw = list(pairs_at_least(vecs, semantic)) if has_vecs else []
+    pairs = [
+        {
+            "a": items[a].paths[0],
+            "b": items[b].paths[0],
+            "cosine": round(s, 4),
+            "run_a": items[a].run_id,
+            "run_b": items[b].run_id,
+            "outcome_a": items[a].outcome,
+            "outcome_b": items[b].outcome,
+        }
+        for a, b, s in sem_raw
+    ]
+    semantic_tuples = [(items[a].paths[0], items[b].paths[0], round(s, 4)) for a, b, s in sem_raw]
+    sem_groups = [
+        [items[i].paths[0] for i in g]
+        for g in clusters(len(items), [(a, b) for a, b, _ in sem_raw])
+    ]
+    return {
+        "exact": exact,
+        "pairs": pairs,
+        "semantic": semantic_tuples,
+        "semantic_groups": sem_groups,
+        "threshold": semantic,
+    }
+
+
+def text_search(items: list[TextItem], vecs: np.ndarray, q: np.ndarray, k: int = 10) -> list[dict]:
+    """Nearest text/code files to query vector `q`; returns paths, scores, and outcome labels only."""
+    hits = search(vecs, q, k=k)
+    return [
+        {
+            "item": i,
+            "path": items[i].paths[0],
+            "name": items[i].name,
+            "suffix": items[i].suffix,
+            "run_id": items[i].run_id,
+            "outcome": items[i].outcome,
+            "cosine": round(score, 4),
+        }
+        for i, score in hits
+    ]
+
+
+def lineage(items: list[TextItem], vecs: np.ndarray, k: int = 5) -> dict:
+    """For code files, find the nearest same-name versions across runs (paths, scores, and labels only)."""
+    has_vecs = vecs.ndim == 2 and vecs.shape[1] > 0
+    by_name: dict[str, list[dict]] = {}
+    for idx, it in enumerate(items):
+        occs = it.occurrences or [
+            {"path": p, "run_id": it.run_id, "name": os.path.basename(p), "suffix": it.suffix, "outcome": it.outcome}
+            for p in it.paths
+        ]
+        for occ in occs:
+            ext = (occ.get("suffix") or os.path.splitext(occ.get("name") or "")[1]).lower()
+            if ext not in CODE_EXT:
+                continue
+            fname = occ.get("name") or os.path.basename(occ["path"])
+            by_name.setdefault(fname, []).append({**occ, "item_idx": idx})
+
+    files_out: dict[str, list[dict]] = {}
+    all_pairs: list[dict] = []
+    for fname in sorted(by_name):
+        occs = by_name[fname]
+        if len(occs) < 2:
+            continue
+        file_pairs: list[dict] = []
+        for i in range(len(occs)):
+            for j in range(i + 1, len(occs)):
+                oa, ob = occs[i], occs[j]
+                if oa["run_id"] is not None and ob["run_id"] is not None and oa["run_id"] == ob["run_id"]:
+                    continue
+                if oa["path"] == ob["path"]:
+                    continue
+                if oa["item_idx"] == ob["item_idx"]:
+                    cos = 1.0
+                elif has_vecs:
+                    cos = float(vecs[oa["item_idx"]] @ vecs[ob["item_idx"]])
+                else:
+                    cos = 0.0
+                entry = {
+                    "name": fname,
+                    "a": oa["path"],
+                    "b": ob["path"],
+                    "run_a": oa["run_id"],
+                    "run_b": ob["run_id"],
+                    "outcome_a": oa["outcome"],
+                    "outcome_b": ob["outcome"],
+                    "cosine": round(cos, 4),
+                }
+                file_pairs.append(entry)
+        file_pairs.sort(key=lambda r: (-r["cosine"], r["a"], r["b"]))
+        if file_pairs:
+            files_out[fname] = file_pairs[:k]
+            all_pairs.extend(file_pairs[:k])
+
+    all_pairs.sort(key=lambda r: (-r["cosine"], r["name"], r["a"], r["b"]))
+    return {"files": files_out, "pairs": all_pairs}
+
+
+def command_task(command: str, task: str | None = None) -> str:
+    """Return the task name for a CLI command unless overridden by `--task`."""
+    if task:
+        return task
+    if command == "lineage":
+        return "code"
+    if command in ("text-index", "text-dupes", "text-search"):
+        return "text"
+    return "images"
+
+
+def command_backend(command: str, backend: str | None = None, task: str | None = None) -> str:
+    """Resolve the embedder backend for `command`: `--backend` overrides the task's default."""
+    return registry.resolve_backend(backend, command_task(command, task))
+
+
 # ---- the command line ---------------------------------------------------------------------------------------------
 
 def lower_priority() -> None:
@@ -1214,26 +1936,49 @@ def _token_counter():
 
 
 def main(argv: list[str] | None = None, make=backends.make) -> int:
+    image_cmds = ("index", "dupes", "search", "coverage", "report")
+    text_cmds = ("text-index", "text-dupes", "text-search", "lineage")
+    all_cmds = [*image_cmds, *text_cmds]
+    all_backends = [*registry.REGISTRY, "none", "fake"]
+
     ap = argparse.ArgumentParser(
         prog="dataset-desk", description=__doc__.split("\n\n")[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=("commands:\n"
-                "  index     scan the project and embed its images (and descriptions) into the cache under --out\n"
-                "  dupes     exact, near and semantic duplicates, as JSON\n"
-                "  search    the nearest images to --text, --image, or both\n"
-                "  coverage  the best images for each subject in --subjects\n"
-                "  report    the Markdown report: duplicates, outliers, descriptions, coverage\n\n"
+                "  index        scan the project and embed its images (and descriptions) into the cache under --out\n"
+                "  dupes        exact, near and semantic duplicates, as JSON\n"
+                "  search       the nearest images to --text, --image, or both\n"
+                "  coverage     the best images for each subject in --subjects\n"
+                "  report       the Markdown report: duplicates, outliers, descriptions, coverage\n"
+                "  text-index   scan --source or --rnd-data and embed text/code files into <out>/<backend>/text/\n"
+                "  text-dupes   text pairs at or above --semantic, as JSON\n"
+                "  text-search  the nearest text/code files to --text\n"
+                "  lineage      for code files, the nearest same-name versions across runs\n\n"
                 "exit codes: 0 ok, 1 user error or refusal, 2 unexpected error"))
-    ap.add_argument("command", choices=["index", "dupes", "search", "coverage", "report"], help="what to do")
+    ap.add_argument("command", choices=all_cmds, help="what to do")
     ap.add_argument("--version", action="version", version=f"dataset-desk {__version__}")
-    ap.add_argument("--project", required=True, help="a style-dataset-lab project folder (read only)")
-    ap.add_argument("--backend", default="eg2", choices=["eg2", "siglip2", "none", "fake"],
-                    help="the index: EmbeddingGemma 2, SigLIP2, none (model-free lite mode), or fake (tests)")
-    ap.add_argument("--out", help="where the cache and report go (default: desk-out/<project> here)")
+    ap.add_argument("--project", help="a style-dataset-lab project folder (read only)")
+    ap.add_argument("--source", help="a folder of text and code files (read only)")
+    ap.add_argument("--rnd-data", dest="rnd_data", help="an rnd-data checkout folder (reads public rnd-data copies only)")
+    ap.add_argument("--task", choices=list(registry.TASK_DEFAULTS),
+                    help="task whose default backend to use when --backend is omitted")
+    ap.add_argument("--backend", default=None, choices=all_backends,
+                    help="embedder backend (defaults to the command/task default in registry.TASK_DEFAULTS)")
+    ap.add_argument("--out", help="where the cache and report go (default: desk-out/<name> here)")
     ap.add_argument("--threads", type=int, default=4, help="CPU threads (on a shared machine, half the cores at most)")
     ap.add_argument("--device", default="cpu", help="cpu (default) or a torch device such as cuda; needs --grant")
     ap.add_argument("--grant", help="a GPU grant id from whoever schedules the card; required for any device but cpu")
-    ap.add_argument("--limit", type=int, help="index only the first N unique images (a smoke test)")
+    ap.add_argument("--vram-budget", type=int, default=backends.DEFAULT_VRAM_BUDGET_MIB,
+                    help=f"VRAM ceiling in MiB (default: {backends.DEFAULT_VRAM_BUDGET_MIB})")
+    ap.add_argument("--wait", type=float, default=0.0,
+                    help="seconds to poll (every 10 s) for free VRAM before refusing with PERM_GPU_BUSY")
+    ap.add_argument("--dim", type=int, default=None,
+                    help="Matryoshka embedding dimension for eg2/fake (768, 512, 256; 128 refused)")
+    ap.add_argument("--vision-tokens", dest="vision_tokens", type=int, default=None,
+                    help="vision soft tokens per image for eg2/fake (70, 140, 280, 560, 1120; default: 280)")
+    ap.add_argument("--semantic", type=float, default=None,
+                    help="cosine threshold for semantic duplicates (default: 0.90 for text-dupes, 0.95 for dupes)")
+    ap.add_argument("--limit", type=int, help="index only the first N unique items (a smoke test)")
     ap.add_argument("--strict", action="store_true", help="halt immediately on an unreadable image file")
     ap.add_argument("--count-tokens", action="store_true",
                     help="report: run the gate's 64-token test with the cached SigLIP2 tokenizer (offline; needs the "
@@ -1245,12 +1990,70 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
                          f"({', '.join(sorted(MULTIMODAL_POOL))}) once its counted run is done")
     ap.add_argument("--draft", default="none", choices=["none", "fake", "plain-sight", "florence2"],
                     help="report: draft flagged descriptions blind from image pixels via plain-sight (or fake)")
-    ap.add_argument("--text", help="search: a description (combine with --image on eg2/fake for multimodal search)")
+    ap.add_argument("--text", help="search/text-search: a query string (combine with --image on eg2/fake)")
     ap.add_argument("--image", help="search: an image file")
     ap.add_argument("--subjects", help="coverage/report: a file with one wanted subject per line")
     ap.add_argument("-k", type=int, default=10, help="search: how many results")
     ap.add_argument("--debug", action="store_true", help="show stack traces for unexpected errors")
     a = ap.parse_args(argv)
+
+    backend = command_backend(a.command, a.backend, a.task)
+    backends.check_device(a.device, a.grant)
+    backends.validate_embedder_options(backend, dim=a.dim, vision_tokens=a.vision_tokens)
+    backends.cap_threads(a.threads)
+
+    make_kw: dict = {"device": a.device, "threads": a.threads, "grant": a.grant}
+    if a.vram_budget != backends.DEFAULT_VRAM_BUDGET_MIB:
+        make_kw["vram_budget"] = a.vram_budget
+    if a.wait:
+        make_kw["wait"] = a.wait
+    if a.dim is not None:
+        make_kw["dim"] = a.dim
+    if a.vision_tokens is not None:
+        make_kw["vision_tokens"] = a.vision_tokens
+
+    if a.command in text_cmds:
+        make_kw["text_only"] = True
+        if a.source and a.rnd_data:
+            raise DeskError("INPUT_BAD_ARGUMENT", "pass either --source or --rnd-data, not both")
+        src_root = os.path.abspath(a.source or a.rnd_data) if (a.source or a.rnd_data) else None
+        if src_root:
+            _check_not_private_path(src_root)
+        if not a.out and not src_root:
+            raise DeskError("INPUT_BAD_ARGUMENT", f"{a.command} needs --out (or --source / --rnd-data)")
+        out = os.path.abspath(a.out or os.path.join("desk-out", os.path.basename(src_root)))
+        if src_root:
+            _check_out_not_inside(src_root, out)
+        if backend == "none" and a.command == "text-search":
+            raise DeskError("INPUT_BAD_ARGUMENT", "text-search requires an embedding backend, not 'none'")
+        needs_text_model = a.command in ("text-index", "text-search")
+        emb = None
+        if needs_text_model:
+            if backend not in ("fake", "none"):
+                lower_priority()
+            emb = make(backend, **make_kw)
+        if a.command == "text-index":
+            text_index(out, emb, source=a.source, rnd_data=a.rnd_data, limit=a.limit, grant=a.grant)
+            return 0
+        read_role = "document" if a.command == "text-search" else "symmetric"
+        t_items, t_vecs, _t_meta = load_text_cache(out, backend, role=read_role, dim=a.dim)
+        if a.command == "text-dupes":
+            sem_thr = DESC_CLUSTER_COSINE if a.semantic is None else a.semantic
+            print(json.dumps(text_dupes(t_items, t_vecs, semantic=sem_thr), indent=1))
+        elif a.command == "text-search":
+            if not a.text:
+                raise DeskError("INPUT_BAD_ARGUMENT", "text-search needs --text")
+            q_role = "code_query" if command_task(a.command, a.task) == "code" else "query"
+            q = emb.texts([a.text], q_role)[0]
+            for hit in text_search(t_items, t_vecs, q, k=a.k):
+                label = hit["outcome"] or hit["run_id"] or "unrecorded"
+                print(f"{hit['cosine']:.4f}  {label:12s}  {hit['path']}")
+        elif a.command == "lineage":
+            print(json.dumps(lineage(t_items, t_vecs, k=a.k), indent=1))
+        return 0
+
+    if not a.project:
+        ap.error("the following arguments are required: --project")
     project = os.path.abspath(a.project)
     out = os.path.abspath(a.out or os.path.join("desk-out", os.path.basename(project)))
     try:
@@ -1259,31 +2062,30 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         out_inside = False
     if out_inside:
         raise DeskError("PERM_OUT_INSIDE_PROJECT", "REFUSED: --out is inside the project; the desk never writes into a project")
-    backends.check_device(a.device, a.grant)
-    backends.cap_threads(a.threads)
     if a.command in ("index", "report"):
-        check_multimodal_pool(project, a.backend, images_only=a.images_only,
+        check_multimodal_pool(project, backend, images_only=a.images_only or backend == "dinov2",
                               allow_multimodal_pool=a.allow_multimodal_pool)
-    if a.backend == "none" and a.command in ("search", "coverage"):
+    if backend == "none" and a.command in ("search", "coverage"):
         raise DeskError("INPUT_BAD_ARGUMENT",
                         f"command {a.command!r} requires an embedding backend (eg2, siglip2, or fake), not 'none'")
     needs_model = a.command in ("index", "search", "coverage") or (a.command == "report" and a.subjects)
     emb = None
     if needs_model:
-        if a.backend not in ("fake", "none"):
+        if backend not in ("fake", "none"):
             lower_priority()
-        emb = make(a.backend, device=a.device, threads=a.threads, grant=a.grant)
+        emb = make(backend, **make_kw)
     if a.command == "index":
         index(project, out, emb, limit=a.limit, grant=a.grant, strict=a.strict,
               images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool)
         return 0
-    items, img, txt, meta = load_cache(out, a.backend)
+    items, img, txt, meta = load_cache(out, backend, dim=a.dim, vision_tokens=a.vision_tokens)
     subjects = None
     if a.subjects:
         with open(a.subjects, encoding="utf-8") as f:
             subjects = [s.strip() for s in f if s.strip() and not s.startswith("#")]
     if a.command == "dupes":
-        d = dupes(items, img)
+        sem_cut = SEMANTIC if a.semantic is None else a.semantic
+        d = dupes(items, img, semantic=sem_cut)
         print(json.dumps({"exact": [it.paths for it in d["exact"]],
                           "near": [(items[x].paths[0], items[y].paths[0], h) for x, y, h in d["near"]],
                           "semantic": [(items[x].paths[0], items[y].paths[0], round(s, 4)) for x, y, s in d["semantic"]],
@@ -1294,7 +2096,7 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         if a.text and a.image:
             if not hasattr(emb, "multimodal"):
                 raise DeskError("INPUT_BAD_ARGUMENT",
-                                f"backend {a.backend!r} does not support joint --text + --image search; use eg2")
+                                f"backend {backend!r} does not support joint --text + --image search; use eg2")
             q = emb.multimodal([{"text": a.text, "images": [a.image]}], role="query")[0]
         elif a.text:
             q = emb.texts([a.text], "query")[0]
@@ -1308,7 +2110,7 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         for row in coverage(items, img, subjects, emb.texts(subjects, "query"), k=3):
             print(f"{row['subject']}: " + "; ".join(f"{items[i].paths[0]} {s:.3f}" for i, s in row["top"]))
     elif a.command == "report":
-        cov = coverage(items, img, subjects, emb.texts(subjects, "query")) if (subjects and a.backend != "none") else None
+        cov = coverage(items, img, subjects, emb.texts(subjects, "query")) if (subjects and backend != "none") else None
         drafter = backends.make_drafter(a.draft, device=a.device, threads=a.threads, grant=a.grant)
         print(report(project, out, items, img, txt, meta, cov,
                      images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool, drafter=drafter,

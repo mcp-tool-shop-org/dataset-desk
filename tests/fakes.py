@@ -15,6 +15,9 @@ class FakeTensor:
     def __init__(self, arr):
         self.arr = np.asarray(arr, dtype=np.float32)
 
+    def __getitem__(self, item):
+        return FakeTensor(self.arr[item])
+
     def detach(self):
         return self
 
@@ -37,7 +40,7 @@ class FakeBatch(dict):
         return self
 
 
-def make_torch(bf16=False):
+def make_torch(bf16=False, free_mib=32768, total_mib=32768):
     t = types.ModuleType("torch")
     t.calls = []
     t.interop_raises = False
@@ -58,7 +61,10 @@ def make_torch(bf16=False):
         yield
 
     t.no_grad = no_grad
-    t.cuda = types.SimpleNamespace(is_bf16_supported=lambda: bf16)
+    t.cuda = types.SimpleNamespace(
+        is_bf16_supported=lambda: bf16,
+        mem_get_info=lambda *a: (int(free_mib) * (1 << 20), int(total_mib) * (1 << 20)),
+    )
     return t
 
 
@@ -99,6 +105,9 @@ class FakeModel:
 
     def get_text_features(self, **inputs):
         return self._feat(inputs["n"], 2.0)
+
+    def __call__(self, **inputs):
+        return self._feat(inputs["n"], 1.0)
 
     def generate(self, **kw):
         self.generate_kwargs.append(kw)
@@ -147,7 +156,21 @@ def make_transformers(processor=None, model=None):
     class Florence2ForConditionalGeneration(AutoModel):
         pass
 
+    class AutoImageProcessor:
+        @staticmethod
+        def from_pretrained(repo, **kw):
+            tf.calls.append(("image_processor", repo, kw))
+            return tf.processor
+
+    class AutoTokenizer:
+        @staticmethod
+        def from_pretrained(repo, **kw):
+            tf.calls.append(("tokenizer", repo, kw))
+            return tf.processor
+
     tf.AutoProcessor, tf.AutoModel = AutoProcessor, AutoModel
+    tf.AutoImageProcessor = AutoImageProcessor
+    tf.AutoTokenizer = AutoTokenizer
     tf.AutoModelForImageTextToText = AutoModelForImageTextToText
     tf.Florence2ForConditionalGeneration = Florence2ForConditionalGeneration
     return tf
@@ -179,7 +202,8 @@ class FakeSentenceTransformer:
     def encode(self, inputs, **kw):
         self.encoded.append((list(inputs), kw))
         arr = np.tile(np.arange(1, 1025, dtype=np.float32), (len(inputs), 1))
-        return arr[:, : kw["truncate_dim"]]
+        dim = kw.get("truncate_dim") or 4
+        return arr[:, :dim]
 
 
 def make_sentence_transformers():

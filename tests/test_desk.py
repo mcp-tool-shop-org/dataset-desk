@@ -18,6 +18,7 @@ from PIL import Image
 
 import fakes
 from dataset_desk import backends, description_gate, desk
+from dataset_desk.errors import DeskError
 
 TINT = {"red": (175, 0, 0), "green": (0, 175, 0), "blue": (0, 0, 175)}
 
@@ -379,7 +380,10 @@ class Analyses(Project):
         self.assertTrue(all(np.isfinite(v) and v < 50.0 for v in fit.values()))
 
     def test_eg2_guards_vision_tokens_and_multimodal_embedder(self):
-        self.assertEqual(set(backends.EG2_PREFIX), {"query", "document", "symmetric", "clustering", "classification"})
+        self.assertEqual(
+            set(backends.EG2_PREFIX),
+            {"query", "code_query", "document", "symmetric", "clustering", "classification"},
+        )
         self.assertEqual(backends.EG2_VISION_TOKENS, (70, 140, 280, 560, 1120))
         with self.assertRaises(ValueError):
             backends.EG2Embedder(dim=128)
@@ -993,6 +997,607 @@ class CommandLine(Project):
         with self.assertRaises(SystemExit) as cm:
             self.run_main("search")
         self.assertIn("--text or --image", str(cm.exception))
+
+
+class TextAndCodeInputTests(unittest.TestCase):
+    SENTINEL_RED = "SECRET_BODY_ALPHA_99182_RED " + ("red " * 20)
+    SENTINEL_BLUE = "SECRET_BODY_BETA_77412_BLUE " + ("blue " * 20)
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.out = os.path.join(self.tmp, "out")
+
+    def _write(self, base: str, rel: str, content: bytes | str) -> str:
+        full = os.path.join(base, *rel.split("/"))
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        mode = "wb" if isinstance(content, bytes) else "w"
+        kw = {} if isinstance(content, bytes) else {"encoding": "utf-8"}
+        with open(full, mode, **kw) as f:
+            f.write(content)
+        return full
+
+    def test_task_defaults_and_backend_override(self):
+        self.assertEqual(desk.command_backend("index"), "siglip2")
+        self.assertEqual(desk.command_backend("index", task="image-variety"), "dinov2")
+        self.assertEqual(desk.command_backend("text-index"), "bge-m3")
+        self.assertEqual(desk.command_backend("text-dupes"), "bge-m3")
+        self.assertEqual(desk.command_backend("text-search"), "bge-m3")
+        self.assertEqual(desk.command_backend("lineage"), "eg2")
+        self.assertEqual(desk.command_backend("text-index", backend="qwen3-emb-0.6b"), "qwen3-emb-0.6b")
+        self.assertEqual(desk.command_backend("lineage", backend="gte-modernbert"), "gte-modernbert")
+
+        src = os.path.join(self.tmp, "src")
+        self._write(src, "doc.md", "red text sample")
+        seen = []
+
+        def fake_make(backend, **kw):
+            seen.append((backend, kw))
+            emb = backends.FakeEmbedder()
+            emb.name = backend
+            return emb
+
+        with mock.patch.object(desk, "lower_priority"), contextlib.redirect_stdout(io.StringIO()):
+            desk.main(["text-index", "--source", src, "--out", self.out], make=fake_make)
+            desk.main(["text-index", "--source", src, "--out", self.out, "--task", "code"], make=fake_make)
+            desk.main(["text-index", "--source", src, "--out", self.out, "--backend", "gte-modernbert"], make=fake_make)
+        self.assertEqual([b for b, _ in seen], ["bge-m3", "eg2", "gte-modernbert"])
+
+    def test_suffix_filtering_nul_skipping_and_sha256_dedupe(self):
+        src = os.path.join(self.tmp, "src")
+        for idx, ext in enumerate((".md", ".txt", ".json", ".jsonl", ".log", ".out", ".py", ".sh", ".toml", ".yml", ".yaml", "")):
+            fname = f"file{idx}{ext}" if ext else "Makefile"
+            self._write(src, fname, f"unique content {idx} red")
+        # Byte-identical duplicate of file0.md
+        self._write(src, "sub/copy.md", "unique content 0 red")
+        # Disallowed suffixes
+        self._write(src, "skip.bin", "text inside bin")
+        self._write(src, "skip.png", "not a text suffix")
+        self._write(src, "skip.bak", "backup file")
+        # File with NUL in first 4 KB
+        self._write(src, "nul_file.txt", b"hello\x00world")
+
+        items, stats = desk.scan_text_source(src)
+        self.assertEqual(stats["files"], 13)
+        self.assertEqual(stats["unique"], 12)
+        self.assertEqual(stats["nul_skipped"], 1)
+        dup_item = next(it for it in items if len(it.paths) > 1)
+        self.assertEqual(sorted(dup_item.paths), ["file0.md", "sub/copy.md"])
+
+    def test_chunk_limits_and_mean_pooling_with_fake_embedder(self):
+        self.assertEqual(desk.chunk_text(""), [""])
+        # Token-counted chunking: default FakeEmbedder max_tokens=8192 -> budget 8188 tokens per chunk
+        long_text = "word " * 80000  # 80,000 tokens -> capped at 8 chunks of 8188 tokens
+        chunks = desk.chunk_text(long_text)
+        self.assertEqual(len(chunks), 8)
+        self.assertTrue(all(len(c.split()) == 8188 for c in chunks))
+
+        # EG2 max_tokens=8000 vs BGE-M3/Qwen3/GTE max_tokens=8192
+        eg2_chunks = desk.chunk_text(long_text, max_tokens=8000, prefix="title: gate.py | text: ")
+        self.assertEqual(len(eg2_chunks), 8)
+        # "title: gate.py | text: " is 5 tokens -> budget = 8000 - 5 - 4 = 7991 tokens
+        self.assertTrue(all(len(c.split()) == 7991 for c in eg2_chunks))
+        bge_chunks = desk.chunk_text(long_text, max_tokens=8192)
+        self.assertEqual(len(bge_chunks), 8)
+        self.assertTrue(all(len(c.split()) == 8188 for c in bge_chunks))
+
+        # Tokenizer with encode/decode (e.g. HF tokenizer / SentenceTransformer)
+        class _FakeTok:
+            def encode(self, s, add_special_tokens=False):
+                return s.split()
+            def decode(self, ids, skip_special_tokens=True):
+                return " ".join(ids)
+
+        class _EmbWithTok:
+            max_tokens = 20
+            tokenizer = _FakeTok()
+
+        tok_chunks = desk.chunk_text(" ".join(f"t{i}" for i in range(50)), emb=_EmbWithTok(), prefix="p1 p2")
+        # budget = 20 - 2 - 4 = 14 tokens -> 50 tokens splits into 4 chunks (14, 14, 14, 8)
+        self.assertEqual([len(c.split()) for c in tok_chunks], [14, 14, 14, 8])
+
+        # Callable tokenizer without decode fallback + offset_mapping fallback
+        class _CallableOnlyTok:
+            def __call__(self, s, **kw):
+                words = s.split()
+                if kw.get("return_offsets_mapping"):
+                    pos = 0
+                    offsets = []
+                    for w in words:
+                        idx = s.find(w, pos)
+                        offsets.append((idx, idx + len(w)))
+                        pos = idx + len(w)
+                    return {"input_ids": list(range(len(words))), "offset_mapping": offsets}
+                return {"input_ids": list(range(len(words)))}
+
+        class _ProcHolder:
+            tokenizer = _CallableOnlyTok()
+
+        class _EmbWithProc:
+            max_tokens = 12
+            processor = _ProcHolder()
+
+        proc_chunks = desk.chunk_text(" ".join(f"w{i}" for i in range(20)), emb=_EmbWithProc())
+        self.assertEqual(len(proc_chunks), 3)
+
+        # Fake embedder whose model is None at the first chunk_text call, and whose tokenizer counts 2 tokens per span:
+        # every chunk must come out within max_tokens - prefix - 4 by that fake's count.
+        class _TwoPerSpanTok:
+            def count(self, s: str) -> int:
+                return 2 * len(desk._FALLBACK_TOKENIZER.spans(s))
+
+            def encode(self, s: str, add_special_tokens: bool = False) -> list[int]:
+                return list(range(self.count(s)))
+
+        class _UnloadedModelEmb(backends.FakeEmbedder):
+            def __init__(self):
+                super().__init__(dim=768)
+                self.name = "gte-modernbert"
+                self.model = None
+                self._tok = _TwoPerSpanTok()
+
+            @property
+            def tokenizer(self):
+                return self._tok
+
+        unloaded_emb = _UnloadedModelEmb()
+        unloaded_emb.max_tokens = 24
+        self.assertIsNone(unloaded_emb.model)
+        prefix_str = "p1 p2"  # 2 spans -> 4 tokens by _TwoPerSpanTok; budget = 24 - 4 - 4 = 16 tokens (8 spans)
+        two_span_chunks = desk.chunk_text(
+            " ".join(f"tok{i}" for i in range(30)),
+            emb=unloaded_emb,
+            prefix=prefix_str,
+        )
+        self.assertIsNone(unloaded_emb.model)
+        budget = unloaded_emb.max_tokens - unloaded_emb.tokenizer.count(prefix_str) - 4
+        self.assertEqual(budget, 16)
+        self.assertEqual(len(two_span_chunks), 4)
+        for ch in two_span_chunks:
+            self.assertLessEqual(unloaded_emb.tokenizer.count(ch), budget)
+
+        # Verify text_index also chunks the very first file using emb.tokenizer while emb.model is None
+        src_unloaded = os.path.join(self.tmp, "src_unloaded")
+        self._write(src_unloaded, "first.py", " ".join(f"tok{i}" for i in range(30)))
+        out_unloaded = os.path.join(self.tmp, "out_unloaded")
+        unloaded_for_idx = _UnloadedModelEmb()
+        unloaded_for_idx.has_symmetric_vectors = False
+        unloaded_for_idx.max_tokens = 20  # budget = 20 - 0 - 4 = 16 tokens (8 spans per chunk -> 4 chunks for 30 spans)
+        desk.text_index(out_unloaded, unloaded_for_idx, source=src_unloaded, log=lambda *a: None)
+        idx_items, _, _ = desk.load_text_cache(out_unloaded, "gte-modernbert")
+        self.assertEqual(idx_items[0].chunks, 4)
+
+        # Real backend with no tokenizer is refused with INPUT_BAD_ARGUMENT rather than chunked by _SpanTokenizer
+        with self.assertRaises(DeskError) as cm_no_tok:
+            desk.chunk_text("some text", emb=backends.DINOv2Embedder())
+        self.assertEqual(cm_no_tok.exception.code, "INPUT_BAD_ARGUMENT")
+
+        # embed_file_chunks does not swallow TypeError from inside emb.texts()
+        class _BrokenTextsEmb:
+            def texts(self, chunks, role="document", titles=None):
+                raise TypeError("internal type bug inside texts()")
+
+        with self.assertRaises(TypeError):
+            desk.embed_file_chunks(_BrokenTextsEmb(), ["chunk"], role="document", title="doc.py")
+
+        emb = backends.FakeEmbedder()
+        c1 = "red " * 5000
+        c2 = "blue " * 5000
+        two_chunk_text = c1 + c2
+        split = desk.chunk_text(two_chunk_text, emb=emb)
+        self.assertEqual(len(split), 2)
+        expected = backends.unit_rows(emb.texts(split, "document", titles=["doc.py", "doc.py"]).mean(axis=0))[0]
+        got = desk.embed_file_chunks(emb, split, role="document", title="sub/doc.py")
+        np.testing.assert_allclose(got, expected, atol=1e-6)
+        self.assertAlmostEqual(float(np.linalg.norm(got)), 1.0, places=5)
+
+    def test_rnd_data_reads_only_rnd_data_copies_outcomes_and_never_leaks_contents(self):
+        chk = os.path.join(self.tmp, "rnd-data")
+        # Run 1: outcome at top level; has rnd-data copy, 'd' blob copy, and unlisted file
+        self._write(chk, "runs/r1/files/outcome.json", json.dumps({"outcome": "pass"}))
+        f1 = self._write(chk, "runs/r1/files/gate.py", self.SENTINEL_RED)
+        self._write(chk, "runs/r1/files/unlisted.py", "green " * 20)
+        self._write(chk, "blobs/aa/blobfile.py", "green " * 20)
+        self._write(
+            chk,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [
+                    {"sha256": desk.sha256_file(f1), "store": "rnd-data", "location": "runs/r1/files/gate.py"},
+                    {"sha256": "deadbeef" * 8, "store": "d", "location": "blobs/aa/blobfile.py"},
+                ],
+            }),
+        )
+        # Run 2: outcome under run.outcome; same-name gate.py with near-identical red content + blue helper.sh
+        self._write(chk, "runs/r2/files/outcome.json", json.dumps({"run": {"outcome": "gate-reject"}}))
+        f2 = self._write(chk, "runs/r2/files/gate.py", self.SENTINEL_RED + " red")
+        f3 = self._write(chk, "runs/r2/files/helper.sh", self.SENTINEL_BLUE)
+        self._write(
+            chk,
+            "runs/r2/manifest.json",
+            json.dumps({
+                "id": "r2",
+                "copies": [
+                    {"sha256": desk.sha256_file(f2), "store": "rnd-data", "location": "runs/r2/files/gate.py"},
+                    {"sha256": desk.sha256_file(f3), "store": "rnd-data", "location": "runs/r2/files/helper.sh"},
+                ],
+            }),
+        )
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = desk.main(["text-index", "--rnd-data", chk, "--out", self.out, "--backend", "fake"])
+        self.assertEqual(rc, 0)
+        self.assertTrue(os.path.isdir(os.path.join(self.out, "fake", "text")))
+
+        # Second index run reuses cached vectors by sha256 and revision
+        meta2 = desk.text_index(self.out, backends.FakeEmbedder(), rnd_data=chk, log=lambda *a: None)
+        self.assertEqual(meta2["embedded_now"], 0)
+
+        items, _vecs, _meta = desk.load_text_cache(self.out, "fake")
+        all_paths = [p for it in items for p in it.paths]
+        self.assertIn("runs/r1/files/gate.py", all_paths)
+        self.assertIn("runs/r2/files/gate.py", all_paths)
+        self.assertIn("runs/r2/files/helper.sh", all_paths)
+        self.assertNotIn("runs/r1/files/unlisted.py", all_paths)
+        self.assertFalse(any("blobfile" in p for p in all_paths))
+
+        by_path = {it.paths[0]: it for it in items}
+        self.assertEqual(by_path["runs/r1/files/gate.py"].outcome, "pass")
+        self.assertEqual(by_path["runs/r2/files/gate.py"].outcome, "gate-reject")
+
+        # text-dupes
+        dupes_buf = io.StringIO()
+        with contextlib.redirect_stdout(dupes_buf):
+            desk.main(["text-dupes", "--rnd-data", chk, "--out", self.out, "--backend", "fake", "--semantic", "0.90"])
+        dupes_out = dupes_buf.getvalue()
+        dupes_json = json.loads(dupes_out)
+        self.assertEqual(len(dupes_json["pairs"]), 1)
+        self.assertEqual(dupes_json["pairs"][0]["outcome_a"], "pass")
+        self.assertEqual(dupes_json["pairs"][0]["outcome_b"], "gate-reject")
+
+        # text-search
+        search_buf = io.StringIO()
+        with contextlib.redirect_stdout(search_buf):
+            desk.main(["text-search", "--out", self.out, "--backend", "fake", "--text", "blue", "-k", "1"])
+        search_out = search_buf.getvalue()
+        self.assertIn("runs/r2/files/helper.sh", search_out)
+        self.assertIn("gate-reject", search_out)
+
+        # lineage
+        lin_buf = io.StringIO()
+        with contextlib.redirect_stdout(lin_buf):
+            desk.main(["lineage", "--out", self.out, "--backend", "fake"])
+        lin_out = lin_buf.getvalue()
+        lin_json = json.loads(lin_out)
+        self.assertIn("gate.py", lin_json["files"])
+        self.assertNotIn("helper.sh", lin_json["files"])  # only in one run
+        pair = lin_json["files"]["gate.py"][0]
+        self.assertEqual((pair["run_a"], pair["run_b"]), ("r1", "r2"))
+        self.assertEqual((pair["outcome_a"], pair["outcome_b"]), ("pass", "gate-reject"))
+        self.assertGreater(pair["cosine"], 0.99)
+
+        # Verify NO file contents ever appear in CLI outputs or cache files
+        with open(os.path.join(self.out, "fake", "text", "items.jsonl"), encoding="utf-8") as f:
+            cache_items_raw = f.read()
+        for text_blob in (buf.getvalue(), dupes_out, search_out, lin_out, cache_items_raw):
+            self.assertNotIn("SECRET_BODY_ALPHA_99182_RED", text_blob)
+            self.assertNotIn("SECRET_BODY_BETA_77412_BLUE", text_blob)
+
+    def test_rnd_data_refuses_private_store_and_paths_outside_checkout(self):
+        # 1. Manifest naming rnd-data-private
+        chk_priv = os.path.join(self.tmp, "chk1")
+        self._write(
+            chk_priv,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [{"sha256": "00" * 32, "store": "rnd-data-private", "location": "runs/r1/files/secret.py"}],
+            }),
+        )
+        with self.assertRaises(DeskError) as cm1:
+            desk.scan_rnd_data(chk_priv)
+        self.assertTrue(cm1.exception.code.startswith("PERM_"))
+
+        # 2. Manifest with .. traversal outside checkout
+        chk_trav = os.path.join(self.tmp, "chk2")
+        self._write(chk_trav, "outside.py", "print(1)")
+        self._write(
+            chk_trav,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [{"sha256": "00" * 32, "store": "rnd-data", "location": "../outside.py"}],
+            }),
+        )
+        with self.assertRaises(DeskError) as cm2:
+            desk.scan_rnd_data(chk_trav)
+        self.assertTrue(cm2.exception.code.startswith("PERM_"))
+
+        # 3. Manifest with assembled absolute path outside checkout (no literal machine path)
+        chk_abs = os.path.join(self.tmp, "chk3")
+        abs_like = ("C" + ":/outside/file.py") if os.name == "nt" else ("/ho" + "me/user/outside.py")
+        self._write(
+            chk_abs,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [{"sha256": "00" * 32, "store": "rnd-data", "location": abs_like}],
+            }),
+        )
+        with self.assertRaises(DeskError) as cm3:
+            desk.scan_rnd_data(chk_abs)
+        self.assertTrue(cm3.exception.code.startswith("PERM_"))
+
+        # 4. --out inside --source is refused
+        src = os.path.join(self.tmp, "src_ro")
+        self._write(src, "a.py", "red")
+        with self.assertRaises(DeskError) as cm4:
+            desk.main(["text-index", "--source", src, "--out", os.path.join(src, "inside"), "--backend", "fake"])
+        self.assertEqual(cm4.exception.code, "PERM_OUT_INSIDE_PROJECT")
+
+    def test_text_and_rnd_data_edge_branches_and_cli_validations(self):
+        # Empty chunks and NoneEmbedder chunk embedding
+        self.assertEqual(desk.embed_file_chunks(backends.NoneEmbedder(), []).shape, (0,))
+        self.assertEqual(desk.embed_file_chunks(backends.FakeEmbedder(), []).shape, (4,))
+
+        # Missing source directory
+        with self.assertRaises(DeskError) as cm_miss:
+            desk.scan_text_source(os.path.join(self.tmp, "does_not_exist"))
+        self.assertEqual(cm_miss.exception.code, "INPUT_BAD_ARGUMENT")
+
+        # Private or blobs folder path refused directly
+        priv_dir = os.path.join(self.tmp, "rnd-data-private")
+        os.makedirs(priv_dir, exist_ok=True)
+        with self.assertRaises(DeskError) as cm_pdir:
+            desk.scan_text_source(priv_dir)
+        self.assertEqual(cm_pdir.exception.code, "PERM_PRIVATE_SOURCE")
+
+        # Missing runs/ directory
+        empty_chk = os.path.join(self.tmp, "empty_chk")
+        os.makedirs(empty_chk, exist_ok=True)
+        with self.assertRaises(DeskError) as cm_noruns:
+            desk.scan_rnd_data(empty_chk)
+        self.assertEqual(cm_noruns.exception.code, "PERM_PRIVATE_SOURCE")
+
+        # Manifest with source naming rnd-data-private
+        chk_src_priv = os.path.join(self.tmp, "chk_src_priv")
+        self._write(
+            chk_src_priv,
+            "runs/r1/manifest.json",
+            json.dumps({"id": "r1", "source": "rnd-data-private/secret", "copies": []}),
+        )
+        with self.assertRaises(DeskError):
+            desk.scan_rnd_data(chk_src_priv)
+
+        # Manifest with rnd-data store pointing into blobs/ (outside runs/)
+        chk_blob_loc = os.path.join(self.tmp, "chk_blob_loc")
+        self._write(
+            chk_blob_loc,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [{"sha256": "00" * 32, "store": "rnd-data", "location": "blobs/ab/file.py"}],
+            }),
+        )
+        with self.assertRaises(DeskError):
+            desk.scan_rnd_data(chk_blob_loc)
+
+        # Manifest with missing file on disk
+        chk_missing_file = os.path.join(self.tmp, "chk_missing_file")
+        self._write(
+            chk_missing_file,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [{"sha256": "00" * 32, "store": "rnd-data", "location": "runs/r1/files/gone.py"}],
+            }),
+        )
+        with self.assertRaises(DeskError):
+            desk.scan_rnd_data(chk_missing_file)
+
+        # Identical code files across two runs in lineage (cos == 1.0) + NUL skip + non-text skip in rnd-data
+        chk_lin = os.path.join(self.tmp, "chk_lin")
+        f_r1 = self._write(chk_lin, "runs/r1/files/same.py", "red green")
+        f_r2 = self._write(chk_lin, "runs/r2/files/same.py", "red green")
+        f_nul = self._write(chk_lin, "runs/r2/files/bin.py", b"a\x00b")
+        f_png = self._write(chk_lin, "runs/r2/files/pic.png", "ignored")
+        self._write(
+            chk_lin,
+            "runs/r1/manifest.json",
+            json.dumps({
+                "id": "r1",
+                "copies": [{"sha256": desk.sha256_file(f_r1), "store": "rnd-data", "location": "runs/r1/files/same.py"}],
+            }),
+        )
+        self._write(
+            chk_lin,
+            "runs/r2/manifest.json",
+            json.dumps({
+                "id": "r2",
+                "copies": [
+                    {"sha256": desk.sha256_file(f_r2), "store": "rnd-data", "location": "runs/r2/files/same.py"},
+                    {"sha256": desk.sha256_file(f_nul), "store": "rnd-data", "location": "runs/r2/files/bin.py"},
+                    {"sha256": desk.sha256_file(f_png), "store": "rnd-data", "location": "runs/r2/files/pic.png"},
+                ],
+            }),
+        )
+        out_lin = os.path.join(self.tmp, "out_lin")
+        desk.text_index(out_lin, backends.FakeEmbedder(), rnd_data=chk_lin, limit=5, log=lambda *a: None)
+        t_items, t_vecs, _ = desk.load_text_cache(out_lin, "fake")
+        lin = desk.lineage(t_items, t_vecs)
+        self.assertEqual(lin["files"]["same.py"][0]["cosine"], 1.0)
+
+        # Missing text cache raises STATE_NO_INDEX
+        with self.assertRaises(DeskError) as cm_no_idx:
+            desk.load_text_cache(os.path.join(self.tmp, "no_cache"), "fake")
+        self.assertEqual(cm_no_idx.exception.code, "STATE_NO_INDEX")
+
+        # CLI argument errors on text commands
+        with self.assertRaises(DeskError):
+            desk.main(["text-index", "--out", out_lin, "--backend", "fake"])
+        with self.assertRaises(DeskError):
+            desk.main(["text-index", "--source", chk_lin, "--rnd-data", chk_lin, "--out", out_lin, "--backend", "fake"])
+        with self.assertRaises(DeskError):
+            desk.main(["text-dupes", "--backend", "fake"])
+        with self.assertRaises(DeskError):
+            desk.main(["text-search", "--out", out_lin, "--backend", "none", "--text", "red"])
+        with self.assertRaises(DeskError):
+            desk.main(["text-search", "--out", out_lin, "--backend", "fake"])
+        # --vram-budget and --wait forwarded to make()
+        seen_kw = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            desk.main(
+                ["text-search", "--out", out_lin, "--backend", "fake", "--text", "red",
+                 "--vram-budget", "20000", "--wait", "10"],
+                make=lambda b, **kw: (seen_kw.append(kw), backends.FakeEmbedder())[1],
+            )
+        self.assertEqual(seen_kw[0]["vram_budget"], 20000)
+        self.assertEqual(seen_kw[0]["wait"], 10.0)
+
+    def test_dual_role_vectors_code_query_cache_paths_and_meta_invalidation(self):
+        src = os.path.join(self.tmp, "src_dual")
+        self._write(src, "dir/alpha.py", "red green")
+        self._write(src, "dir/beta.py", "blue")
+        out_dual = os.path.join(self.tmp, "out_dual")
+
+        emb = backends.FakeEmbedder()
+        desk.text_index(out_dual, emb, source=src, log=lambda *a: None)
+        tdir = desk.text_cache_dir(out_dual, "fake")
+        self.assertTrue(os.path.isfile(os.path.join(tdir, "texts.npy")))
+        self.assertTrue(os.path.isfile(os.path.join(tdir, "texts_symmetric.npy")))
+
+        # Verify texts.npy used document role with base name title, and texts_symmetric.npy used symmetric role without title
+        roles_and_prefixes = [
+            (c["role"], backends.format_eg2_prefix(c["role"], c["titles"][0] if c["titles"] else None))
+            for c in emb.seen_calls
+        ]
+        self.assertIn(("document", "title: alpha.py | text: "), roles_and_prefixes)
+        self.assertIn(("document", "title: beta.py | text: "), roles_and_prefixes)
+        self.assertIn(("symmetric", "task: sentence similarity | query: "), roles_and_prefixes)
+        items_doc, vecs_doc, _meta_doc = desk.load_text_cache(out_dual, "fake", role="document")
+        _items_sym, vecs_sym, _ = desk.load_text_cache(out_dual, "fake", role="symmetric")
+        self.assertEqual(len(items_doc), 2)
+        alpha_idx = next(i for i, it in enumerate(items_doc) if it.name == "alpha.py")
+        expected_doc = desk.embed_file_chunks(emb, ["red green"], role="document", title="alpha.py")
+        expected_sym = desk.embed_file_chunks(emb, ["red green"], role="symmetric", title=None)
+        np.testing.assert_allclose(vecs_doc[alpha_idx], expected_doc, atol=1e-6)
+        np.testing.assert_allclose(vecs_sym[alpha_idx], expected_sym, atol=1e-6)
+        self.assertFalse(np.allclose(vecs_doc[alpha_idx], vecs_sym[alpha_idx]))
+
+        # File longer than 49,024 chars (old char read limit) is read past that point by text_index
+        src_long = os.path.join(self.tmp, "src_long_read")
+        long_body = ("green " * 9000) + ("blue " * 2000)  # 54,000 chars of green, then blue past char 49,024
+        self.assertGreater(len(long_body), 49024)
+        self._write(src_long, "big.py", long_body)
+        out_long = os.path.join(self.tmp, "out_long_read")
+        desk.text_index(out_long, backends.FakeEmbedder(), source=src_long, log=lambda *a: None)
+        _, long_vecs, _ = desk.load_text_cache(out_long, "fake", role="document")
+        # Channel 2 is 'blue' in FakeEmbedder; only present if text_index read past 54,000 chars into chunk 2
+        self.assertGreater(float(long_vecs[0][2]), 0.1)
+
+        # Unprefixed backend (e.g. gte-modernbert) writes only texts.npy and load_text_cache(role="symmetric") keeps reading texts.npy
+        class _UnprefixedStub(backends.FakeEmbedder):
+            has_symmetric_vectors = False
+
+            def __init__(self):
+                super().__init__(dim=768)
+                self.name = "gte-modernbert"
+                self.revision = "gte-rev"
+                self.max_tokens = 8192
+                self.tokenizer = desk._FALLBACK_TOKENIZER
+
+        out_bge = os.path.join(self.tmp, "out_bge")
+        desk.text_index(out_bge, _UnprefixedStub(), source=src, log=lambda *a: None)
+        bge_tdir = desk.text_cache_dir(out_bge, "gte-modernbert")
+        self.assertTrue(os.path.isfile(os.path.join(bge_tdir, "texts.npy")))
+        self.assertFalse(os.path.isfile(os.path.join(bge_tdir, "texts_symmetric.npy")))
+        _, bge_sym_vecs, _ = desk.load_text_cache(out_bge, "gte-modernbert", role="symmetric")
+        self.assertEqual(bge_sym_vecs.shape[0], 2)
+
+        # Prefix-sensitive backend (fake/eg2) refuses load_text_cache(role="symmetric") when texts_symmetric.npy is missing
+        sym_file_dual = os.path.join(tdir, "texts_symmetric.npy")
+        os.remove(sym_file_dual)
+        with self.assertRaises(DeskError) as cm_miss_sym:
+            desk.load_text_cache(out_dual, "fake", role="symmetric")
+        self.assertEqual(cm_miss_sym.exception.code, "STATE_NO_INDEX")
+        self.assertIn("text-index", cm_miss_sym.exception.message)
+        with self.assertRaises(DeskError) as cm_lin_sym:
+            desk.main(["lineage", "--out", out_dual, "--backend", "fake"])
+        self.assertEqual(cm_lin_sym.exception.code, "STATE_NO_INDEX")
+        # Restore texts_symmetric.npy
+        desk.text_index(out_dual, emb, source=src, log=lambda *a: None)
+
+        # text-search uses "code_query" when --task code and "query" otherwise
+        emb_spy = backends.FakeEmbedder()
+        with contextlib.redirect_stdout(io.StringIO()):
+            desk.main(
+                ["text-search", "--out", out_dual, "--backend", "fake", "--task", "code", "--text", "red"],
+                make=lambda b, **kw: emb_spy,
+            )
+        self.assertEqual(emb_spy.seen_calls[-1]["role"], "code_query")
+        self.assertEqual(backends.format_eg2_prefix(emb_spy.seen_calls[-1]["role"]), "task: code retrieval | query: ")
+        with contextlib.redirect_stdout(io.StringIO()):
+            desk.main(
+                ["text-search", "--out", out_dual, "--backend", "fake", "--task", "text", "--text", "red"],
+                make=lambda b, **kw: emb_spy,
+            )
+        self.assertEqual(emb_spy.seen_calls[-1]["role"], "query")
+        self.assertEqual(backends.format_eg2_prefix(emb_spy.seen_calls[-1]["role"]), "task: search result | query: ")
+
+        # Non-default dim and vision_tokens in cache_dir and text_cache_dir
+        self.assertEqual(desk.cache_dir(out_dual, "eg2", dim=768, vision_tokens=280), os.path.join(out_dual, "eg2"))
+        self.assertEqual(desk.cache_dir(out_dual, "eg2", dim=256, vision_tokens=280), os.path.join(out_dual, "eg2-d256"))
+        self.assertEqual(desk.cache_dir(out_dual, "eg2", dim=512, vision_tokens=560), os.path.join(out_dual, "eg2-d512-vt560"))
+        self.assertEqual(desk.text_cache_dir(out_dual, "eg2", dim=768), os.path.join(out_dual, "eg2", "text"))
+        self.assertEqual(desk.text_cache_dir(out_dual, "eg2", dim=256), os.path.join(out_dual, "eg2-d256", "text"))
+
+        # CLI text-index and text-search with --dim 256 use the dim-scoped cache path
+        with contextlib.redirect_stdout(io.StringIO()):
+            desk.main(["text-index", "--source", src, "--out", out_dual, "--backend", "fake", "--dim", "256"])
+        _, vecs_256, meta_256 = desk.load_text_cache(out_dual, "fake", dim=256)
+        self.assertEqual(vecs_256.shape, (2, 256))
+        self.assertEqual(meta_256["dim"], 256)
+
+        # 7-field meta.json invalidation check for text_index
+        for field, mutated in (
+            ("revision", "other-rev"),
+            ("dim", 999),
+            ("vision_tokens", 1120),
+            ("max_tokens", 4096),
+            ("max_chunks", 4),
+            ("role", "other"),
+            ("dtype", "float16"),
+        ):
+            # Restore clean cache first
+            desk.text_index(out_dual, emb, source=src, log=lambda *a: None)
+            meta_path = os.path.join(tdir, "meta.json")
+            with open(meta_path, encoding="utf-8") as f:
+                m = json.load(f)
+            m[field] = mutated
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(m, f)
+            re_meta = desk.text_index(out_dual, emb, source=src, log=lambda *a: None)
+            self.assertEqual(re_meta["embedded_now"], 2, f"Expected recompute when text meta.{field} changed")
+
+        # 7-field meta.json invalidation check for image index
+        img_src = os.path.join(self.tmp, "img_src_meta")
+        os.makedirs(os.path.join(img_src, "outputs", "w1"), exist_ok=True)
+        from PIL import Image
+        Image.new("RGB", (16, 16), (220, 20, 20)).save(os.path.join(img_src, "outputs", "w1", "a.png"))
+        out_img = os.path.join(self.tmp, "out_img_meta")
+        desk.index(img_src, out_img, emb, log=lambda *a: None)
+        img_meta_path = os.path.join(desk.cache_dir(out_img, "fake"), "meta.json")
+        with open(img_meta_path, encoding="utf-8") as f:
+            im = json.load(f)
+        for k in ("revision", "dim", "vision_tokens", "max_tokens", "max_chunks", "role", "dtype"):
+            self.assertIn(k, im)
+        im["vision_tokens"] = 1120
+        with open(img_meta_path, "w", encoding="utf-8") as f:
+            json.dump(im, f)
+        re_img_meta = desk.index(img_src, out_img, emb, log=lambda *a: None)
+        self.assertEqual(re_img_meta["embedded_now"], 1)
 
 
 if __name__ == "__main__":
