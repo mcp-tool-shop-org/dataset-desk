@@ -43,7 +43,7 @@ model.
 
 ## Status
 
-v0.2.1 is a public prototype. It is tested offline (197 tests, 96% line coverage).
+v0.2.2 is a public prototype. It is tested offline (197 tests, 96% line coverage).
 - **Calibration:** the studio's runs on its own data set the duplicate thresholds, which are
   provisional and rest on one pool per kind. The models' VRAM figures are conservative whole-card figures, CUDA context
   included, measured on an RTX 5090; other cards and corpora may differ. The method and the data are in
