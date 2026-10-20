@@ -2,8 +2,9 @@
 # Jobs: build, provenance, publish, upload.
 # Trusted publishing: PyPI trusts this repository, this file name, and the
 # pypi environment. No API token is stored.
-# A workflow_dispatch on a tag runs the same check. A branch dispatch fails
-# the tag check and does not publish. This workflow is not push-triggered.
+# A workflow_dispatch on a tag runs build only, as a dry check: publish,
+# provenance and upload run on a published release alone. A branch dispatch
+# fails the tag check. This workflow is not push-triggered.
 # Undo: delete the release asset. A PyPI file is yanked.
 # Owner: the Publisher.
 
@@ -66,6 +67,12 @@ jobs:
           python -m build -o dist
           python -m twine check --strict dist/*
 
+      - name: Install the wheel in a fresh venv
+        run: |
+          python -m venv "$RUNNER_TEMP/pkg"
+          "$RUNNER_TEMP/pkg/bin/pip" install -q dist/*.whl
+          (cd "$RUNNER_TEMP" && "$RUNNER_TEMP/pkg/bin/dataset-desk" --help >/dev/null)
+
       - name: Hash the distributions
         id: hash
         run: echo "hashes=$(sha256sum dist/* | base64 -w0)" >> "$GITHUB_OUTPUT"
@@ -77,6 +84,7 @@ jobs:
 
   publish:
     needs: build
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: pypi
@@ -93,6 +101,7 @@ jobs:
 
   provenance:
     needs: build
+    if: github.event_name == 'release'
     permissions:
       actions: read
       id-token: write
@@ -104,6 +113,7 @@ jobs:
 
   upload:
     needs: build
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
