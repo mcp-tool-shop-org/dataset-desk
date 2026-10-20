@@ -1303,25 +1303,21 @@ _FALLBACK_TOKENIZER = _SpanTokenizer()
 def _resolve_tokenizer(emb=None, tokenizer=None):
     if tokenizer is not None:
         return tokenizer
-    if emb is not None:
-        tok = getattr(emb, "tokenizer", None)
-        if tok is not None:
-            return tok
-        mod = getattr(emb, "model", None)
-        if mod is not None:
-            tok = getattr(mod, "tokenizer", None)
-            if tok is not None:
-                return tok
-            if hasattr(mod, "__len__") and len(mod) > 0:
-                tok = getattr(mod[0], "tokenizer", None)
-                if tok is not None:
-                    return tok
-        proc = getattr(emb, "processor", None)
-        if proc is not None:
-            tok = getattr(proc, "tokenizer", None)
-            if tok is not None:
-                return tok
-    return _FALLBACK_TOKENIZER
+    if emb is None:
+        return _FALLBACK_TOKENIZER
+    tok = getattr(emb, "tokenizer", None)
+    if tok is not None:
+        return tok
+    tok = backends._extract_model_tokenizer(getattr(emb, "model", None), getattr(emb, "processor", None))
+    if tok is not None:
+        return tok
+    emb_name = getattr(emb, "name", None)
+    if emb_name in ("fake", "none") or type(emb) in (backends.FakeEmbedder, backends.NoneEmbedder):
+        return _FALLBACK_TOKENIZER
+    raise DeskError(
+        "INPUT_BAD_ARGUMENT",
+        f"REFUSED: backend {emb_name or type(emb).__name__!r} has no tokenizer for token-counted chunking",
+    )
 
 
 def _encode_token_ids(tok, text: str) -> list:
@@ -1372,7 +1368,7 @@ def chunk_text(
 
     chunk_budget = max(1, eff_max_tokens - eff_prefix_tokens - 4)
 
-    if hasattr(tok, "spans"):
+    if tok is _FALLBACK_TOKENIZER:
         spans = tok.spans(text)
         if len(spans) <= chunk_budget:
             return [text]
@@ -1401,18 +1397,24 @@ def chunk_text(
         return chunks
 
     spans = _FALLBACK_TOKENIZER.spans(text)
-    if len(_encode_token_ids(tok, text)) <= chunk_budget:
+    if len(_encode_token_ids(tok, text)) <= chunk_budget or not spans:
         return [text]
     chunks = []
     i = 0
     while i < len(spans) and len(chunks) < max_chunks:
-        end_idx = min(i + chunk_budget, len(spans))
-        cand = text[spans[i][0]:spans[end_idx - 1][1]]
-        while end_idx - 1 > i and len(_encode_token_ids(tok, cand)) > chunk_budget:
-            end_idx -= 1
-            cand = text[spans[i][0]:spans[end_idx - 1][1]]
-        chunks.append(cand)
-        i = end_idx
+        lo = i + 1
+        hi = min(i + chunk_budget, len(spans))
+        best = lo
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            cand = text[spans[i][0]:spans[mid - 1][1]]
+            if len(_encode_token_ids(tok, cand)) <= chunk_budget:
+                best = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        chunks.append(text[spans[i][0]:spans[best - 1][1]])
+        i = best
     return chunks
 
 
@@ -1421,13 +1423,7 @@ def embed_file_chunks(emb, chunks: list[str], role: str = "document", title: str
     if not chunks:
         chunks = [""]
     titles = [title] * len(chunks) if (title is not None and role == "document") else None
-    if titles is not None:
-        try:
-            vecs = emb.texts(chunks, role, titles=titles)
-        except TypeError:
-            vecs = emb.texts(chunks, role)
-    else:
-        vecs = emb.texts(chunks, role)
+    vecs = emb.texts(chunks, role, titles=titles) if titles is not None else emb.texts(chunks, role)
     if vecs.ndim != 2 or vecs.shape[1] == 0:
         return np.zeros((0,), np.float32)
     return backends.unit_rows(vecs.mean(axis=0))[0]
@@ -1662,7 +1658,20 @@ def load_text_cache(
         with open(os.path.join(d, "items.jsonl"), encoding="utf-8") as f:
             items = [TextItem(**json.loads(line)) for line in f if line.strip()]
         sym_path = os.path.join(d, "texts_symmetric.npy")
-        vec_file = sym_path if (role == "symmetric" and os.path.isfile(sym_path)) else os.path.join(d, "texts.npy")
+        needs_symmetric = role == "symmetric" and (
+            backend in ("eg2", "fake") or meta.get("role") == "document+symmetric"
+        )
+        if needs_symmetric:
+            if not os.path.isfile(sym_path):
+                raise DeskError(
+                    "STATE_NO_INDEX",
+                    f"no symmetric vectors in {backend} text index under {d}; rerun: dataset-desk text-index --backend {backend}",
+                )
+            vec_file = sym_path
+        elif role == "symmetric" and os.path.isfile(sym_path):
+            vec_file = sym_path
+        else:
+            vec_file = os.path.join(d, "texts.npy")
         vecs = np.load(vec_file)
     except OSError as err:
         raise DeskError(

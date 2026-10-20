@@ -1120,6 +1120,66 @@ class TextAndCodeInputTests(unittest.TestCase):
         proc_chunks = desk.chunk_text(" ".join(f"w{i}" for i in range(20)), emb=_EmbWithProc())
         self.assertEqual(len(proc_chunks), 3)
 
+        # Fake embedder whose model is None at the first chunk_text call, and whose tokenizer counts 2 tokens per span:
+        # every chunk must come out within max_tokens - prefix - 4 by that fake's count.
+        class _TwoPerSpanTok:
+            def count(self, s: str) -> int:
+                return 2 * len(desk._FALLBACK_TOKENIZER.spans(s))
+
+            def encode(self, s: str, add_special_tokens: bool = False) -> list[int]:
+                return list(range(self.count(s)))
+
+        class _UnloadedModelEmb(backends.FakeEmbedder):
+            def __init__(self):
+                super().__init__(dim=768)
+                self.name = "gte-modernbert"
+                self.model = None
+                self._tok = _TwoPerSpanTok()
+
+            @property
+            def tokenizer(self):
+                return self._tok
+
+        unloaded_emb = _UnloadedModelEmb()
+        unloaded_emb.max_tokens = 24
+        self.assertIsNone(unloaded_emb.model)
+        prefix_str = "p1 p2"  # 2 spans -> 4 tokens by _TwoPerSpanTok; budget = 24 - 4 - 4 = 16 tokens (8 spans)
+        two_span_chunks = desk.chunk_text(
+            " ".join(f"tok{i}" for i in range(30)),
+            emb=unloaded_emb,
+            prefix=prefix_str,
+        )
+        self.assertIsNone(unloaded_emb.model)
+        budget = unloaded_emb.max_tokens - unloaded_emb.tokenizer.count(prefix_str) - 4
+        self.assertEqual(budget, 16)
+        self.assertEqual(len(two_span_chunks), 4)
+        for ch in two_span_chunks:
+            self.assertLessEqual(unloaded_emb.tokenizer.count(ch), budget)
+
+        # Verify text_index also chunks the very first file using emb.tokenizer while emb.model is None
+        src_unloaded = os.path.join(self.tmp, "src_unloaded")
+        self._write(src_unloaded, "first.py", " ".join(f"tok{i}" for i in range(30)))
+        out_unloaded = os.path.join(self.tmp, "out_unloaded")
+        unloaded_for_idx = _UnloadedModelEmb()
+        unloaded_for_idx.has_symmetric_vectors = False
+        unloaded_for_idx.max_tokens = 20  # budget = 20 - 0 - 4 = 16 tokens (8 spans per chunk -> 4 chunks for 30 spans)
+        desk.text_index(out_unloaded, unloaded_for_idx, source=src_unloaded, log=lambda *a: None)
+        idx_items, _, _ = desk.load_text_cache(out_unloaded, "gte-modernbert")
+        self.assertEqual(idx_items[0].chunks, 4)
+
+        # Real backend with no tokenizer is refused with INPUT_BAD_ARGUMENT rather than chunked by _SpanTokenizer
+        with self.assertRaises(DeskError) as cm_no_tok:
+            desk.chunk_text("some text", emb=backends.DINOv2Embedder())
+        self.assertEqual(cm_no_tok.exception.code, "INPUT_BAD_ARGUMENT")
+
+        # embed_file_chunks does not swallow TypeError from inside emb.texts()
+        class _BrokenTextsEmb:
+            def texts(self, chunks, role="document", titles=None):
+                raise TypeError("internal type bug inside texts()")
+
+        with self.assertRaises(TypeError):
+            desk.embed_file_chunks(_BrokenTextsEmb(), ["chunk"], role="document", title="doc.py")
+
         emb = backends.FakeEmbedder()
         c1 = "red " * 5000
         c2 = "blue " * 5000
@@ -1437,7 +1497,7 @@ class TextAndCodeInputTests(unittest.TestCase):
         # Channel 2 is 'blue' in FakeEmbedder; only present if text_index read past 54,000 chars into chunk 2
         self.assertGreater(float(long_vecs[0][2]), 0.1)
 
-        # Unprefixed backend (e.g. gte-modernbert) writes only texts.npy and load_text_cache(role="symmetric") falls back to texts.npy
+        # Unprefixed backend (e.g. gte-modernbert) writes only texts.npy and load_text_cache(role="symmetric") keeps reading texts.npy
         class _UnprefixedStub(backends.FakeEmbedder):
             has_symmetric_vectors = False
 
@@ -1446,6 +1506,7 @@ class TextAndCodeInputTests(unittest.TestCase):
                 self.name = "gte-modernbert"
                 self.revision = "gte-rev"
                 self.max_tokens = 8192
+                self.tokenizer = desk._FALLBACK_TOKENIZER
 
         out_bge = os.path.join(self.tmp, "out_bge")
         desk.text_index(out_bge, _UnprefixedStub(), source=src, log=lambda *a: None)
@@ -1454,6 +1515,19 @@ class TextAndCodeInputTests(unittest.TestCase):
         self.assertFalse(os.path.isfile(os.path.join(bge_tdir, "texts_symmetric.npy")))
         _, bge_sym_vecs, _ = desk.load_text_cache(out_bge, "gte-modernbert", role="symmetric")
         self.assertEqual(bge_sym_vecs.shape[0], 2)
+
+        # Prefix-sensitive backend (fake/eg2) refuses load_text_cache(role="symmetric") when texts_symmetric.npy is missing
+        sym_file_dual = os.path.join(tdir, "texts_symmetric.npy")
+        os.remove(sym_file_dual)
+        with self.assertRaises(DeskError) as cm_miss_sym:
+            desk.load_text_cache(out_dual, "fake", role="symmetric")
+        self.assertEqual(cm_miss_sym.exception.code, "STATE_NO_INDEX")
+        self.assertIn("text-index", cm_miss_sym.exception.message)
+        with self.assertRaises(DeskError) as cm_lin_sym:
+            desk.main(["lineage", "--out", out_dual, "--backend", "fake"])
+        self.assertEqual(cm_lin_sym.exception.code, "STATE_NO_INDEX")
+        # Restore texts_symmetric.npy
+        desk.text_index(out_dual, emb, source=src, log=lambda *a: None)
 
         # text-search uses "code_query" when --task code and "query" otherwise
         emb_spy = backends.FakeEmbedder()

@@ -378,7 +378,18 @@ class EG2Embedder:
         self.processor_kwargs = {} if self.text_only else {"image_seq_length": eff_vt}
         self.processing_kwargs = {} if self.text_only else {"image": {"max_soft_tokens": eff_vt}}
         self.model = None
+        self._tokenizer = None
         self.params: int | None = None
+
+    @property
+    def tokenizer(self):
+        if self._tokenizer is None:
+            self._tokenizer = _extract_model_tokenizer(self.model) or _load_repo_tokenizer(EG2_REPO, EG2_REVISION)
+        return self._tokenizer
+
+    @tokenizer.setter
+    def tokenizer(self, value) -> None:
+        self._tokenizer = value
 
     def _ensure_model(self) -> None:
         if self.model is not None:
@@ -508,6 +519,29 @@ def transformers_warnings_off():
         tf_logging.set_verbosity(previous)
 
 
+def _load_repo_tokenizer(repo: str, revision: str):
+    from transformers import AutoTokenizer
+
+    with transformers_warnings_off():
+        return AutoTokenizer.from_pretrained(repo, revision=revision)
+
+
+def _extract_model_tokenizer(model=None, processor=None):
+    if model is not None:
+        tok = getattr(model, "tokenizer", None)
+        if tok is not None:
+            return tok
+        if hasattr(model, "__len__") and len(model) > 0:
+            tok = getattr(model[0], "tokenizer", None)
+            if tok is not None:
+                return tok
+    if processor is not None:
+        tok = getattr(processor, "tokenizer", None)
+        if tok is not None:
+            return tok
+    return None
+
+
 class SigLIP2Embedder:
     """SigLIP2 so400m/384, the model ai-eyes runs, with its trained padding of 64 text tokens."""
 
@@ -524,7 +558,21 @@ class SigLIP2Embedder:
         self.torch = None
         self.processor = None
         self.model = None
+        self._tokenizer = None
         self.params: int | None = None
+
+    @property
+    def tokenizer(self):
+        if self._tokenizer is None:
+            self._tokenizer = (
+                _extract_model_tokenizer(self.model, self.processor)
+                or _load_repo_tokenizer(SIGLIP2_REPO, SIGLIP2_REVISION)
+            )
+        return self._tokenizer
+
+    @tokenizer.setter
+    def tokenizer(self, value) -> None:
+        self._tokenizer = value
 
     def _ensure_model(self) -> None:
         if self.model is not None:
@@ -610,7 +658,18 @@ class SentenceTransformerTextEmbedder:
         self._vram_checked = False
         self.dtype_name = "bfloat16" if device.startswith("cuda") else "float32"
         self.model = None
+        self._tokenizer = None
         self.params: int | None = None
+
+    @property
+    def tokenizer(self):
+        if self._tokenizer is None:
+            self._tokenizer = _extract_model_tokenizer(self.model) or _load_repo_tokenizer(self.repo, self.revision)
+        return self._tokenizer
+
+    @tokenizer.setter
+    def tokenizer(self, value) -> None:
+        self._tokenizer = value
 
     def _ensure_model(self) -> None:
         if self.model is not None:
@@ -693,7 +752,16 @@ class DINOv2Embedder:
         self.torch = None
         self.processor = None
         self.model = None
+        self._tokenizer = None
         self.params: int | None = None
+
+    @property
+    def tokenizer(self):
+        return self._tokenizer
+
+    @tokenizer.setter
+    def tokenizer(self, value) -> None:
+        self._tokenizer = value
 
     def _ensure_model(self) -> None:
         if self.model is not None:

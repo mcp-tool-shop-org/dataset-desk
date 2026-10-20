@@ -162,8 +162,15 @@ def make_transformers(processor=None, model=None):
             tf.calls.append(("image_processor", repo, kw))
             return tf.processor
 
+    class AutoTokenizer:
+        @staticmethod
+        def from_pretrained(repo, **kw):
+            tf.calls.append(("tokenizer", repo, kw))
+            return tf.processor
+
     tf.AutoProcessor, tf.AutoModel = AutoProcessor, AutoModel
     tf.AutoImageProcessor = AutoImageProcessor
+    tf.AutoTokenizer = AutoTokenizer
     tf.AutoModelForImageTextToText = AutoModelForImageTextToText
     tf.Florence2ForConditionalGeneration = Florence2ForConditionalGeneration
     return tf

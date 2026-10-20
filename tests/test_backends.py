@@ -825,6 +825,31 @@ class RegistryAndNewBackendsTests(TmpCase):
         with self.assertRaises(DeskError) as cm:
             d.texts(["no text on dinov2"])
         self.assertEqual(cm.exception.code, "INPUT_BAD_ARGUMENT")
+        self.assertIsNone(d.tokenizer)
+
+    def test_embedder_tokenizer_property_loads_before_model(self):
+        tf = fakes.make_transformers()
+        with fakes.fake_modules(transformers=tf):
+            for name in ("eg2", "siglip2", "bge-m3", "qwen3-emb-0.6b", "gte-modernbert"):
+                tf.calls.clear()
+                emb = backends.make(name)
+                self.assertIsNone(emb.model)
+                tok = emb.tokenizer
+                self.assertIsNotNone(tok)
+                self.assertIsNone(emb.model)
+                spec = registry.REGISTRY[name]
+                self.assertEqual(tf.calls, [("tokenizer", spec.repo, {"revision": spec.revision})])
+                # Second access uses cached _tokenizer without reloading
+                self.assertIs(emb.tokenizer, tok)
+                self.assertEqual(len(tf.calls), 1)
+                # Explicit setter overrides _tokenizer
+                sentinel = object()
+                emb.tokenizer = sentinel
+                self.assertIs(emb.tokenizer, sentinel)
+            dino = backends.make("dinov2")
+            self.assertIsNone(dino.tokenizer)
+            dino.tokenizer = "custom"
+            self.assertEqual(dino.tokenizer, "custom")
 
     def test_dinov2_last_hidden_state_fallback(self):
         img_path = png(self.tmp, "d2.png")
