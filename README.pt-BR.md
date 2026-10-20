@@ -22,7 +22,7 @@
 
 ## Por que
 
-Um estilo LoRA aprende com as imagens de treinamento e suas legendas. Dois defeitos sutis prejudicam ambos:
+Um estilo LoRA aprende com suas imagens de treinamento e suas legendas. Dois defeitos sutis prejudicam ambos:
 - **Repetições.** A mesma imagem salva duas vezes, ou duas renderizações com apenas alguns pixels de diferença, ensinam a mesma imagem duas vezes.
 - **Descrições que não são descrições.** Uma legenda copiada do prompt de geração ou uma regra colada em 54 imagens não diz nada ao modelo sobre a imagem. Pior ainda, se esse texto for usado posteriormente para testar a pesquisa, ele mede a recuperação do prompt, e não a compreensão da imagem.
 
@@ -73,7 +73,9 @@ Para o índice de incorporação (pesquisa, cobertura, duplicatas semânticas, a
 pip install "dataset-desk[models]"
 ```
 
-Os modelos são obtidos do Hugging Face em revisões fixas na primeira vez que são usados e, em seguida, carregados do seu cache. Cada tarefa tem um padrão, e `--backend` escolhe outro:
+No Windows com uma GPU NVIDIA, instale primeiro uma versão CUDA do torch de `https://download.pytorch.org`; o torch do PyPI para Windows é apenas para CPU.
+
+Os modelos são obtidos do Hugging Face em revisões fixas na primeira vez que são usados e, em seguida, são carregados do seu cache. Cada tarefa tem um padrão, e `--backend` escolhe outro:
 
 | Backend | Modelo | Padrão para |
 |---|---|---|
@@ -83,7 +85,7 @@ Os modelos são obtidos do Hugging Face em revisões fixas na primeira vez que s
 | `eg2` | [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) | código (`--task code`, `lineage`) |
 | `qwen3-emb-0.6b`, `gte-modernbert` | [Qwen3-Embedding 0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B), [gte-modernbert-base](https://huggingface.co/Alibaba-NLP/gte-modernbert-base) | — |
 
-EmbeddingGemma 2 é usado da maneira que seu cartão de modelo diz: um prefixo de tarefa por comando, carregamento apenas de texto para texto e `--dim 768|512|256`. Defina `HF_HUB_OFFLINE=1` para proibir downloads. O rascunhista plain-sight é sempre offline: ele nunca faz download.
+O EmbeddingGemma 2 é usado da maneira que seu cartão de modelo diz: um prefixo de tarefa por comando, carregamento apenas de texto para texto e `--dim 768|512|256`. Defina `HF_HUB_OFFLINE=1` para proibir downloads. O rascunhista plain-sight é sempre offline: ele nunca faz download.
 
 **Executa em:** Python 3.11 e 3.12, no Windows e Linux. CPU por padrão, com cada pool de threads limitado (4 threads, a menos que `--threads` diga o contrário), e uma execução de modelo reduz o processo para uma prioridade abaixo do normal, para que ele possa compartilhar uma máquina.
 
@@ -125,10 +127,10 @@ Um projeto sem `records/` também funciona, desde que as imagens estejam em past
 
 ## Modelo de ameaças e confiança
 
-- **O que ele lê:** a pasta do projeto que você nomeia com `--project`: imagens, `records/*.json`, metadados de onda e os dados de geração incorporados em arquivos PNG. Os comandos de texto leem a pasta `--source` ou o `--rnd-data` que você nomeia. Eles rejeitam o repositório privado e os armazenamentos de dados do rnd-data e imprimem apenas caminhos relativos.
+- **O que ele lê:** a pasta do projeto que você nomeia com `--project`: imagens, `records/*.json`, metadados de onda e os dados de geração incorporados em arquivos PNG. Os comandos de texto leem a pasta `--source` ou o `--rnd-data` que você nomeou. Eles rejeitam o repositório privado e os armazenamentos de dados do rnd-data e imprimem apenas caminhos relativos.
 - **O que ele grava:** apenas em `--out`: seu cache de digitalização, caches de incorporação, o relatório, `description-review.jsonl` e a planilha. Ele rejeita um `--out` dentro do projeto (`PERM_OUT_INSIDE_PROJECT`), para que um projeto nunca seja modificado.
 - **O que ele nunca toca:** qualquer coisa fora dessas duas pastas. Ele não exclui nada, em lugar nenhum.
-- **Rede:** a versão lite nunca a usa. Um backend de modelo obtém seus pesos fixos do Hugging Face na primeira utilização, a menos que `HF_HUB_OFFLINE=1` esteja definido; o gerador é carregado com `HF_HUB_OFFLINE=1` e `local_files_only=True` a cada vez. Nenhum modelo executa código remoto.
+- **Rede:** a versão lite nunca a usa. Um backend de modelo busca seus pesos fixos do Hugging Face na primeira utilização, a menos que `HF_HUB_OFFLINE=1` esteja definido; o gerador é carregado com `HF_HUB_OFFLINE=1` e `local_files_only=True` a cada vez. Nenhum modelo executa código remoto.
 - **Permissões:** uma conta de usuário comum. Uma GPU precisa de `--device` mais um `--grant`, para que uma placa compartilhada não seja usada por engano. Antes de carregar um modelo, um governador de VRAM verifica se a memória já em uso mais a necessidade medida do modelo se encaixa em `--vram-budget` (padrão de 26.624 MiB). Ele nunca remove nada; `--wait` verifica até que o carregamento se encaixe.
 - **Segredos e telemetria:** ele não lê credenciais e não coleta nem envia telemetria.
 - **Etapas protegidas:** em projetos bloqueados para um benchmark em execução, as incorporações de descrição e qualquer aceitação de descrições baseada em modelo são rejeitadas, a menos que `--allow-multimodal-pool` seja aprovado, para que as consultas do benchmark não sejam moldadas pelos modelos que ele mede.
@@ -137,9 +139,9 @@ Relate uma vulnerabilidade conforme descrito em [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.2.0, um protótipo público.** O código é testado offline: 188 testes e 95% de cobertura de linhas, com pequenas substituições para as bibliotecas de modelo.
-- **Calibração:** as execuções do estúdio em seus próprios dados, em uma RTX 5090, definem os limites de duplicação e as figuras de VRAM. Eles são provisórios e se baseiam em um conjunto por tipo. Os limites de código se baseiam em 17 cópias inseridas. O método e os dados estão em [newsletter issue 16](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
-- **Projetos grandes:** duplicatas, valores discrepantes e o canal de pesquisa funcionam em blocos delimitados. Em conjuntos sintéticos, a pesquisa de duplicatas próximas e o canal de pesquisa levam minutos em 100.000 imagens, onde antes levavam horas ou ficavam sem memória. O portão de descrição é cerca de 6 vezes mais rápido. Sua verificação de Jaccard ainda diminui drasticamente em conjuntos muito grandes que compartilham muitas palavras, e essa questão de design permanece em aberto.
+**v0.2.1, um protótipo público.** O código é testado offline: 197 testes e 96% de cobertura de linhas, com pequenas substituições para as bibliotecas de modelo.
+- **Calibração:** as execuções do estúdio em seus próprios dados, em uma RTX 5090, definem os limites de duplicação, que são provisórios e se baseiam em um pool por tipo. As cifras de VRAM são cifras conservadoras de placa inteira, incluindo o contexto CUDA, medidas em uma RTX 5090; outras placas e corpora podem ser diferentes. Os limites de código se baseiam em 17 cópias plantadas. O método e os dados estão em [newsletter issue 16](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
+- **Projetos grandes:** duplicatas, outliers e o canal de pesquisa funcionam em blocos delimitados. Em conjuntos sintéticos, a pesquisa de quase duplicatas e o canal de pesquisa levam minutos em 100.000 imagens, onde antes levavam horas ou ficavam sem memória. A verificação de quase duplicatas do filtro de descrição usa um filtro de prefixo exato, para que ele compare apenas descrições que possam atingir 0,85. A primeira digitalização é cerca de 2 vezes mais rápida por imagem, com resultados idênticos, e é executada em paralelo em `--threads`.
 - **Espere que a linha de comando mude antes da versão 1.0.**
 
 O registro de design, sua base de pesquisa e seu histórico de revisão estão na biblioteca de pesquisa do estúdio: [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).
