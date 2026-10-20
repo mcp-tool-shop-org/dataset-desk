@@ -35,7 +35,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "dataset_desk",
-      "qualifyingSourceCommits": 3,
+      "qualifyingSourceCommits": 5,
       "rebaseline": null
     },
     {
@@ -83,7 +83,7 @@
       "confidence": "low",
       "highWater": null,
       "name": "tests",
-      "qualifyingSourceCommits": 3,
+      "qualifyingSourceCommits": 5,
       "rebaseline": null
     }
   ],
@@ -116,8 +116,8 @@
         "path": ".gitignore"
       },
       {
-        "commits": 5,
-        "lines": 81,
+        "commits": 7,
+        "lines": 146,
         "path": "CHANGELOG.md"
       },
       {
@@ -126,43 +126,43 @@
         "path": "LICENSE"
       },
       {
-        "commits": 4,
-        "lines": 167,
+        "commits": 5,
+        "lines": 242,
         "path": "README.es.md"
       },
       {
-        "commits": 4,
-        "lines": 191,
+        "commits": 5,
+        "lines": 278,
         "path": "README.fr.md"
       },
       {
-        "commits": 4,
-        "lines": 179,
+        "commits": 5,
+        "lines": 274,
         "path": "README.hi.md"
       },
       {
-        "commits": 4,
-        "lines": 195,
+        "commits": 5,
+        "lines": 292,
         "path": "README.it.md"
       },
       {
-        "commits": 4,
-        "lines": 191,
+        "commits": 5,
+        "lines": 280,
         "path": "README.ja.md"
       },
       {
-        "commits": 4,
-        "lines": 149,
+        "commits": 5,
+        "lines": 192,
         "path": "README.md"
       },
       {
-        "commits": 4,
-        "lines": 165,
+        "commits": 5,
+        "lines": 240,
         "path": "README.pt-BR.md"
       },
       {
-        "commits": 4,
-        "lines": 197,
+        "commits": 5,
+        "lines": 306,
         "path": "README.zh.md"
       },
       {
@@ -181,8 +181,8 @@
         "path": "SHIP_GATE.md"
       },
       {
-        "commits": 4,
-        "lines": 99,
+        "commits": 5,
+        "lines": 120,
         "path": "atlas/README.md"
       },
       {
@@ -191,18 +191,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 4,
-        "lines": 229,
+        "commits": 5,
+        "lines": 305,
         "path": "atlas/page.json"
       },
       {
-        "commits": 4,
-        "lines": 682,
+        "commits": 5,
+        "lines": 818,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 4,
-        "lines": 2176,
+        "commits": 5,
+        "lines": 3798,
         "path": "atlas/structure.json"
       },
       {
@@ -211,8 +211,8 @@
         "path": "codecov.yml"
       },
       {
-        "commits": 4,
-        "lines": 9,
+        "commits": 5,
+        "lines": 11,
         "path": "dataset_desk/__init__.py"
       },
       {
@@ -226,13 +226,13 @@
         "path": "dataset_desk/backends.py"
       },
       {
-        "commits": 2,
-        "lines": 847,
+        "commits": 3,
+        "lines": 875,
         "path": "dataset_desk/description_gate.py"
       },
       {
-        "commits": 6,
-        "lines": 3281,
+        "commits": 9,
+        "lines": 3628,
         "path": "dataset_desk/desk.py"
       },
       {
@@ -241,8 +241,8 @@
         "path": "dataset_desk/errors.py"
       },
       {
-        "commits": 3,
-        "lines": 282,
+        "commits": 4,
+        "lines": 293,
         "path": "dataset_desk/registry.py"
       },
       {
@@ -251,8 +251,8 @@
         "path": "dataset_desk/stopwords.txt"
       },
       {
-        "commits": 4,
-        "lines": 65,
+        "commits": 5,
+        "lines": 67,
         "path": "pyproject.toml"
       },
       {
@@ -286,8 +286,8 @@
         "path": "site/src/content.config.ts"
       },
       {
-        "commits": 1,
-        "lines": 56,
+        "commits": 2,
+        "lines": 75,
         "path": "site/src/content/docs/handbook/architecture.md"
       },
       {
@@ -301,23 +301,23 @@
         "path": "site/src/content/docs/handbook/getting-started.md"
       },
       {
-        "commits": 4,
-        "lines": 56,
+        "commits": 5,
+        "lines": 66,
         "path": "site/src/content/docs/handbook/index.md"
       },
       {
-        "commits": 2,
-        "lines": 101,
+        "commits": 3,
+        "lines": 127,
         "path": "site/src/content/docs/handbook/reference.md"
       },
       {
-        "commits": 1,
-        "lines": 33,
+        "commits": 2,
+        "lines": 37,
         "path": "site/src/content/docs/handbook/security.md"
       },
       {
-        "commits": 1,
-        "lines": 83,
+        "commits": 2,
+        "lines": 159,
         "path": "site/src/content/docs/handbook/usage.md"
       },
       {
@@ -326,8 +326,8 @@
         "path": "site/src/pages/index.astro"
       },
       {
-        "commits": 4,
-        "lines": 129,
+        "commits": 5,
+        "lines": 131,
         "path": "site/src/site-config.ts"
       },
       {
@@ -351,18 +351,18 @@
         "path": "tests/fakes.py"
       },
       {
-        "commits": 6,
-        "lines": 1567,
+        "commits": 7,
+        "lines": 1580,
         "path": "tests/test_backends.py"
       },
       {
-        "commits": 2,
-        "lines": 410,
+        "commits": 3,
+        "lines": 415,
         "path": "tests/test_cli.py"
       },
       {
-        "commits": 5,
-        "lines": 2229,
+        "commits": 6,
+        "lines": 2568,
         "path": "tests/test_desk.py"
       },
       {
@@ -371,8 +371,13 @@
         "path": "tests/test_gate_edges.py"
       },
       {
-        "commits": 4,
-        "lines": 1821,
+        "commits": 1,
+        "lines": 160,
+        "path": "tests/test_scale.py"
+      },
+      {
+        "commits": 5,
+        "lines": 1823,
         "path": "uv.lock"
       },
       {
@@ -386,13 +391,13 @@
     "level": "low",
     "reason": "fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions"
   },
-  "generatedAt": "2026-10-20T05:12:03.826Z",
+  "generatedAt": "2026-10-20T06:33:02.665Z",
   "generatedFrom": {
-    "commit": "25d9cdd529dbc526e602d95b5ef99bf30a8a44ec"
+    "commit": "30802b906438ec58fa0db8866edc74878d8e5ffa"
   },
   "pairs": [],
   "parameters": {
-    "appliedChangesetLimit": 14.5,
+    "appliedChangesetLimit": 14.75,
     "changeset": 50,
     "changesetFraction": 0.25,
     "cohesionDrop": 0.2,
@@ -401,16 +406,16 @@
     "floor": "fallen",
     "floorHeld": false,
     "floorTrigger": "both",
-    "headDate": "2026-10-20T00:12:31-04:00",
-    "inScopeFiles": 58,
+    "headDate": "2026-10-20T02:22:09-04:00",
+    "inScopeFiles": 59,
     "pinnedStart": null,
     "priorFloor": "fallen",
-    "qualifyingCommits": 6,
+    "qualifyingCommits": 8,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 3,
-    "since": "2026-04-23T04:12:31.000Z",
+    "since": "2026-04-23T06:22:09.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

@@ -1164,6 +1164,49 @@ def mid_rank(sims: np.ndarray, own: int) -> float:
     return 1 + float((sims > s).sum()) + 0.5 * float((sims == s).sum() - 1)
 
 
+def _rank_descriptions(
+    img: np.ndarray,
+    T: np.ndarray,
+    own_idx: list[int] | np.ndarray,
+    *,
+    second_idx: list[int] | np.ndarray | None = None,
+    sibling_groups: list[list[int]] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+    """Rank stacked description vectors T against img in _block_rows blocks.
+    Returns (own_ranks, own_cosines, second_ranks, group_ranks)."""
+    m = len(T)
+    own_ranks = np.empty(m, dtype=np.float64)
+    own_cosines = np.empty(m, dtype=np.float64)
+    second_ranks = np.empty(m, dtype=np.float64) if second_idx is not None else None
+    group_ranks = np.empty(m, dtype=np.float64) if sibling_groups is not None else None
+    if m == 0:
+        return own_ranks, own_cosines, second_ranks, group_ranks
+
+    rows = _block_rows(len(img), img.itemsize)
+    for i in range(0, m, rows):
+        S = T[i:i + rows] @ img.T
+        for r in range(S.shape[0]):
+            k = i + r
+            sims = S[r]
+            own = int(own_idx[k])
+            s = sims[own]
+            own_cosines[k] = float(s)
+            rk = mid_rank(sims, own)
+            own_ranks[k] = rk
+            if second_ranks is not None and second_idx is not None:
+                second_ranks[k] = mid_rank(sims, int(second_idx[k]))
+            if group_ranks is not None and sibling_groups is not None:
+                sibs = sibling_groups[k]
+                if len(sibs) > 1:
+                    sib_scores = sims[sibs]
+                    above = int((sims > s).sum()) - int((sib_scores > s).sum())
+                    equal = int((sims == s).sum() - 1) - (int((sib_scores == s).sum()) - 1)
+                    group_ranks[k] = 1 + float(above) + 0.5 * float(equal)
+                else:
+                    group_ranks[k] = rk
+    return own_ranks, own_cosines, second_ranks, group_ranks
+
+
 def captions(items: list[Item], img: np.ndarray, txt: dict, n: int = 15) -> dict:
     """For every approved record description: the rank of its own image when the description searches the whole pool,
     plus group_rank (masking co-described siblings that share the exact same description text, as in rustline)."""
@@ -1181,25 +1224,37 @@ def captions(items: list[Item], img: np.ndarray, txt: dict, n: int = 15) -> dict
         if d:
             desc_groups.setdefault(d, []).append(i)
 
-    rows = []
+    own_idx: list[int] = []
+    vecs: list[np.ndarray] = []
+    sib_groups: list[list[int]] = []
     for sha, v in txt.items():
         if sha not in pos:
             continue
         i = pos[sha]
         if items[i].status != "approved" or not (items[i].record or {}).get("explanation"):
             continue
-        sims = img @ v
-        rk = mid_rank(sims, i)
-        siblings = desc_groups.get(norm_desc.get(i, ""), [i])
-        if len(siblings) > 1:
-            masked = sims.copy()
-            for sib in siblings:
-                if sib != i:
-                    masked[sib] = -np.inf
-            grk = mid_rank(masked, i)
-        else:
-            grk = rk
-        rows.append({"item": i, "rank": rk, "group_rank": grk, "siblings": len(siblings), "cosine": float(sims[i])})
+        own_idx.append(i)
+        vecs.append(v)
+        sib_groups.append(desc_groups.get(norm_desc.get(i, ""), [i]))
+
+    if vecs:
+        T = np.vstack(vecs)
+        own_ranks, own_cosines, _, group_ranks = _rank_descriptions(
+            img, T, own_idx, sibling_groups=sib_groups
+        )
+        assert group_ranks is not None
+        rows = [
+            {
+                "item": own_idx[k],
+                "rank": float(own_ranks[k]),
+                "group_rank": float(group_ranks[k]),
+                "siblings": len(sib_groups[k]),
+                "cosine": float(own_cosines[k]),
+            }
+            for k in range(len(own_idx))
+        ]
+    else:
+        rows = []
     rows.sort(key=lambda r: (-r["group_rank"], -r["rank"]))
     ranks = [r["rank"] for r in rows]
     granks = [r["group_rank"] for r in rows]
@@ -1262,10 +1317,18 @@ def swap_check(items: list[Item], img: np.ndarray, txt: dict, seed: int = 0) -> 
         for src, dst in zip(order, shifted, strict=True):
             perm[src] = dst
 
-    true = [mid_rank(img @ txt[sh], pos[sh]) for sh in shas]
-    swapped = [mid_rank(img @ txt[shas[perm[k]]], pos[sh]) for k, sh in enumerate(shas)]
-    t, w = np.array(true), np.array(swapped)
-    auc = float(((w[:, None] > t[None, :]).sum() + 0.5 * (w[:, None] == t[None, :]).sum()) / (len(w) * len(t)))
+    T = np.vstack([txt[sh] for sh in shas])
+    inv_perm = np.argsort(perm)
+    own_idx = [pos[sh] for sh in shas]
+    second_idx = [pos[shas[int(inv_perm[k])]] for k in range(n)]
+    t, _, second_ranks, _ = _rank_descriptions(img, T, own_idx, second_idx=second_idx)
+    assert second_ranks is not None
+    w = np.empty(n, dtype=np.float64)
+    w[inv_perm] = second_ranks
+    t_s = np.sort(t)
+    left = np.searchsorted(t_s, w, side="left")    # true ranks below each swapped rank
+    right = np.searchsorted(t_s, w, side="right")
+    auc = float((left.sum() + 0.5 * (right - left).sum()) / (len(w) * len(t)))
     return {"pairs": len(shas), "auc": auc, "true_median_rank": float(np.median(t)),
             "swapped_median_rank": float(np.median(w)), "seed": seed}
 
