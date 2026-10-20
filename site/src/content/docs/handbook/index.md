@@ -43,6 +43,12 @@ model.
 
 ## Status
 
-v0.1.3 is a public prototype. It is tested offline (152 tests, 96% line coverage). A first calibration on the studio's own data
-ranked the models by task, but its thresholds aren't pinned yet: they are still starting points. The design record and its review history are in the studio's research library:
+v0.2.0 is a public prototype. It is tested offline (188 tests, 95% line coverage).
+- **Calibration:** the studio's runs on its own data set the duplicate thresholds and the models' VRAM figures. They're
+  provisional, and they rest on one pool per kind; the method and the data are in
+  [newsletter issue 16](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
+- **Large projects:** duplicates, outliers and the look channel work in bounded blocks. On synthetic sets they take
+  minutes at 100,000 images. The description gate's Jaccard check still slows on very large sets that share many words.
+
+The design record and its review history are in the studio's research library:
 [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).

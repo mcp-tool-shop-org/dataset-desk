@@ -22,32 +22,42 @@
 
 ## Perché
 
-Uno stile LoRA apprende dalle immagini di addestramento e dalle relative didascalie. Due difetti minori ne compromettono il funzionamento:
+Uno stile LoRA apprende dalle immagini di addestramento e dalle relative didascalie. Due difetti minori ne compromettono l'efficacia:
 - **Ripetizioni.** La stessa immagine salvata due volte, o due rendering leggermente diversi, fanno sì che la stessa immagine venga "vista" due volte.
-- **Descrizioni che non sono descrizioni.** Una didascalia copiata dal prompt di generazione, o una regola applicata a 54 immagini, non fornisce al modello alcuna informazione sull'immagine. Peggio ancora, se questo testo viene successivamente utilizzato per testare la ricerca, misura la capacità di recupero del prompt, e non la comprensione dell'immagine.
+- **Descrizioni che non sono descrizioni.** Una didascalia copiata dal prompt di generazione, o una regola applicata a 54 immagini, non fornisce al modello alcuna informazione sull'immagine. Peggio ancora, se questo testo viene successivamente utilizzato per testare la ricerca, misura la capacità di recupero del prompt, non la comprensione dell'immagine.
 
-dataset-desk individua entrambi i problemi, all'interno di una cartella di progetto, senza modificarla. Genera un report e una coda di revisione per l'intervento di un operatore. **Niente viene rimosso automaticamente.**
+dataset-desk individua entrambi i tipi di problemi all'interno di una cartella di progetto, senza modificarla. Genera un report e una coda di revisione per l'intervento di un operatore. **Niente viene rimosso automaticamente.**
 
 ## Cosa fa
 
 | Comando | Risultato |
 |---|---|
-| `index` | Scansiona il progetto (record, metadati audio, dati di generazione PNG) e memorizza ogni immagine univoca in una cache all'interno di `--out` |
-| `dupes` | Copie identiche (sha256), duplicati quasi identici (dHash a 256 bit entro 10 bit) e duplicati semantici (similarità coseno dell'embedding), in formato JSON |
-| `search` | Le immagini più simili a una descrizione (`--text`), a un'immagine (`--image`) o a entrambe |
-| `coverage` | Le immagini migliori per ciascun soggetto in un elenco di soggetti desiderati, in modo che le lacune siano evidenti |
-| `report` | Un report in formato Markdown: duplicati, le immagini approvate meno tipiche in base al contenuto e all'aspetto, la verifica delle descrizioni e se ciascuna descrizione corrisponde alla propria immagine |
+| `index` | Scansiona il progetto (record, metadati delle onde, dati di generazione PNG) e inserisce ogni immagine univoca in una cache all'interno di `--out` |
+| `dupes` | Copie identiche (sha256), duplicati quasi identici (dHash a 256 bit con consapevolezza della simmetria) e duplicati semantici (somiglianza coseno dell'embedding), in formato JSON. Utilizza un indice DINOv2 con una regola calibrata a due segnali. Due viste dello stesso oggetto non vengono mai accoppiate. |
+| `search` | Le immagini più simili a una descrizione (`--text`), a un'immagine (`--image`) o a entrambe. |
+| `coverage` | Le immagini migliori per ciascun soggetto in un elenco di soggetti desiderati, in modo che le lacune siano evidenti. |
+| `report` | Un report in formato Markdown: duplicati, le immagini approvate meno tipiche in base al contenuto e all'aspetto, la verifica delle descrizioni e se ciascuna descrizione corrisponde alla propria immagine. |
+| `text-index` | Inserisce i file di testo e codice di una cartella `--source` (o di un checkout rnd-data), contando i blocchi utilizzando il tokenizer del modello. |
+| `text-dupes` | File identici e quasi identici. `--task code` confronta solo gli script. |
+| `text-search` | I file più simili a una query (`--text`). `--task code` utilizza il prompt di recupero del codice del modello. |
+| `lineage` | Versioni dello stesso script tra le diverse esecuzioni, ordinate per somiglianza. |
 
-Il **filtro delle descrizioni** funziona senza alcun modello. Una descrizione viene segnalata quando:
-- ripete il prompt: è uguale al prompt o è contenuto in esso, condivide una sequenza di 6 o più parole con esso, o il 90% o più delle sue parole (80% o più delle parole rilevanti) compaiono in esso;
-- include la riga dell'oggetto del record: una sequenza di 4 o più parole `canon.subject` compare come una sequenza continua di parole;
-- è troppo breve: meno di 8 parole o meno di 5 parole rilevanti;
-- duplica un'altra descrizione nell'insieme: identica dopo aver rimosso la punteggiatura, o un indice di Jaccard delle parole rilevanti pari a 0,85 o superiore;
+**Le soglie** derivano dalla calibrazione del software sui propri dati. Ognuna di esse è contrassegnata come provvisoria nel codice, con l'indicazione della misurazione da cui deriva:
+- **Immagini:** su un indice DINOv2, una coppia è considerata un duplicato quando `(cosine ≥ 0.94 and the mirror-aware dHash is within 44 bits) or cosine ≥ 0.985`. Altri indici utilizzano il dHash entro 26 bit, più la somiglianza coseno ≥ 0,95.
+- **Testo:** 0,98 con bge-m3 e 0,95 per il codice con EmbeddingGemma 2. Qualsiasi altro modello richiede `--semantic`.
+
+Due rendering dello stesso oggetto da angolazioni diverse non sono mai considerati duplicati. La vista deriva da `provenance.asset_id` e `render_id` di ciascun record, o dai nomi dei file come `<asset>__y<yaw>_e<elev>`.
+
+**Il controllo delle descrizioni** viene eseguito senza l'utilizzo di alcun modello. Una descrizione viene segnalata quando:
+- ripete il prompt: è uguale al prompt o è contenuto in esso, condivide una sequenza di 6 o più parole con esso, o il 90% o più delle sue parole (80% o più delle sue parole chiave) compaiono in esso;
+- include la riga dell'oggetto del record: una sequenza di 4 o più parole `canon.subject` compare come una sequenza continua delle sue parole;
+- è troppo breve: meno di 8 parole o meno di 5 parole chiave;
+- duplica un'altra descrizione nell'insieme: identica dopo aver rimosso la punteggiatura, o con un indice di Jaccard delle parole chiave pari a 0,85 o superiore;
 - è troppo lunga per SigLIP2: più di 64 token (l'unico controllo che richiede un tokenizer; i record non controllati non vengono mai contrassegnati come validi).
 
-I record segnalati vengono inviati a `description-review.jsonl` e a una **scheda di lavoro anonima**: ogni immagine segnalata è affiancata da 3-5 immagini visivamente più simili, senza prompt, senza riga dell'oggetto e senza il testo precedente, in modo che l'operatore che la modifica possa descrivere l'immagine. Un redattore opzionale ([plain-sight](https://github.com/mcp-tool-shop-org/plain-sight), Florence-2) può scrivere una prima bozza basandosi solo sui pixel; le bozze vengono registrate come `captioner_assisted` e un operatore le modifica.
+I record segnalati vengono inviati a `description-review.jsonl` e a una **scheda di lavoro anonima**: ogni immagine segnalata è affiancata da 3-5 immagini visivamente più simili, senza prompt, senza riga dell'oggetto e senza il vecchio testo in vista, in modo che la persona che la riscrive possa descrivere l'immagine. Un redattore opzionale ([plain-sight](https://github.com/mcp-tool-shop-org/plain-sight), Florence-2) può scrivere una prima bozza a partire dai soli pixel; le bozze vengono registrate come `captioner_assisted` e una persona le modifica.
 
-Il **canale visivo** è costituito da 30 numeri per immagine (palette, tonalità e texture alla risoluzione nativa), in modo che "il rendering di questa immagine è errato" sia distinto da "il soggetto di questa immagine è strano".
+**Il canale di analisi dell'aspetto** è costituito da 30 numeri per immagine (palette, tonalità e texture alla risoluzione nativa), in modo che "il rendering di questa immagine è errato" sia distinguibile da "il soggetto di questa immagine è strano".
 
 ## Installazione
 
@@ -55,7 +65,7 @@ Il **canale visivo** è costituito da 30 numeri per immagine (palette, tonalità
 pip install dataset-desk
 ```
 
-Questo fornisce il **livello base**: solo numpy e Pillow, senza torch. I controlli sui duplicati, il canale visivo, il filtro delle descrizioni e il report funzionano in questo livello (`--backend none`).
+Questo fornisce la **versione "lite"**: solo numpy e Pillow, senza torch. I controlli sui duplicati, il canale di analisi dell'aspetto, il controllo delle descrizioni e il report funzionano tutti in questa versione (`--backend none`).
 
 Per l'indice di embedding (ricerca, copertura, duplicati semantici, controllo della corrispondenza della descrizione), aggiungere le librerie del modello:
 
@@ -63,9 +73,19 @@ Per l'indice di embedding (ricerca, copertura, duplicati semantici, controllo de
 pip install "dataset-desk[models]"
 ```
 
-I modelli vengono scaricati da Hugging Face con le revisioni specificate la prima volta che vengono utilizzati, quindi vengono caricati dalla cache: [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) (`--backend eg2`) o [SigLIP2 so400m](https://huggingface.co/google/siglip2-so400m-patch14-384) (`--backend siglip2`). Impostare `HF_HUB_OFFLINE=1` per impedire i download. Il redattore plain-sight è sempre offline: non scarica mai nulla.
+I modelli vengono scaricati da Hugging Face alle revisioni specificate la prima volta che vengono utilizzati, quindi vengono caricati dalla cache. Ogni attività ha un valore predefinito e `--backend` ne seleziona un altro:
 
-**Funziona su:** Python 3.11 e 3.12, su Windows e Linux. CPU per impostazione predefinita, con ogni pool di thread limitato (4 thread a meno che `--threads` non indichi diversamente) e l'esecuzione di un modello riduce la priorità del processo a sotto la norma, in modo che possa condividere una macchina.
+| Backend | Modello | Predefinito per |
+|---|---|---|
+| `dinov2` | [DINOv2](https://huggingface.co/facebook/dinov2-base) | `dupes` |
+| `siglip2` | [SigLIP2 so400m](https://huggingface.co/google/siglip2-so400m-patch14-384) | `index`, `search`, `coverage`, `report` |
+| `bge-m3` | [bge-m3](https://huggingface.co/BAAI/bge-m3) | testo |
+| `eg2` | [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) | codice (`--task code`, `lineage`) |
+| `qwen3-emb-0.6b`, `gte-modernbert` | [Qwen3-Embedding 0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B), [gte-modernbert-base](https://huggingface.co/Alibaba-NLP/gte-modernbert-base) | — |
+
+EmbeddingGemma 2 viene utilizzato nel modo indicato nella sua scheda del modello: un prefisso di attività per ogni comando, caricamento solo del testo per il testo e `--dim 768|512|256`. Impostare `HF_HUB_OFFLINE=1` per impedire i download. Il redattore plain-sight è sempre offline: non effettua mai download.
+
+**Funziona su:** Python 3.11 e 3.12, su Windows e Linux. CPU per impostazione predefinita, con ogni pool di thread limitato (4 thread a meno che `--threads` non indichi diversamente) e l'esecuzione di un modello riduce la priorità del processo a "inferiore al normale", in modo che possa condividere una macchina.
 
 ## Utilizzo
 
@@ -79,11 +99,21 @@ dataset-desk index    --project path/to/project --backend siglip2 --out desk-out
 dataset-desk search   --project path/to/project --backend siglip2 --out desk-out/project --text "a squat bog creature"
 dataset-desk coverage --project path/to/project --backend siglip2 --out desk-out/project --subjects wanted.txt
 dataset-desk report   --project path/to/project --backend siglip2 --out desk-out/project --subjects wanted.txt
+
+# Image duplicates with the calibrated DINOv2 rule
+dataset-desk index --project path/to/project --backend dinov2 --out desk-out/project
+dataset-desk dupes --project path/to/project --out desk-out/project
+
+# Text and code files
+dataset-desk text-index  --source path/to/folder --out desk-out/texts               # bge-m3, for text
+dataset-desk text-dupes  --source path/to/folder --out desk-out/texts
+dataset-desk text-index  --source path/to/folder --out desk-out/texts --task code   # EmbeddingGemma 2, for code
+dataset-desk text-search --source path/to/folder --out desk-out/texts --task code --text "where the cache is written"
 ```
 
-`dataset-desk --help` elenca tutti i flag. Codici di uscita: `0` ok, `1` un errore dell'utente o un rifiuto, `2` un errore imprevisto. Gli errori vengono visualizzati come `error <CODE>: <message>` con una riga `hint:`; `--debug` aggiunge la traccia dello stack.
+`dataset-desk --help` elenca tutti i flag. Codici di uscita: `0` ok, `1` errore dell'utente o rifiuto, `2` errore imprevisto. Gli errori vengono stampati come `error <CODE>: <message>` con una riga `hint:`; `--debug` aggiunge la traccia dello stack.
 
-Il **layout del progetto che legge** è quello di [style-dataset-lab](https://github.com/mcp-tool-shop-org/style-dataset-lab):
+**Il layout del progetto che legge** è quello di [style-dataset-lab](https://github.com/mcp-tool-shop-org/style-dataset-lab):
 
 ```text
 project/
@@ -91,25 +121,28 @@ project/
   outputs/<wave>/*.png            the images; a wave's generation.json and _curation.json are read when present
 ```
 
-Un progetto senza `records/` funziona comunque, a condizione che le immagini si trovino in cartelle all'interno di `outputs/` (i file nella parte superiore di `outputs/` vengono ignorati come fogli di contatto): ogni immagine è "non registrata" e i controlli sui duplicati e sull'aspetto continuano a essere eseguiti.
+Un progetto senza `records/` funziona comunque, a condizione che le immagini si trovino in cartelle all'interno di `outputs/` (i file nella parte superiore di `outputs/` vengono ignorati come fogli di contatto): ogni immagine è "non registrata" e i controlli sui duplicati e sull'aspetto vengono comunque eseguiti.
 
-## Modello di minaccia e affidabilità
+## Modello di minaccia e fiducia
 
-- **Cosa legge:** la cartella del progetto specificata con `--project`: immagini, `records/*.json`, metadati audio e i dati di generazione incorporati nei file PNG.
-- **Cosa scrive:** solo all'interno di `--out`: la cache di scansione, le cache di embedding, il report, `description-review.jsonl` e la scheda di lavoro. Rifiuta un `--out` all'interno del progetto (`PERM_OUT_INSIDE_PROJECT`), quindi un progetto non viene mai modificato.
+- **Cosa legge:** la cartella del progetto a cui assegna il nome `--project`: immagini, `records/*.json`, metadati delle onde e i dati di generazione incorporati nei file PNG. I comandi di testo leggono la cartella `--source` o la copia `--rnd-data` a cui assegna il nome. Rifiutano l'archivio privato e i blob di rnd-data e stampano solo i percorsi relativi.
+- **Cosa scrive:** solo in `--out`: la sua cache di scansione, le cache di incorporamento, il report, `description-review.jsonl` e il foglio di lavoro. Rifiuta un `--out` all'interno del progetto (`PERM_OUT_INSIDE_PROJECT`), quindi un progetto non viene mai modificato.
 - **Cosa non tocca mai:** qualsiasi cosa al di fuori di queste due cartelle. Non elimina nulla, da nessuna parte.
-- **Rete:** il livello base non la utilizza mai. Un backend del modello scarica i suoi pesi fissati da Hugging Face alla prima esecuzione, a meno che `HF_HUB_OFFLINE=1` non sia impostato; il redattore viene caricato con `HF_HUB_OFFLINE=1` e `local_files_only=True` ogni volta. Nessun modello esegue codice remoto.
-- **Autorizzazioni:** un account utente ordinario. Una GPU richiede `--device` più un ID `--grant`, in modo che una scheda condivisa non venga utilizzata accidentalmente.
+- **Rete:** la versione lite non la utilizza mai. Un backend del modello recupera i suoi pesi fissi da Hugging Face al primo utilizzo, a meno che `HF_HUB_OFFLINE=1` non sia impostato; il modulo di elaborazione viene caricato con `HF_HUB_OFFLINE=1` e `local_files_only=True` ogni volta. Nessun modello esegue codice remoto.
+- **Autorizzazioni:** un account utente ordinario. Una GPU necessita di `--device` più un ID `--grant`, in modo che una scheda condivisa non venga utilizzata per errore. Prima di caricare un modello, un regolatore VRAM verifica che la memoria già in uso più il fabbisogno misurato del modello rientrino in `--vram-budget` (valore predefinito 26.624 MiB). Non elimina mai nulla; `--wait` esegue il polling finché il caricamento non è completo.
 - **Segreti e telemetria:** non legge credenziali e non raccoglie né invia telemetria.
-- **Passaggi protetti:** nei progetti bloccati per un benchmark in esecuzione, l'embedding delle descrizioni e qualsiasi accettazione delle descrizioni basata su modelli vengono rifiutati a meno che `--allow-multimodal-pool` non venga passato, in modo che le query del benchmark non siano influenzate dai modelli che misura.
+- **Passaggi protetti:** per i progetti bloccati per un benchmark in esecuzione, gli incorporamenti delle descrizioni e qualsiasi accettazione delle descrizioni basata su un modello vengono rifiutati a meno che `--allow-multimodal-pool` non venga superato, in modo che le query del benchmark non siano influenzate dai modelli che misura.
 
 Segnala una vulnerabilità come descritto in [SECURITY.md](SECURITY.md).
 
 ## Stato
 
-**v0.1.3, un prototipo pubblico.** Il codice è stato testato offline (152 test, 96% di copertura delle righe, con piccoli sostituti per le librerie del modello) e una prima calibrazione sui dati dello studio ha classificato i modelli in base all'attività, ma non ha ancora fissato le soglie: le soglie per i duplicati quasi identici e i duplicati semantici sono ancora solo punti di partenza. Prevedi che la riga di comando cambierà prima della versione 1.0.
+**v0.2.0, un prototipo pubblico.** Il codice viene testato offline: 188 test e una copertura del codice del 95%, con piccole sostituzioni per le librerie del modello.
+- **Calibrazione:** le esecuzioni dello studio sui propri dati, su una RTX 5090, hanno impostato le soglie di duplicazione e le cifre VRAM. Sono provvisorie e si basano su un pool per tipo. Le soglie del codice si basano su 17 copie inserite. Il metodo e i dati sono disponibili in [newsletter issue 16](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
+- **Progetti di grandi dimensioni:** duplicati, valori anomali e il canale di ricerca funzionano in blocchi delimitati. Sui set sintetici, la ricerca di duplicati e il canale di ricerca richiedono pochi minuti con 100.000 immagini, mentre prima richiedevano ore o esaurivano la memoria. Il gate di descrizione è circa 6 volte più veloce. Il suo controllo Jaccard rallenta ancora notevolmente su set molto grandi che condividono molte parole, e questa questione progettuale è ancora aperta.
+- **È previsto che la riga di comando cambi prima della versione 1.0.**
 
-La documentazione del progetto, le basi della ricerca e la cronologia delle revisioni sono conservate nella biblioteca di ricerca dello studio: [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).
+La documentazione del progetto, le sue basi di ricerca e la cronologia delle revisioni sono disponibili nella libreria di ricerca dello studio: [rnd / experiments / dataset-desk](https://github.com/mcp-tool-shop-org/rnd/tree/main/experiments/dataset-desk).
 
 ## Sviluppo
 
@@ -120,11 +153,11 @@ bash verify.sh                       # lint, the tests, and a lite-mode smoke ru
 python -m coverage run -m unittest discover -s tests && python -m coverage report
 ```
 
-Il sistema di integrazione continua (CI) garantisce una copertura del codice pari o superiore al 90%.
+CI mantiene la copertura del codice al 90% o superiore.
 
 ## Licenza
 
-[MIT](LICENSE). I modelli che può caricare non fanno parte di questo pacchetto e ciascuno è soggetto alla propria licenza; leggere la scheda del modello prima di utilizzarlo.
+[MIT](LICENSE). I modelli che può caricare non fanno parte di questo pacchetto e ciascuno ha la propria licenza; leggi la scheda del modello prima di utilizzarne uno.
 
 ---
 

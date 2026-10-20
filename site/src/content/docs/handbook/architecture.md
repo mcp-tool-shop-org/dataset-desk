@@ -10,7 +10,8 @@ sidebar:
 | Module | Needs | Does |
 |---|---|---|
 | `dataset_desk/desk.py` | numpy, Pillow | the scan, the caches, the analyses, the report and the CLI |
-| `dataset_desk/backends.py` | numpy; torch and transformers only when a model backend runs | thread caps, the embedding backends, the drafters |
+| `dataset_desk/backends.py` | numpy; torch and transformers only when a model backend runs | thread caps, the embedding backends, the VRAM governor, the drafters |
+| `dataset_desk/registry.py` | the standard library | each model's pinned repository, revision, licence and measured VRAM, and the default model per task |
 | `dataset_desk/description_gate.py` | the standard library; a tokenizer only for the token count | the description gate, the review queue, the worksheet |
 | `dataset_desk/errors.py` | the standard library | the structured error and the error codes |
 
@@ -31,8 +32,12 @@ sidebar:
 
 | Backend | Model | Pinned revision | Notes |
 |---|---|---|---|
-| `eg2` | `google/embeddinggemma-2` | `914f7f8` | text, images, and both together; float32 or bfloat16, never float16 |
-| `siglip2` | `google/siglip2-so400m-patch14-384` | `e8e4872` | text padded to 64 tokens, the way it was trained |
+| `dinov2` | `facebook/dinov2-base` | `f9e44c8` | image duplicates (the `dupes` default); Apache-2.0 |
+| `siglip2` | `google/siglip2-so400m-patch14-384` | `e8e4872` | images and text: `index`, `search`, `coverage`, `report`; text padded to 64 tokens, the way it was trained; Apache-2.0 |
+| `bge-m3` | `BAAI/bge-m3` | `5617a9f` | text files (the `text` default); MIT |
+| `eg2` | `google/embeddinggemma-2` | `914f7f8` | code files (the `code` default), and text, images or both; a task prefix per command; float32 or bfloat16, never float16; Apache-2.0, with the Gemma Prohibited Use Policy |
+| `qwen3-emb-0.6b` | `Qwen/Qwen3-Embedding-0.6B` | `97b0c61` | text; Apache-2.0 |
+| `gte-modernbert` | `Alibaba-NLP/gte-modernbert-base` | `e7f32e3` | text; Apache-2.0 |
 | `none` | | | no embeddings; the lite tier |
 | `fake` | | | deterministic vectors for tests |
 
@@ -50,7 +55,13 @@ brushwork texture measures. It is cheap, needs no model, and separates "the styl
 - **Thread caps.** Importing `dataset_desk.backends` sets the BLAS and OpenMP thread variables before numpy loads, and a
   torch region holds BLAS to one thread with torch's own pool at `--threads`.
 - **Read-only projects.** The CLI refuses an `--out` inside the project.
-- **The GPU.** Any device but `cpu` needs `--grant`, and the grant id is written into the cache's `meta.json`.
+- **The GPU.** Any device but `cpu` needs `--grant`, and the grant id is written into the cache's `meta.json`. Before a
+  model loads, the VRAM governor checks memory in use plus the model's measured peak against `--vram-budget`, and
+  refuses or waits; it never evicts another process.
+- **Bounded memory.** Every pairwise comparison runs in blocks of about 64 MiB, so a large project doesn't run out of
+  memory.
+- **rnd-data's private stores.** The text commands read only rnd-data's public copies, and refuse its private companion
+  and blob stores.
 - **Locked benchmark projects.** A project being used as a retrieval benchmark must not have its queries accepted or
   shaped by the models the benchmark measures. On the locked projects, description embeddings and model-based acceptance
   (`eg2_fit_accept`, `ai_eyes_verify`) are refused until `--allow-multimodal-pool` is passed after the counted run.

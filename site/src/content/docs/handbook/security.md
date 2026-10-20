@@ -9,14 +9,14 @@ sidebar:
 
 | | |
 |---|---|
-| **Reads** | the folder named by `--project`: images, `records/*.json`, wave metadata, PNG text chunks |
+| **Reads** | the folder named by `--project`: images, `records/*.json`, wave metadata, PNG text chunks; for the text commands, the `--source` folder or the public copies in an `--rnd-data` checkout (never its private companion or blob stores) |
 | **Writes** | only under `--out`; an `--out` inside the project is refused |
 | **Deletes** | nothing, anywhere |
 | **Network** | none in the lite tier; a model backend fetches pinned weights from Hugging Face on first use unless `HF_HUB_OFFLINE=1`; the drafter is always offline |
 | **Code execution** | no model loads with remote code; records and PNG metadata are parsed as data |
 | **Credentials** | none read, stored or sent |
 | **Telemetry** | none |
-| **Permissions** | an ordinary user account; a GPU needs `--grant` |
+| **Permissions** | an ordinary user account; a GPU needs `--grant`, and the VRAM governor never evicts another process |
 
 ## Untrusted input
 
