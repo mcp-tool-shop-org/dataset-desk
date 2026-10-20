@@ -111,8 +111,8 @@
         "path": ".gitignore"
       },
       {
-        "commits": 2,
-        "lines": 42,
+        "commits": 3,
+        "lines": 60,
         "path": "CHANGELOG.md"
       },
       {
@@ -121,43 +121,43 @@
         "path": "LICENSE"
       },
       {
-        "commits": 2,
-        "lines": 137,
+        "commits": 3,
+        "lines": 143,
         "path": "README.es.md"
       },
       {
-        "commits": 2,
-        "lines": 137,
+        "commits": 3,
+        "lines": 143,
         "path": "README.fr.md"
       },
       {
-        "commits": 2,
-        "lines": 137,
+        "commits": 3,
+        "lines": 143,
         "path": "README.hi.md"
       },
       {
-        "commits": 2,
-        "lines": 137,
+        "commits": 3,
+        "lines": 143,
         "path": "README.it.md"
       },
       {
-        "commits": 2,
-        "lines": 137,
+        "commits": 3,
+        "lines": 143,
         "path": "README.ja.md"
       },
       {
-        "commits": 2,
-        "lines": 137,
+        "commits": 3,
+        "lines": 143,
         "path": "README.md"
       },
       {
-        "commits": 2,
-        "lines": 137,
+        "commits": 3,
+        "lines": 143,
         "path": "README.pt-BR.md"
       },
       {
-        "commits": 2,
-        "lines": 137,
+        "commits": 3,
+        "lines": 143,
         "path": "README.zh.md"
       },
       {
@@ -171,13 +171,13 @@
         "path": "SECURITY.md"
       },
       {
-        "commits": 3,
-        "lines": 95,
+        "commits": 4,
+        "lines": 97,
         "path": "SHIP_GATE.md"
       },
       {
-        "commits": 2,
-        "lines": 87,
+        "commits": 3,
+        "lines": 93,
         "path": "atlas/README.md"
       },
       {
@@ -186,18 +186,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 2,
-        "lines": 203,
+        "commits": 3,
+        "lines": 215,
         "path": "atlas/page.json"
       },
       {
-        "commits": 2,
-        "lines": 474,
+        "commits": 3,
+        "lines": 570,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 2,
-        "lines": 1946,
+        "commits": 3,
+        "lines": 2172,
         "path": "atlas/structure.json"
       },
       {
@@ -206,8 +206,8 @@
         "path": "codecov.yml"
       },
       {
-        "commits": 2,
-        "lines": 5,
+        "commits": 3,
+        "lines": 7,
         "path": "dataset_desk/__init__.py"
       },
       {
@@ -221,18 +221,18 @@
         "path": "dataset_desk/backends.py"
       },
       {
-        "commits": 1,
-        "lines": 821,
+        "commits": 2,
+        "lines": 847,
         "path": "dataset_desk/description_gate.py"
       },
       {
-        "commits": 1,
-        "lines": 1326,
+        "commits": 2,
+        "lines": 1353,
         "path": "dataset_desk/desk.py"
       },
       {
-        "commits": 1,
-        "lines": 56,
+        "commits": 2,
+        "lines": 57,
         "path": "dataset_desk/errors.py"
       },
       {
@@ -241,8 +241,8 @@
         "path": "dataset_desk/stopwords.txt"
       },
       {
-        "commits": 2,
-        "lines": 59,
+        "commits": 3,
+        "lines": 61,
         "path": "pyproject.toml"
       },
       {
@@ -281,23 +281,23 @@
         "path": "site/src/content/docs/handbook/architecture.md"
       },
       {
-        "commits": 1,
-        "lines": 67,
+        "commits": 2,
+        "lines": 72,
         "path": "site/src/content/docs/handbook/description-gate.md"
       },
       {
-        "commits": 2,
-        "lines": 91,
+        "commits": 3,
+        "lines": 95,
         "path": "site/src/content/docs/handbook/getting-started.md"
       },
       {
-        "commits": 2,
-        "lines": 50,
+        "commits": 3,
+        "lines": 52,
         "path": "site/src/content/docs/handbook/index.md"
       },
       {
-        "commits": 1,
-        "lines": 99,
+        "commits": 2,
+        "lines": 101,
         "path": "site/src/content/docs/handbook/reference.md"
       },
       {
@@ -316,8 +316,8 @@
         "path": "site/src/pages/index.astro"
       },
       {
-        "commits": 2,
-        "lines": 117,
+        "commits": 3,
+        "lines": 123,
         "path": "site/src/site-config.ts"
       },
       {
@@ -346,8 +346,8 @@
         "path": "tests/test_backends.py"
       },
       {
-        "commits": 1,
-        "lines": 306,
+        "commits": 2,
+        "lines": 410,
         "path": "tests/test_cli.py"
       },
       {
@@ -361,8 +361,8 @@
         "path": "tests/test_gate_edges.py"
       },
       {
-        "commits": 2,
-        "lines": 1769,
+        "commits": 3,
+        "lines": 1771,
         "path": "uv.lock"
       },
       {
@@ -376,9 +376,9 @@
     "level": "low",
     "reason": "fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions"
   },
-  "generatedAt": "2026-10-15T23:30:07.819Z",
+  "generatedAt": "2026-10-20T01:53:57.440Z",
   "generatedFrom": {
-    "commit": "44b0fdb3a79a63a4f1b76a00d6064c7128f2cfe7"
+    "commit": "20d81ade2ed053eeb6e0d15f16a26d13089aa824"
   },
   "pairs": [],
   "parameters": {
@@ -391,7 +391,7 @@
     "floor": "fallen",
     "floorHeld": false,
     "floorTrigger": "both",
-    "headDate": "2026-10-15T16:13:42-07:00",
+    "headDate": "2026-10-15T16:32:06-07:00",
     "inScopeFiles": 56,
     "pinnedStart": null,
     "priorFloor": "fallen",
@@ -400,7 +400,7 @@
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 3,
-    "since": "2026-04-18T23:13:42.000Z",
+    "since": "2026-04-18T23:32:06.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

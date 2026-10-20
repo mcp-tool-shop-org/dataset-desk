@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `release.yml`: publishing a GitHub release builds the wheel and sdist, checks them with `twine check`, and publishes
+  to PyPI by trusted publishing from the `pypi` environment, with SLSA provenance. It never fires on a push.
+
+### Notes
+
+- No NumPy upper bound. The desk doesn't use numba. An environment that adds `numba-cuda` beside it needs
+  `numpy>=2.4,<2.5` until numba-cuda supports NumPy 2.5 (studio smoke rung on the RTX 5090, 2026-10-20).
+
 ## [0.1.2] - 2026-10-15
 
 ### Added
