@@ -99,6 +99,7 @@ hint: run `dataset-desk index` with the same --project, --backend and --out firs
 | `PERM_PRIVATE_SOURCE` | a text command was pointed at rnd-data's private companion or blob store, or a path outside its source | 1 |
 | `PERM_LOCKED_POOL` | description embeddings or a model-based check on a locked benchmark project | 1 |
 | `DEP_TOKENIZER_MISSING` | `--count-tokens` without the SigLIP2 tokenizer in the local cache | 1 |
+| `ENV_NO_CUDA_TORCH` | `--device cuda` when the installed torch build has no CUDA support | 1 |
 | `STATE_NO_INDEX` | a command needs a cache that `index` hasn't written | 1 |
 | `RUNTIME_UNEXPECTED` | anything else; rerun with `--debug` | 2 |
 

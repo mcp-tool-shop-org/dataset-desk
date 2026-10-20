@@ -34,8 +34,8 @@ from __future__ import annotations
 
 import bisect
 import hashlib
-import itertools
 import json
+import math
 import os
 import pathlib
 import re
@@ -388,34 +388,56 @@ def audit_records(
     cword_sets = {str(e["id"]): content_word_set(e["text"], stopwords) for e in target_list}
     near_pairs: list[tuple[str, str, float]] = []
     near_member_ids: set[str] = set()
-    max_cjaccard_by_id: dict[str, float] = {str(e["id"]): 0.0 for e in target_list}
+    max_cjaccard_by_id: dict[str, float | None] = {str(e["id"]): None for e in target_list}
     ids_ordered = [str(e["id"]) for e in target_list]
-    # Only pairs that share a content word are compared: any other pair has Jaccard 0, which never raises a record's
-    # maximum and never reaches the threshold. Pairs are visited in the same (i, j) order as a full double loop.
-    postings: dict[str, list[int]] = {}
+    # Prefix filtering (Chaudhuri et al. 2006): order content words by increasing pool document frequency (ties broken
+    # lexically) and index only each record's prefix of length L - ceil(tau * L) + 1. Any pair with Jaccard >= tau
+    # shares at least one word in their prefixes and satisfies ceil(tau * |ca|) <= |cb| <= floor(|ca| / tau).
+    tau = MAX_CONTENT_JACCARD - _EPS
+    df: Counter[str] = Counter()
+    for rid in ids_ordered:
+        df.update(cword_sets[rid])
+    prefixes: list[tuple[str, ...]] = []
+    prefix_postings: dict[str, list[int]] = {}
     for j, rid in enumerate(ids_ordered):
-        for w in cword_sets[rid]:
-            postings.setdefault(w, []).append(j)
+        cw = cword_sets[rid]
+        if not cw:
+            prefixes.append(())
+            continue
+        ordered_cw = sorted(cw, key=lambda w: (df[w], w))
+        pref_len = max(1, len(ordered_cw) - math.ceil(tau * len(ordered_cw)) + 1)
+        pref = tuple(ordered_cw[:pref_len])
+        prefixes.append(pref)
+        for w in pref:
+            prefix_postings.setdefault(w, []).append(j)
     for i in range(len(ids_ordered)):
         ia = ids_ordered[i]
         ca = cword_sets[ia]
         if not ca:
             continue
-        inter_by_j = Counter(itertools.chain.from_iterable(
-            postings[w][bisect.bisect_right(postings[w], i):] for w in ca))
+        len_a = len(ca)
+        min_len_b = math.ceil(tau * len_a)
+        max_len_b = math.floor(len_a / tau)
+        cand_js = {
+            j
+            for w in prefixes[i]
+            for j in prefix_postings[w][bisect.bisect_right(prefix_postings[w], i):]
+            if min_len_b <= len(cword_sets[ids_ordered[j]]) <= max_len_b
+        }
         keys_a = exact_keys.get(ia)
-        for j in sorted(inter_by_j):
-            n_inter = inter_by_j[j]
+        for j in sorted(cand_js):
             ib = ids_ordered[j]
             if keys_a and keys_a & exact_keys.get(ib, set()):
                 continue
             cb = cword_sets[ib]
-            sim = n_inter / (len(ca) + len(cb) - n_inter)
-            if sim > max_cjaccard_by_id[ia]:
-                max_cjaccard_by_id[ia] = round(sim, 6)
-            if sim > max_cjaccard_by_id[ib]:
-                max_cjaccard_by_id[ib] = round(sim, 6)
+            n_inter = len(ca & cb)
+            sim = n_inter / (len_a + len(cb) - n_inter)
             if sim >= MAX_CONTENT_JACCARD - _EPS:
+                r_sim = round(sim, 6)
+                if max_cjaccard_by_id[ia] is None or r_sim > max_cjaccard_by_id[ia]:
+                    max_cjaccard_by_id[ia] = r_sim
+                if max_cjaccard_by_id[ib] is None or r_sim > max_cjaccard_by_id[ib]:
+                    max_cjaccard_by_id[ib] = r_sim
                 near_pairs.append((ia, ib, round(sim, 4)))
                 near_member_ids.add(ia)
                 near_member_ids.add(ib)
@@ -553,7 +575,7 @@ def audit_records(
             "prompt_word_share": echo["prompt_word_share"],
             "prompt_content_word_share": echo["prompt_content_word_share"],
             "wraps_canon_subject": wraps_canon,
-            "max_content_jaccard": max_cjaccard_by_id.get(rid, 0.0),
+            "max_content_jaccard": max_cjaccard_by_id.get(rid),
             "duplicate_group_size": dup_size,
             "siglip2_tokens": tc,
             "token_status": token_status,

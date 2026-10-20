@@ -73,6 +73,8 @@ For the embedding index (search, coverage, semantic duplicates, the description 
 pip install "dataset-desk[models]"
 ```
 
+On Windows with an NVIDIA GPU, install a CUDA build of torch from `https://download.pytorch.org` first; PyPI's Windows torch is CPU-only.
+
 The models are fetched from Hugging Face at pinned revisions the first time they're used, then load from your cache. Each task has a default, and `--backend` picks another:
 
 | Backend | Model | Default for |

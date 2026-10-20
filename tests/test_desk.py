@@ -343,6 +343,8 @@ class Analyses(Project):
 
     def test_mid_rank_splits_ties(self):
         self.assertEqual(desk.mid_rank(np.array([0.5, 0.5, 0.1]), 0), 1.5)
+        self.assertEqual(desk.mid_rank(np.array([0.5, 0.5 + 5e-7, 0.1]), 0), 1.5)
+        self.assertEqual(desk.mid_rank(np.array([0.5, 0.5 + 1e-4, 0.1]), 0), 2.0)
         self.assertEqual(desk.mid_rank(np.array([0.9, 0.5, 0.1]), 1), 2.0)
 
     def test_search_and_coverage(self):
@@ -599,16 +601,17 @@ class DescriptionGateTests(unittest.TestCase):
             "".join(description_gate.words(join_a["judgment"]["explanation"])),
             "".join(description_gate.words(join_b["judgment"]["explanation"])),
         )
-        self.assertLess(by_id["join_a"]["max_content_jaccard"], 0.85)
+        self.assertIsNone(by_id["join_a"]["max_content_jaccard"])
         self.assertIn("exact_duplicate", by_id["join_a"]["flags"])
         self.assertIn("exact_duplicate", by_id["join_b"]["flags"])
         self.assertTrue(by_id["join_pass"]["passed"])
 
         self.assertAlmostEqual(by_id["jac_85_a"]["max_content_jaccard"], 0.85, places=4)
+        self.assertAlmostEqual(by_id["jac_85_b"]["max_content_jaccard"], 0.85, places=4)
         self.assertIn("near_duplicate", by_id["jac_85_a"]["flags"])
         self.assertIn("near_duplicate", by_id["jac_85_b"]["flags"])
 
-        self.assertAlmostEqual(by_id["jac_84_a"]["max_content_jaccard"], 16 / 19, places=4)
+        self.assertIsNone(by_id["jac_84_a"]["max_content_jaccard"])
         self.assertTrue(by_id["jac_84_a"]["passed"])
         self.assertTrue(by_id["jac_84_b"]["passed"])
 
@@ -970,6 +973,29 @@ class CommandLine(Project):
         self.assertIn("skipped (`--images-only`)", rep)
         # Also succeeds with --allow-multimodal-pool
         self.assertEqual(self.run_main("index", "--allow-multimodal-pool", project=sr_dir)[0], 0)
+
+        # Image-only backend (dinov2) succeeds on a locked pool without --images-only from both Python and CLI
+        desk.check_multimodal_pool(sr_dir, "dinov2")
+        for text_capable in ("eg2", "siglip2"):
+            with self.assertRaises(DeskError) as cm_pool:
+                desk.check_multimodal_pool(sr_dir, text_capable)
+            self.assertEqual(cm_pool.exception.code, "PERM_LOCKED_POOL")
+
+        class _DinoStub(backends.FakeEmbedder):
+            modalities = ("image",)
+
+            def __init__(self):
+                super().__init__(dim=4)
+                self.name = "dinov2"
+                self.revision = desk.registry.REGISTRY["dinov2"].revision
+                self.vision_tokens = 256
+                self.max_tokens = 0
+
+        dino_meta = desk.index(sr_dir, self.out, _DinoStub(), log=lambda *a: None)
+        self.assertTrue(dino_meta["images_only"])
+        d_items, d_img, d_txt, d_m = desk.load_cache(self.out, "dinov2", dim=4, vision_tokens=256)
+        rep_path = desk.report(sr_dir, self.out, d_items, d_img, d_txt, d_m)
+        self.assertTrue(os.path.isfile(rep_path))
 
     def test_lite_backend_none_runs_without_embeddings(self):
         self.assertEqual(self.run_main("index", backend="none")[0], 0)

@@ -215,8 +215,8 @@ class QueriesAndCounters(unittest.TestCase):
     def test_stopword_only_descriptions_skip_jaccard_comparison(self):
         a = g.audit_records([rec("s1", "the of and"), rec("s2", "the of and to"), rec("ok", GOOD)])
         rows = self.by_id(a)
-        self.assertEqual(rows["s1"]["max_content_jaccard"], 0.0)
-        self.assertEqual(rows["ok"]["max_content_jaccard"], 0.0)
+        self.assertIsNone(rows["s1"]["max_content_jaccard"])
+        self.assertIsNone(rows["ok"]["max_content_jaccard"])
         self.assertNotIn("near_duplicate", rows["ok"]["flags"])
 
     def test_near_duplicates_are_grouped_and_flagged(self):

@@ -1,6 +1,6 @@
 # dataset-desk: how it works
 
-Mapped at 2026-10-20 from commit 30802b9 by Atlas 1.24.0.
+Mapped at 2026-10-20 from commit d3fa354 by Atlas 1.24.0.
 
 ## What this is
 
@@ -8,9 +8,9 @@ dataset-desk: a review desk for visual datasets — duplicates, outliers, search
 
 5 parts, mostly Python (13 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 4 doors; the busiest is CI, which reaches 3 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.
 
-## What changed since 2026-10-20 (25d9cdd)
+## What changed since 2026-10-20 (30802b9)
 
-Nothing structural changed since 2026-10-20; 1 file added and 20 changed content.
+Nothing structural changed since 2026-10-20; 15 files changed content.
 
 ## What comes in
 
@@ -75,7 +75,7 @@ Read those in order to follow one run of dataset-desk end to end. This path foll
 ## What this map cannot see
 
 - 1 read uses a path built at run time and is not named here.
-- 5 writes and 19 reads go to a path their caller passes, not to this repository.
+- 5 writes and 20 reads go to a path their caller passes, not to this repository.
 - 7 writes and 4 reads go to the directory the command is run in (desk-out/), not to this repository.
 - Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions.
 

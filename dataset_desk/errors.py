@@ -23,6 +23,7 @@ CODES = {
     "PERM_LOCKED_POOL": "pass --images-only (or --backend none), or --allow-multimodal-pool once the benchmark's "
                         "counted run is finished",
     "DEP_TOKENIZER_MISSING": "install the models extra and cache the tokenizer once, or run without --count-tokens",
+    "ENV_NO_CUDA_TORCH": "install a CUDA build of torch from https://download.pytorch.org (PyPI's Windows torch is CPU-only), or pass --device cpu",
     "STATE_NO_INDEX": "run `dataset-desk index` with the same --project, --backend and --out first",
     "RUNTIME_UNEXPECTED": "rerun with --debug for the stack trace, and report it if it persists",
 }

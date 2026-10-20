@@ -56,7 +56,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         licence="Apache-2.0; deployments follow the Gemma Prohibited Use Policy",
         modalities=("text", "image"),
         loader="eg2",
-        vram_mib=12550,  # provisional: multimodal peak; text-only long-text peak at default batch was 8,426 MiB (rung 2b)
+        vram_mib=13119,  # conservative whole-card figure 13,119 MiB: registered 12,550 (multimodal) + context 569 (F1); the dogfood's text-only real run measured 9,527; RTX 5090, R&D 2026-10-20
         dim=768,
         max_tokens=8000,
     ),
@@ -67,7 +67,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         licence="Apache-2.0",
         modalities=("image", "text"),
         loader="siglip2",
-        vram_mib=5340,
+        vram_mib=6207,  # conservative whole-card figure 6,207 MiB: the 0.2.0 dogfood's whole-card peak on real images; registered 5,340 + context 518 = 5,858; RTX 5090, R&D 2026-10-20
         dim=1152,
         max_tokens=64,
     ),
@@ -78,7 +78,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         licence="MIT",
         modalities=("text",),
         loader="sentence_transformer",
-        vram_mib=7488,  # provisional: long-text peak at max_tokens=8192, default batch=8, bf16 (rung 2b)
+        vram_mib=8442,  # conservative whole-card figure 8,442 MiB: the 0.2.0 dogfood's whole-card peak on rnd-data text; registered 7,488 + context 591 = 8,079; RTX 5090, R&D 2026-10-20
         dim=1024,
         max_tokens=8192,
     ),
@@ -89,7 +89,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         licence="Apache-2.0",
         modalities=("text",),
         loader="sentence_transformer",
-        vram_mib=14470,  # provisional: long-text peak at max_tokens=8192, default batch=8, bf16 (rung 2b)
+        vram_mib=15065,  # conservative whole-card figure 15,065 MiB: registered 14,470 (rung 2b) + context 595 (F1); F1 measured 13,661; RTX 5090, R&D 2026-10-20
         dim=1024,
         max_tokens=8192,
     ),
@@ -100,7 +100,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         licence="Apache-2.0",
         modalities=("text",),
         loader="sentence_transformer",
-        vram_mib=6544,  # provisional: long-text peak at max_tokens=8192, default batch=8, bf16 (rung 2b)
+        vram_mib=7112,  # conservative whole-card figure 7,112 MiB: registered 6,544 (rung 2b) + context 568 (F1); F1 measured 6,022; RTX 5090, R&D 2026-10-20
         dim=768,
         max_tokens=8192,
     ),
@@ -111,7 +111,7 @@ REGISTRY: dict[str, EmbedderSpec] = {
         licence="Apache-2.0",
         modalities=("image",),
         loader="dinov2",
-        vram_mib=636,
+        vram_mib=1272,  # conservative whole-card figure 1,272 MiB: registered 636 + context 636 (F1); the dogfood measured 1,111 and F1 1,158; RTX 5090, R&D 2026-10-20
         dim=768,
         max_tokens=0,
     ),
