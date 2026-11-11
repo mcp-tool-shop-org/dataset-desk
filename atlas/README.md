@@ -1,6 +1,6 @@
 # dataset-desk: how it works
 
-Mapped at 2026-10-20 from commit d3fa354 by Atlas 1.24.0.
+Mapped at 2026-11-11 from commit 6373555 by Atlas 1.26.0.
 
 ## What this is
 
@@ -8,9 +8,9 @@ dataset-desk: a review desk for visual datasets — duplicates, outliers, search
 
 5 parts, mostly Python (13 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 4 doors; the busiest is CI, which reaches 3 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.
 
-## What changed since 2026-10-20 (30802b9)
+## What changed since 2026-10-20 (d3fa354)
 
-Nothing structural changed since 2026-10-20; 15 files changed content.
+Nothing structural changed since 2026-10-20; 19 files changed content.
 
 ## What comes in
 
