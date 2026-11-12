@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-11-11
+## [0.3.0] - 2026-11-12
 
 ### Added
 - **Training-caption commands and options:**
