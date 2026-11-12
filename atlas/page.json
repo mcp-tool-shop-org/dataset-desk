@@ -34,8 +34,8 @@
       }
     ],
     "since": {
-      "commit": "02174a877651af86ff8c2995ac0bf9971b463600",
-      "generatedAt": "2026-11-12T21:11:01.134Z"
+      "commit": "f63044c99e94a84abca44adbaa467e9d5872d75d",
+      "generatedAt": "2026-11-12T21:49:20.792Z"
     },
     "unchanged": true
   },
@@ -43,7 +43,7 @@
     {
       "a": "scripts/colab/desk_draft_helper.py",
       "b": "tests/test_colab_draft_lane.py",
-      "either": 7,
+      "either": 8,
       "partLabels": [
         "scripts",
         "tests"
@@ -53,7 +53,7 @@
         "tests"
       ],
       "relation": "none",
-      "shared": 6
+      "shared": 7
     }
   ],
   "changesTogetherNote": [
@@ -61,7 +61,7 @@
     "Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "f63044c99e94a84abca44adbaa467e9d5872d75d",
+  "commit": "51272044553d56ba0b32755bdcad833797f42c51",
   "defaultBranch": "main",
   "derived": "6 parts, mostly Python (20 files), shell (3), CSS (2), TypeScript (2), Astro (1) and JavaScript (1). Work enters through 4 doors; the busiest is CI, which reaches 4 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.",
   "doors": [
@@ -209,7 +209,7 @@
   "edges": [],
   "engine": "1.26.0",
   "generated": [],
-  "generatedAt": "2026-11-12T21:49:20.792Z",
+  "generatedAt": "2026-11-12T22:52:49.938Z",
   "limits": [
     "3 imports could not be resolved: `scripts/colab/desk_bundle_now.py` imports a path built at run time; `tests/test_colab_draft_lane.py` imports a path built at run time; `tests/test_training_captions.py` imports a path built at run time.",
     "6 writes and 7 reads use paths built at run time and are not named here.",

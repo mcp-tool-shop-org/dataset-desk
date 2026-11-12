@@ -180,7 +180,7 @@ _STUDIO_CONFIG_PATTERN = re.compile(r"[^\s\"'<>]*dataset-desk[\\/]+config\.json"
 _RIG_PATH_PATTERNS = (
     # \\wsl.localhost\<distro>\... and \\wsl$\<distro>\...
     re.compile(r"(?:\\{2,4}|//)wsl(?:\.localhost|\$)(?:\\{1,4}|/)+[^\\/\s\"']+(?:(?:\\{1,4}|/)+home(?:\\{1,4}|/)+[^\\/\s\"']+)?", re.I),
-    # URL-encoded forms: C%3A%5CUsers%5Cname, %2Fhome%2Fname, %2Fmnt%2Fc%2FUsers%2Fname
+    # URL-encoded forms of the drive-letter Users, home and /mnt/<drive>/Users paths
     re.compile(r"[A-Za-z]%3A(?:%5C|%2F)+Users(?:%5C|%2F)+[^%\s\"'&/\\]+", re.I),
     re.compile(r"%2Fmnt%2F[A-Za-z]%2FUsers%2F[^%\s\"'&/\\]+", re.I),
     re.compile(r"%2F(?:home|Users)%2F[^%\s\"'&/\\]+", re.I),

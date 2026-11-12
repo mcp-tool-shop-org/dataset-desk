@@ -6355,7 +6355,7 @@
               "line": 2844
             }
           ],
-          "hash": "6040f4157adc1b2b6fc7bf70738959a63d05379e4b572a93fa9fd5b85432034f",
+          "hash": "540fe63f37ea2a4c518e2756c10d11ef2cb76db12edb4f21d9c7e6dc03ee006b",
           "importOrder": [
             "scripts/colab/launch_guards.py",
             "dataset_desk/__init__.py",
@@ -6373,7 +6373,7 @@
           "path": "scripts/colab/desk_draft_helper.py"
         },
         {
-          "hash": "70cd593f11b2f8c037b2d49def285c23a6c391c59db2b679c020b351f9cf60ac",
+          "hash": "0ea3d03c82f92d8f0fe1ce806190ba989380cfeaec4aebe0d93f7740d59bdc43",
           "path": "scripts/colab/launch_desk_draft.sh"
         },
         {
@@ -6717,7 +6717,7 @@
           "testFramework": "unittest"
         },
         {
-          "hash": "927c8c7fa5e5916ee7e0e9b0c461ee822da1fc7c87050ae13cd50967cc25df6e",
+          "hash": "7bba768563327b56b4e9fd3412218e75fd6896817ab5d967ed34e0d11d8885b8",
           "importOrder": [
             "tests/fakes.py",
             "tests/fake_colab_desk.py",
@@ -7497,7 +7497,7 @@
   ],
   "engine": "1.26.0",
   "generatedFrom": {
-    "commit": "f63044c99e94a84abca44adbaa467e9d5872d75d",
+    "commit": "51272044553d56ba0b32755bdcad833797f42c51",
     "tracked": 67
   },
   "landings": [

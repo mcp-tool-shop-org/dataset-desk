@@ -1826,8 +1826,8 @@ class PreL4HardeningTests(ColabTempTestCase):
     # ---- fix 2: no absolute rig paths in any kept file ----
 
     def test_no_rig_paths_in_any_kept_file_on_every_exit_path(self) -> None:
-        home_root = self.tmp_path / "home" / "mikey"
-        studio_cfg = "/home/mikey/.config/dataset-desk/config.json"
+        home_root = self.tmp_path / "home" / "alice"
+        studio_cfg = "/home/alice/.config/dataset-desk/config.json"
         proj, cap_cfg = fake_colab_desk.make_synthetic_project(home_root / "src", flagged_count=2, unflagged_count=1)
         total = 0
 
@@ -1867,29 +1867,29 @@ class PreL4HardeningTests(ColabTempTestCase):
     def test_scrub_covers_case_spaces_wsl_unc_url_encoding_and_suffixless_files(self) -> None:
         helper = _load_module("desk_draft_helper_scrub2_test", DESK_DRAFT_HELPER_PY)
         cases = [
-            "C:\\users\\mikey\\x",
-            "/mnt/c/users/mikey/x",
+            "C:\\users\\alice\\x",
+            "/mnt/c/users/alice/x",
             "C:\\Users\\John Smith\\x",
             "/Users/John Smith/x",
-            "\\\\wsl.localhost\\Ubuntu\\home\\mikey\\x",
-            "\\\\wsl$\\Ubuntu\\home\\mikey",
-            "C%3A%5CUsers%5Cmikey%5Cx",
-            "%2Fhome%2Fmikey%2Fx",
-            "file:///C:/Users/mikey/x",
+            "\\\\wsl.localhost\\Ubuntu\\home\\alice\\x",
+            "\\\\wsl$\\Ubuntu\\home\\alice",
+            "C%3A%5CUsers%5Calice%5Cx",
+            "%2Fhome%2Falice%2Fx",
+            "file:///C:/Users/alice/x",
         ]
         for raw in cases:
             cleaned = helper.scrub_rig_paths(f"see {raw} here")
-            self.assertNotRegex(cleaned, r"(?i)mikey|john|smith|ubuntu", msg=f"{raw!r} -> {cleaned!r}")
+            self.assertNotRegex(cleaned, r"(?i)alice|john|smith|ubuntu", msg=f"{raw!r} -> {cleaned!r}")
         out_dir = self.tmp_path / "scrub_sfx"
         out_dir.mkdir()
-        (out_dir / "noext").write_text("error at /home/mikey/x\n", encoding="utf-8")
+        (out_dir / "noext").write_text("error at /home/alice/x\n", encoding="utf-8")
         for name in ("a.err", "a.out", "a.html", "a.ini", "a.cfg"):
-            (out_dir / name).write_text("path C:\\Users\\mikey\\z\n", encoding="utf-8")
-        (out_dir / "blob.bin").write_bytes(b"\x00\x01/home/mikey/x")
+            (out_dir / name).write_text("path C:\\Users\\alice\\z\n", encoding="utf-8")
+        (out_dir / "blob.bin").write_bytes(b"\x00\x01/home/alice/x")
         ns = mock.MagicMock(out_dir=str(out_dir), root=[])
         self.assertEqual(helper.cmd_scrub_kept_paths(ns), 0)
         for name in ("noext", "a.err", "a.out", "a.html", "a.ini", "a.cfg"):
-            self.assertNotIn("mikey", (out_dir / name).read_text(encoding="utf-8"), msg=name)
+            self.assertNotIn("alice", (out_dir / name).read_text(encoding="utf-8"), msg=name)
         report = json.loads((out_dir / "scrub_report.json").read_text(encoding="utf-8"))
         self.assertEqual(report["skipped"], ["blob.bin (binary)"])
 
@@ -1905,10 +1905,10 @@ class PreL4HardeningTests(ColabTempTestCase):
         out_dir = self.tmp_path / "watch_scrub" / "run_a"
         out_dir.mkdir(parents=True)
         for name, body in (
-            ("window.json", '{"refusal_why": "upload /home/mikey/p/x.png failed"}'),
-            ("outcome.draft.json", '{"why": "C:\\\\Users\\\\mikey\\\\p"}'),
-            ("guards.log", "WALL_WATCHER_ESCALATED /mnt/c/Users/mikey/p\n"),
-            ("stop.log", "stopped from /home/mikey\n"),
+            ("window.json", '{"refusal_why": "upload /home/alice/p/x.png failed"}'),
+            ("outcome.draft.json", '{"why": "C:\\\\Users\\\\alice\\\\p"}'),
+            ("guards.log", "WALL_WATCHER_ESCALATED /mnt/c/Users/alice/p\n"),
+            ("stop.log", "stopped from /home/alice\n"),
         ):
             (out_dir / name).write_text(body, encoding="utf-8")
         funcs = text[text.index("desk_scrub_kept_paths() {") : text.index("desk_pre_session_exit() {")]
@@ -1925,11 +1925,11 @@ class PreL4HardeningTests(ColabTempTestCase):
     def test_scrub_rig_paths_unit(self) -> None:
         helper = _load_module("desk_draft_helper_scrub_test", DESK_DRAFT_HELPER_PY)
         cases = {
-            "/home/mikey/x/y": "<rig>/x/y",
-            "C:\\Users\\mikey\\a": "<rig>\\a",
-            "C:\\\\Users\\\\mikey\\\\a": "<rig>\\\\a",
-            "C:/Users/mikey/a": "<rig>/a",
-            "/mnt/c/Users/mikey/z": "<rig>/z",
+            "/home/alice/x/y": "<rig>/x/y",
+            "C:\\Users\\alice\\a": "<rig>\\a",
+            "C:\\\\Users\\\\alice\\\\a": "<rig>\\\\a",
+            "C:/Users/alice/a": "<rig>/a",
+            "/mnt/c/Users/alice/z": "<rig>/z",
             "/mnt/e/AI/x": "<rig>/AI/x",
             "https://example.test/a": "https://example.test/a",
         }
@@ -2020,7 +2020,7 @@ class PreL4HardeningTests(ColabTempTestCase):
     def test_upload_tar_carries_scrubbed_copies_of_records_and_wave_metadata(self) -> None:
         proj, cap_cfg = self.make_project("gen_src", flagged_count=1, unflagged_count=1)
         gen = proj / "outputs" / "wave-1" / "generation.json"
-        gen.write_text(json.dumps({"output_dir": "/home/mikey/work/wave-1", "src": "C:\\Users\\mikey\\w"}), encoding="utf-8")
+        gen.write_text(json.dumps({"output_dir": "/home/alice/work/wave-1", "src": "C:\\Users\\alice\\w"}), encoding="utf-8")
         helper = _load_module("desk_draft_helper_gen_test", DESK_DRAFT_HELPER_PY)
         out_dir = self.tmp_path / "gen_out"
         out_dir.mkdir()
@@ -2035,7 +2035,7 @@ class PreL4HardeningTests(ColabTempTestCase):
             body = member.read().decode("utf-8")
             png_member = tf.extractfile("outputs/wave-1/flagged_00.png")
             png_head = png_member.read(8)
-        self.assertNotIn("mikey", body)
+        self.assertNotIn("alice", body)
         self.assertEqual(png_head, bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A]))
         manifest = json.loads((out_dir / "project_manifest.json").read_text(encoding="utf-8"))
         entry = next(e for e in manifest["files"] if e["path"] == "outputs/wave-1/generation.json")

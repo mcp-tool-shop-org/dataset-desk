@@ -1,6 +1,6 @@
 # dataset-desk: how it works
 
-Mapped at 2026-11-12 from commit f63044c by Atlas 1.26.0.
+Mapped at 2026-11-12 from commit 5127204 by Atlas 1.26.0.
 
 ## What this is
 
@@ -8,7 +8,7 @@ dataset-desk: a review desk for visual datasets — duplicates, outliers, search
 
 6 parts, mostly Python (20 files), shell (3), CSS (2), TypeScript (2), Astro (1) and JavaScript (1). Work enters through 4 doors; the busiest is CI, which reaches 4 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.
 
-## What changed since 2026-11-12 (02174a8)
+## What changed since 2026-11-12 (f63044c)
 
 Nothing structural changed since 2026-11-12; 3 files changed content.
 
@@ -42,7 +42,7 @@ CI writes nothing this map can see.
 
 ## What tends to change together
 
-- **scripts/colab/desk_draft_helper.py** and **tests/test_colab_draft_lane.py** changed together in 6 of 7 commits, though neither part imports the other.
+- **scripts/colab/desk_draft_helper.py** and **tests/test_colab_draft_lane.py** changed together in 7 of 8 commits, though neither part imports the other.
 
 Confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions.
 
