@@ -145,6 +145,26 @@ def eg2_fit_accept(
     return {"checked": len(descriptions), "backend": "eg2", "status": "stub"}
 
 
+def check_drafter_pool(
+    project: str,
+    drafter,
+    *,
+    allow_multimodal_pool: bool = False,
+) -> None:
+    """Verify via `check_multimodal_pool` that `drafter` is a non-arm image-only drafter on locked pools."""
+    if drafter is None:
+        return
+    dname = str(getattr(drafter, "name", getattr(drafter, "drafter_id", "drafter")))
+    is_arm = bool(getattr(drafter, "is_arm_model", False))
+    check_multimodal_pool(
+        project,
+        dname,
+        images_only=True,
+        allow_multimodal_pool=allow_multimodal_pool,
+        arm_acceptance=is_arm,
+    )
+
+
 @dataclass
 class Item:
     sha256: str
@@ -1480,31 +1500,106 @@ def _status_label(it: Item) -> str:
     return st
 
 
-def report(project: str, out: str, items: list[Item], img: np.ndarray, txt: dict, meta: dict,
-           cov: list[dict] | None = None, images_only: bool = False,
-           allow_multimodal_pool: bool = False, drafter=None, token_counter=None) -> str:
+def _resolve_sibling_image_vecs(
+    project: str,
+    out: str,
+    items: list[Item] | None = None,
+    img: np.ndarray | None = None,
+    meta: dict | None = None,
+    *,
+    allow_multimodal_pool: bool = False,
+) -> dict[str, np.ndarray] | None:
+    """Return DINOv2 image-only vectors for blind worksheet sibling selection when available under `out`.
+
+    Never reads text embeddings (`txt` / `cluster_txt`) and never uses multimodal arm backends (`eg2`, `siglip2`) on
+    locked pools; only `dinov2` image-only embeddings (plus dHash) are used.
+    """
+    if (
+        meta is not None
+        and meta.get("backend") == "dinov2"
+        and items is not None
+        and img is not None
+        and img.ndim == 2
+        and img.shape[1] > 0
+    ):
+        check_multimodal_pool(project, "dinov2", images_only=True, allow_multimodal_pool=allow_multimodal_pool)
+        return {p.replace("\\", "/"): img[idx] for idx, it in enumerate(items) for p in it.paths}
+    dino_dir = cache_dir(out, "dinov2")
+    if os.path.isfile(os.path.join(dino_dir, "meta.json")):
+        try:
+            d_items, d_img, _d_txt, _d_meta = load_cache(out, "dinov2")
+        except SystemExit:
+            return None
+        if d_img.ndim == 2 and d_img.shape[1] > 0:
+            check_multimodal_pool(project, "dinov2", images_only=True, allow_multimodal_pool=allow_multimodal_pool)
+            return {p.replace("\\", "/"): d_img[idx] for idx, it in enumerate(d_items) for p in it.paths}
+    return None
+
+
+def report(
+    project: str,
+    out: str,
+    items: list[Item],
+    img: np.ndarray,
+    txt: dict,
+    meta: dict,
+    cov: list[dict] | None = None,
+    images_only: bool = False,
+    allow_multimodal_pool: bool = False,
+    drafter=None,
+    token_counter=None,
+    *,
+    caption_rules=None,
+    compose: bool = False,
+    manifest_name: str = description_gate.CAPTION_MANIFEST_FILENAME,
+) -> str:
     bname = meta.get("backend", "eg2")
     spec = registry.REGISTRY.get(bname)
     can_text = spec is None or "text" in spec.modalities
     eff_images_only = bool(images_only or meta.get("images_only") or bname == "none" or not can_text)
     check_multimodal_pool(project, bname, images_only=eff_images_only,
                           allow_multimodal_pool=allow_multimodal_pool)
+    if drafter is not None:
+        check_drafter_pool(project, drafter, allow_multimodal_pool=allow_multimodal_pool)
     has_vecs = img.ndim == 2 and img.shape[1] > 0
     d = dupes(items, img, backend=meta.get("backend"))
     o = outliers(items, img) if has_vecs else {"approved": len(approved_idx(items)), "least_typical": [],
                                                "nearest_canon": [], "furthest_from_canon": []}
     c = captions(items, img, txt) if (has_vecs and not eff_images_only) else {"described": 0}
+    eff_rules = (
+        description_gate.coerce_caption_rules(caption_rules, project=project)
+        if caption_rules is not None
+        else description_gate.load_caption_rules(project=project)
+    )
     raw_recs = description_gate.load_project_records(project)
     if raw_recs:
-        desc_audit = description_gate.audit_records(raw_recs, token_counter=token_counter)
+        desc_audit = description_gate.audit_records(raw_recs, token_counter=token_counter, caption_rules=eff_rules)
     else:
         synth = [{"id": it.record.get("id") or it.paths[0], "asset_path": it.paths[0], **it.record}
                  for it in items if it.record and it.record.get("recorded")]
-        desc_audit = description_gate.audit_records(synth, token_counter=token_counter)
+        desc_audit = description_gate.audit_records(synth, token_counter=token_counter, caption_rules=eff_rules)
     if drafter is not None:
         description_gate.draft_flagged_records(project, desc_audit, drafter)
     dhashes = {p: it.dhash for it in items for p in it.paths if it.dhash}
-    rev_jsonl, rev_ws = description_gate.write_review_files(project, out, desc_audit, dhashes=dhashes)
+    sib_vecs = _resolve_sibling_image_vecs(
+        project, out, items=items, img=img, meta=meta, allow_multimodal_pool=allow_multimodal_pool
+    )
+    rev_jsonl, rev_ws = description_gate.write_review_files(
+        project, out, desc_audit, dhashes=dhashes, image_vecs=sib_vecs
+    )
+    composed_manifest_path: str | None = None
+    if compose:
+        comp = description_gate.compose_captions(
+            project,
+            out,
+            caption_rules=eff_rules,
+            drafter=drafter,
+            dhashes=dhashes,
+            image_vecs=sib_vecs,
+            token_counter=token_counter,
+            manifest_name=manifest_name,
+        )
+        composed_manifest_path = comp["manifest_path"]
 
     L = [f"# Dataset desk: {os.path.basename(os.path.abspath(project))} ({meta['backend']})", "",
          f"{meta['files']} image files, {meta['unique']} unique by content, {meta['records']} records; "
@@ -1556,7 +1651,8 @@ def report(project: str, out: str, items: list[Item], img: np.ndarray, txt: dict
         f"({desc_audit['passed_count']} token-verified, {desc_audit['unchecked_count']} token-unchecked), "
         f"**{desc_audit['flagged_count']} flagged** (median prompt word share {desc_audit['median_prompt_word_share']:.2f}, "
         f"content-word share {desc_audit['median_prompt_content_word_share']:.2f}). "
-        f"Review queue: `{os.path.basename(rev_jsonl)}`; re-description worksheet: `{os.path.basename(rev_ws)}`.",
+        f"Review queue: `{os.path.basename(rev_jsonl)}`; re-description worksheet: `{os.path.basename(rev_ws)}`"
+        + (f"; composed manifest: `{os.path.basename(composed_manifest_path)}`." if composed_manifest_path else "."),
     ]
     if desc_audit["exact_groups"]:
         L += ["", f"- **Exact duplicate descriptions/rulings:** {len(desc_audit['exact_groups'])} group(s)."]
@@ -2368,8 +2464,9 @@ def _token_counter():
 
 def main(argv: list[str] | None = None, make=backends.make) -> int:
     image_cmds = ("index", "dupes", "search", "coverage", "report")
+    caption_cmds = ("compose", "import-edits")
     text_cmds = ("text-index", "text-dupes", "text-search", "lineage")
-    all_cmds = [*image_cmds, *text_cmds]
+    all_cmds = [*image_cmds, *caption_cmds, *text_cmds]
     all_backends = [*registry.REGISTRY, "none", "fake"]
 
     ap = argparse.ArgumentParser(
@@ -2381,6 +2478,8 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
                 "  search       the nearest images to --text, --image, or both\n"
                 "  coverage     the best images for each subject in --subjects\n"
                 "  report       the Markdown report: duplicates, outliers, descriptions, coverage\n"
+                "  compose      compose final training captions into --out with per-part provenance\n"
+                "  import-edits re-import blind worksheet edits under --out with a seat:<name> writer id\n"
                 "  text-index   scan --source or --rnd-data and embed text/code files into <out>/<backend>/text/\n"
                 "  text-dupes   text pairs at or above --semantic, as JSON\n"
                 "  text-search  the nearest text/code files to --text\n"
@@ -2413,15 +2512,29 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
     ap.add_argument("--limit", type=int, help="index only the first N unique items (a smoke test)")
     ap.add_argument("--strict", action="store_true", help="halt immediately on an unreadable image file")
     ap.add_argument("--count-tokens", action="store_true",
-                    help="report: run the gate's 64-token test with the cached SigLIP2 tokenizer (offline; needs the "
-                         "models extra); without it, records that pass the other tests stay 'unchecked'")
+                    help="report/compose: run the gate's 64-token test with the cached SigLIP2 tokenizer (offline; "
+                         "needs the models extra); without it, records that pass the other tests stay 'unchecked'")
     ap.add_argument("--images-only", action="store_true",
                     help="index/report images and model-free gates only; do not embed descriptions")
     ap.add_argument("--allow-multimodal-pool", action="store_true",
                     help="permit description embeddings and arm-model checks on the locked benchmark projects "
                          f"({', '.join(sorted(MULTIMODAL_POOL))}) once its counted run is done")
-    ap.add_argument("--draft", default="none", choices=["none", "fake", "plain-sight", "florence2"],
-                    help="report: draft flagged descriptions blind from image pixels via plain-sight (or fake)")
+    ap.add_argument("--draft", default=None, nargs="?", const=registry.DEFAULT_DRAFTER,
+                    choices=["none", "fake", "plain-sight", "florence2", "qwen3-vl"],
+                    help="report/compose: draft descriptions blind from image pixels (default drafter: plain-sight; "
+                         "also supports qwen3-vl, fake, none)")
+    ap.add_argument("--drafter-prompt", dest="drafter_prompt", default=None,
+                    help="override the drafter prompt string (defaults to drafter_prompt in caption-rules.json)")
+    ap.add_argument("--caption-config", dest="caption_config", default=None,
+                    help=f"per-project caption rules JSON (defaults to <project>/{description_gate.CAPTION_RULES_FILENAME} when present)")
+    ap.add_argument("--compose", action="store_true",
+                    help="report: also compose final captions and write the lane-3 dataset manifest under --out")
+    ap.add_argument("--manifest-name", dest="manifest_name", default=description_gate.CAPTION_MANIFEST_FILENAME,
+                    help=f"manifest filename under --out for compose (default: {description_gate.CAPTION_MANIFEST_FILENAME})")
+    ap.add_argument("--worksheet", default=None,
+                    help="import-edits: path to the edited description-worksheet.md (default: <out>/description-worksheet.md)")
+    ap.add_argument("--seat", default=None,
+                    help="import-edits: editing seat name recorded as seat:<name>")
     ap.add_argument("--text", help="search/text-search: a query string (combine with --image on eg2/fake)")
     ap.add_argument("--image", help="search: an image file")
     ap.add_argument("--subjects", help="coverage/report: a file with one wanted subject per line")
@@ -2495,6 +2608,54 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         out_inside = False
     if out_inside:
         raise DeskError("PERM_OUT_INSIDE_PROJECT", "REFUSED: --out is inside the project; the desk never writes into a project")
+
+    rules = description_gate.load_caption_rules(project=project, config_path=a.caption_config)
+    eff_prompt = a.drafter_prompt if a.drafter_prompt is not None else (rules.drafter_prompt if rules else None)
+
+    if a.command == "import-edits":
+        ws_path = os.path.abspath(a.worksheet) if a.worksheet else os.path.join(out, "description-worksheet.md")
+        res = description_gate.import_worksheet_edits(ws_path, out, seat=a.seat, project=project)
+        print(json.dumps({
+            "imported": res["imported"],
+            "total_seat_edits": res["total_seat_edits"],
+            "seat_edits_path": res["seat_edits_path"],
+        }, indent=1))
+        return 0
+
+    if a.command == "compose":
+        eff_draft = (
+            a.draft
+            if a.draft is not None
+            else (rules.drafter if (rules and rules.drafter is not None) else registry.DEFAULT_DRAFTER)
+        )
+        if eff_draft not in ("fake", "none", "", None):
+            lower_priority()
+        drafter = backends.make_drafter(
+            eff_draft,
+            device=a.device,
+            threads=a.threads,
+            grant=a.grant,
+            prompt=eff_prompt,
+            vram_budget=a.vram_budget,
+            wait=a.wait,
+        )
+        check_drafter_pool(project, drafter, allow_multimodal_pool=a.allow_multimodal_pool)
+        scanned_items, _scan_stats = scan(project, strict=a.strict, out=out, threads=a.threads)
+        dhashes = {p: it.dhash for it in scanned_items for p in it.paths if it.dhash}
+        sib_vecs = _resolve_sibling_image_vecs(project, out, allow_multimodal_pool=a.allow_multimodal_pool)
+        comp = description_gate.compose_captions(
+            project,
+            out,
+            caption_rules=rules,
+            drafter=drafter,
+            dhashes=dhashes,
+            image_vecs=sib_vecs,
+            token_counter=_token_counter() if a.count_tokens else None,
+            manifest_name=a.manifest_name,
+        )
+        print(comp["manifest_path"])
+        return 0
+
     if a.command in ("index", "report"):
         check_multimodal_pool(project, backend, images_only=a.images_only,
                               allow_multimodal_pool=a.allow_multimodal_pool)
@@ -2546,10 +2707,26 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
             print(f"{row['subject']}: " + "; ".join(f"{items[i].paths[0]} {s:.3f}" for i, s in row["top"]))
     elif a.command == "report":
         cov = coverage(items, img, subjects, emb.texts(subjects, "query")) if (subjects and backend != "none") else None
-        drafter = backends.make_drafter(a.draft, device=a.device, threads=a.threads, grant=a.grant)
+        eff_draft = (
+            a.draft
+            if a.draft is not None
+            else ((rules.drafter if (rules and rules.drafter is not None) else registry.DEFAULT_DRAFTER) if a.compose else "none")
+        )
+        if eff_draft not in ("fake", "none", "", None):
+            lower_priority()
+        drafter = backends.make_drafter(
+            eff_draft,
+            device=a.device,
+            threads=a.threads,
+            grant=a.grant,
+            prompt=eff_prompt,
+            vram_budget=a.vram_budget,
+            wait=a.wait,
+        )
         print(report(project, out, items, img, txt, meta, cov,
                      images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool, drafter=drafter,
-                     token_counter=_token_counter() if a.count_tokens else None))
+                     token_counter=_token_counter() if a.count_tokens else None,
+                     caption_rules=rules, compose=a.compose, manifest_name=a.manifest_name))
     return 0
 
 
