@@ -2,10 +2,12 @@
 # Launch kit for dataset-desk Colab caption-drafting lane (Qwen3-VL-8B-Instruct on L4+, CPU-high-mem stub first).
 #
 # Vendored window library source: style-dataset-lab main @ df9a1b3be2f8729a57776253e9b0cb32b7f5299c
-#   - scripts/colab/colab_window.sh  sha256 e5a25bce118d60f95e50ae235ccc91101a348cbcb60699d6a4350d559e2d5752
+#   - scripts/colab/colab_window.sh  sha256 415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725b987132e7
 #       (+ L4 Standard-only patch: polyglot-mcp main 66eddd9 colab_window.sh:1219-1231 and :1267-1270; Publisher
 #        fleet ruling 2026-11-09. sdlab df9a1b3b predates it, so this copy differs from that export by that rule.)
-#   - scripts/colab/launch_guards.py sha256 4c0c0ab6410eaa511a808d00f09a09d42d5d5b7d0504d85d58cfe3c65baeb085
+#       (+ parallel-window rate fix: polyglot-mcp main bd6414fd, PR #80, ported function by function; and a
+#        desk-local watcher ancestry guard. launch_guards.py carries the same port.)
+#   - scripts/colab/launch_guards.py sha256 2998b4f8e3aea3aea2ecc9f779c743b4b44824b30e7ff55fb1da782d7a416c69
 #   - scripts/colab/remote_runner.py sha256 393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb
 #
 # Modes:
@@ -26,13 +28,13 @@ PINNED_PYTHON_VERSION="3.12.15"
 PINNED_QWEN3_VL_REPO="Qwen/Qwen3-VL-8B-Instruct"
 PINNED_QWEN3_VL_REVISION="0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
 
-PINNED_COLAB_WINDOW_SHA="e5a25bce118d60f95e50ae235ccc91101a348cbcb60699d6a4350d559e2d5752"
-PINNED_LAUNCH_GUARDS_SHA="4c0c0ab6410eaa511a808d00f09a09d42d5d5b7d0504d85d58cfe3c65baeb085"
+PINNED_COLAB_WINDOW_SHA="415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725b987132e7"
+PINNED_LAUNCH_GUARDS_SHA="2998b4f8e3aea3aea2ecc9f779c743b4b44824b30e7ff55fb1da782d7a416c69"
 PINNED_REMOTE_RUNNER_SHA="393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 PINNED_DESK_BUNDLE_NOW_SHA="b1e83c20f046716433d927fa442e43fe3e6c821c90adc84cd87cfccae9aed1ac"
 PINNED_DESK_DRAFT_HELPER_SHA="74b437a2c6ac5ec469b8683bb193e166b888dec27064235bab03adad5e3fb920"
 PINNED_DESK_LOCK_SHA="7d718664b0289b53532ff50541e63942166c1921a2f52cb0e48900958bf90510"
-PINNED_SELF_SHA="362a5c542e64c59651e3858515be4dcbee8ceb32d22369eadb14fcad5446d116"
+PINNED_SELF_SHA="3ac166b40c8a4f99cb3eb584345d25f29f2721309b7ecd4ee4509e5312f8f682"
 
 if pwd -W >/dev/null 2>&1; then
   export MSYS2_ARG_CONV_EXCL="/content"
@@ -1112,6 +1114,9 @@ desk_kill_tracked_children() {
 
 cleanup_on_exit() {
   local rc=$?
+  # Release the open lock first if an exit or signal arrived while it was held, so no cleanup child inherits
+  # fd 9 and keeps the queue blocked after this window is gone (parallel-rate fix, polyglot #80, 2026-11-12).
+  colab_release_open_lock_if_held "${OUT_DIR}" "${SESSION} on_exit rc=${rc}" 2>/dev/null || true
   colab_enter_cleanup_trap "${OUT_DIR}"
   desk_kill_tracked_children
   if [ -n "${EXEC_PID}" ]; then

@@ -37,8 +37,8 @@ DESK_DRAFT_HELPER_PY = COLAB_DIR / "desk_draft_helper.py"
 DESK_LOCK_FILE = COLAB_DIR / "locks" / "desk_draft.lock"
 
 EXPECTED_SDLAB_COMMIT = "df9a1b3be2f8729a57776253e9b0cb32b7f5299c"
-EXPECTED_COLAB_WINDOW_SHA = "e5a25bce118d60f95e50ae235ccc91101a348cbcb60699d6a4350d559e2d5752"
-EXPECTED_LAUNCH_GUARDS_SHA = "4c0c0ab6410eaa511a808d00f09a09d42d5d5b7d0504d85d58cfe3c65baeb085"
+EXPECTED_COLAB_WINDOW_SHA = "415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725b987132e7"
+EXPECTED_LAUNCH_GUARDS_SHA = "2998b4f8e3aea3aea2ecc9f779c743b4b44824b30e7ff55fb1da782d7a416c69"
 EXPECTED_REMOTE_RUNNER_SHA = "393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 
 
@@ -2181,6 +2181,153 @@ class PreL4HardeningTests(ColabTempTestCase):
         self.assertIn("SHAPE_HIGH_MEM_UNAVAILABLE", f"{res.stderr}\n{res.stdout}")
         self.assertEqual(env.colab_calls(), [])
         self.assertIn("SHAPE_HIGH_MEM_UNAVAILABLE", COLAB_WINDOW_SH.read_text(encoding="utf-8").split("REFUSAL_CODES = (")[1])
+
+    # ---- parallel windows (polyglot-mcp PR #80, ported via Ripple): price by the window's own rate ----
+
+    def _par_args(self, proj, cap_cfg, out_dir):
+        return self._gpu_args(proj, cap_cfg, out_dir, "--max-rate", "2.25")
+
+    def test_parallel_1_neighbours_opened_while_waiting_for_the_open_lock_are_in_the_pre_open_baseline(self) -> None:
+        """A holder owns the open lock while the launcher waits, turns two neighbours on only after the launcher's
+        first `colab usage` read, then releases. The old code priced from the stale launch-time read and refused
+        RATE_ABOVE_MAX at the account's 5.88/h; the fix re-reads under the lock and prices 1.96/h."""
+        import subprocess
+        import time
+
+        proj, cap_cfg = self.make_project("par1_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("par1", config={"per_session_rate": 1.96, "neighbours": 2, "neighbours_when": "external"})
+        out_dir = self.tmp_path / "out_par1"
+        lock_path = env.base_dir / "open.lock"
+        holding = self.tmp_path / "holder_holding.txt"
+        calls = env.state_dir / "colab_calls.jsonl"
+        holder_py = "\n".join([
+            "import fcntl, os, sys, time",
+            "lock, flag, on, calls = sys.argv[1:5]",
+            "fh = open(lock, 'a')",
+            "fcntl.flock(fh, fcntl.LOCK_EX)",
+            "os.makedirs(lock + '.lockdir', exist_ok=True)",
+            "open(flag, 'w').write('1')",
+            "t0 = time.time()",
+            "while time.time() - t0 < 90:",
+            "    try:",
+            "        if '\"subcmd\": \"usage\"' in open(calls, encoding='utf-8').read():",
+            "            break",
+            "    except OSError:",
+            "        pass",
+            "    time.sleep(0.1)",
+            "time.sleep(1.5)",
+            "open(on, 'w').write('1')",
+            "os.rmdir(lock + '.lockdir')",
+            "fcntl.flock(fh, fcntl.LOCK_UN)",
+        ])
+        env.state_dir.mkdir(parents=True, exist_ok=True)
+        holder = subprocess.Popen(
+            [sys.executable, "-c", holder_py, str(lock_path), str(holding), str(env.state_dir / "neighbours_on.txt"), str(calls)],
+            stdin=subprocess.DEVNULL,
+        )
+        try:
+            t0 = time.time()
+            while not holding.exists() and time.time() - t0 < 10:
+                time.sleep(0.1)
+            self.assertTrue(holding.exists(), "the holder never took the open lock")
+            res = env.run_launch(self._par_args(proj, cap_cfg, out_dir), timeout=240.0)
+        finally:
+            holder.wait(timeout=90)
+        self.assertEqual(res.returncode, 0, msg=res.stderr[-1500:])
+        rc = json.loads((out_dir / "rate_check.json").read_text(encoding="utf-8"))
+        self.assertEqual(rc["decision"], "ok")
+        self.assertAlmostEqual(rc["window_rate"], 1.96, places=2)
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertNotEqual(win.get("refusal_code"), "RATE_ABOVE_MAX")
+        self.assertTrue(win["account_shared"])
+        self.assertEqual(win["pre_open_assignments"], 2)
+        self.assertEqual(win["spend_basis"], "window_rate_x_elapsed")
+        guards = (out_dir / "guards.log").read_text(encoding="utf-8")
+        self.assertIn("PRE_OPEN_UNDER_LOCK rate=3.92 assignments=2", guards)
+        self.assertIn("OPEN_LOCK_RELEASED", guards)
+        usage = (out_dir / "usage.log").read_text(encoding="utf-8").splitlines()
+        self.assertIn("Usage rate: 0.00/hr", usage[:3])
+
+    def test_parallel_2_neighbours_opened_outside_the_lock_make_the_rate_unattributable(self) -> None:
+        proj, cap_cfg = self.make_project("par2_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("par2", config={"per_session_rate": 1.96, "neighbours": 2, "neighbours_when": "after_open"})
+        out_dir = self.tmp_path / "out_par2"
+        res = env.run_launch(self._par_args(proj, cap_cfg, out_dir), timeout=240.0)
+        self.assertNotEqual(res.returncode, 0, msg=res.stdout + res.stderr)
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertEqual(win["refusal_code"], "RATE_UNATTRIBUTABLE", msg=res.stderr[-1500:])
+        self.assertTrue(win.get("why"))
+        subcmds = [c["subcmd"] for c in env.colab_calls()]
+        self.assertIn("stop", subcmds)
+        # Refused before any private upload; the only exec is the VM workdir cleanup that precedes every stop.
+        self.assertNotIn("upload", subcmds)
+        self.assertFalse((out_dir / "vitals.log").exists() and "SDLAB_REMOTE_RC" in (out_dir / "vitals.log").read_text(encoding="utf-8"))
+        self.assertEqual(win["spend_basis"], "max_rate_x_elapsed_no_stable_rate")
+
+    def test_parallel_3_a_neighbours_spend_on_the_shared_balance_never_trips_this_gpu_windows_cap(self) -> None:
+        proj, cap_cfg = self.make_project("par3_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("par3", config={"balance_start": 120.0, "balance_active": 90.5})
+        out_dir = self.tmp_path / "out_par3"
+        res = env.run_launch(self._par_args(proj, cap_cfg, out_dir), timeout=240.0)
+        self.assertEqual(res.returncode, 0, msg=res.stderr[-1500:])
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertNotEqual(win.get("refusal_code"), "CAP_GUARD_TRIPPED")
+        self.assertEqual(win["account_balance_drop"], 29.5)
+        self.assertEqual(win["spend_basis"], "window_rate_x_elapsed")
+        self.assertLess(win["spend_ccu"], 1.0)
+        self.assertTrue((out_dir / "account_balance.json").is_file())
+        self.assertIn("spend_ccu_at_priced_rate", win)
+
+    def test_parallel_4_update_window_rate_attributes_only_the_pre_open_count_plus_one(self) -> None:
+        lg = _load_module("launch_guards_parallel_test", LAUNCH_GUARDS_PY)
+
+        def run(reads, pre_rate, pre_n):
+            st = {}
+            for i, (acc, n) in enumerate(reads):
+                st = lg.update_window_rate(st, account_rate=acc, pre_open_rate=pre_rate, at="t",
+                                           epoch=10.0 * i, assignments=n, pre_open_assignments=pre_n)
+            return st
+
+        a = run([(20.1, 2), (30.15, 3), (30.15, 3)], 20.1, 2)
+        self.assertEqual(a.get("best_stable"), 10.05)
+        self.assertTrue(a["readings"][0].get("not_registered"))
+        self.assertTrue(a.get("shared_account"))
+        self.assertEqual(lg.window_rate_decision(a, 10.5), "ok")
+        b = run([(30.15, 3), (30.15, 3)], 0.0, 0)
+        self.assertIsNone(b.get("best_stable"))
+        self.assertEqual(lg.window_rate_decision(b, 10.5), "unattributable")
+        c = run([(10.05, 1), (10.05, 1)], 0.0, 0)
+        self.assertEqual(c.get("best_stable"), 10.05)
+        self.assertFalse(c.get("shared_account"))
+        self.assertEqual(lg.window_rate_decision(c, 10.5), "ok")
+
+    def test_parallel_5_lib_refuses_when_the_pre_open_read_fails_or_the_wall_is_short_after_the_lock(self) -> None:
+        import subprocess
+
+        env = self.make_env("par5")
+        results = {}
+        for name, setup in (
+            ("wall", 'echo "$(( $(date -u +%s) - 590 ))" > "$O/wall_start_epoch.txt"; echo 600 > "$O/wall_limit_s.txt"'),
+            ("preopen", "export SDLAB_FAULT_POLL_HELPER=empty"),
+        ):
+            out = self.tmp_path / f"par5_{name}"
+            out.mkdir()
+            for fname, val in (("gpu_rate_gate_armed.txt", "1\n"), ("max_rate.txt", "2.25\n"), ("shape_requested.txt", "standard\n")):
+                (out / fname).write_text(val, encoding="utf-8")
+            script = (
+                f'set -u; export COLAB_CARD_CLASS=gpu PY_BIN="{sys.executable}"; O="{out}"; '
+                f'source "{COLAB_WINDOW_SH}"; {setup}; '
+                f'rc=0; ( colab_open_session_locked par5-{name} L4 "$O" ) || rc=$?; echo "rc=$rc"'
+            )
+            proc = subprocess.run(["bash", "-c", script], env=env.build_env(), stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, timeout=60, check=False)
+            results[name] = (proc, out)
+        self.assertIn("WALL_SHORT_AFTER_LOCK", (results["wall"][1] / "guards.log").read_text(encoding="utf-8"))
+        self.assertIn("PRE_OPEN_READ_FAILED", (results["preopen"][1] / "guards.log").read_text(encoding="utf-8"))
+        for name, (proc, out) in results.items():
+            self.assertIn("rc=2", proc.stdout, msg=name + proc.stdout + proc.stderr)
+            self.assertFalse((out / "session_open_started.txt").exists(), name)
+        self.assertNotIn("new", [c["subcmd"] for c in env.colab_calls()])
 
 
 if __name__ == "__main__":

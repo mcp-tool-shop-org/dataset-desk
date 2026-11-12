@@ -189,8 +189,14 @@ def parse_active_assignments(raw_usage: str) -> int | None:
 def update_window_rate(state: dict[str, Any], *, account_rate: float | None, pre_open_rate: float | None,
                        at: str, epoch: float, assignments: int | None,
                        min_gap_s: float = RATE_STABLE_GAP_S, floor: float = GPU_RATE_FLOOR,
-                       tolerance: float = RATE_STABLE_TOLERANCE) -> dict[str, Any]:
+                       tolerance: float = RATE_STABLE_TOLERANCE,
+                       pre_open_assignments: int | None = None) -> dict[str, Any]:
     """Fold one post-open `colab usage` reading into the window-rate state (kept in the out dir).
+    Parallel windows (2026-11-12): with `pre_open_assignments` known, the first counted reading must
+    show exactly one more assignment than before the open. The same count means this window has
+    not registered yet (not counted, poll again); any other count means a neighbour opened or closed
+    in between, so (account − pre-open) is not this window's rate: `unattributable`, never guessed.
+    Any other assignment before or during the window sets `shared_account` (the balance is shared).
     Every reading is recorded. A bad count (missing, or 0) is recorded and judged nothing; three in
     a row set `assignments_unreadable`. A read less than `min_gap_s` after the last counted one is
     recorded as `counted: false`. A changed count starts a pending re-baseline that settles on two
@@ -201,10 +207,23 @@ def update_window_rate(state: dict[str, Any], *, account_rate: float | None, pre
     state["floor"] = floor
     if "neighbour_baseline" not in state:
         state["neighbour_baseline"] = float(pre_open_rate) if pre_open_rate is not None else 0.0
+    if pre_open_assignments is not None and "pre_open_assignments" not in state:
+        state["pre_open_assignments"] = int(pre_open_assignments)
+    pre_count = state.get("pre_open_assignments")
+    if (pre_count is not None and int(pre_count) > 0) or (assignments is not None and int(assignments) > 1):
+        state["shared_account"] = True
     base = float(state["neighbour_baseline"])
     rec: dict[str, Any] = {"at": at, "epoch": round(float(epoch), 3), "account_rate": account_rate,
                            "pre_open_rate": pre_open_rate, "assignments": assignments,
+                           "pre_open_assignments": pre_count,
                            "neighbour_baseline": base, "window_rate": None, "stable": False}
+    first_count = "last_assignments" not in state and state.get("best_stable") is None
+    if (first_count and pre_count is not None and assignments is not None
+            and int(assignments) == int(pre_count) and int(pre_count) > 0):
+        # This window is not on the account's count yet (registration lag): judge nothing.
+        rec.update({"counted": False, "not_registered": True})
+        readings.append(rec)
+        return state
     if (assignments is None or int(assignments) <= 0) and state.get("best_stable") is None:
         rec.update({"counted": False, "not_registered": True})
         readings.append(rec)
@@ -226,6 +245,13 @@ def update_window_rate(state: dict[str, Any], *, account_rate: float | None, pre
     rec["counted"] = True
     state["last_counted_epoch"] = float(epoch)
     known = "last_assignments" in state
+    if (not known and pre_count is not None and state.get("best_stable") is None
+            and int(assignments) != int(pre_count) + 1):
+        state["unattributable"] = True
+        state["last_assignments"] = assignments
+        rec.update({"unattributable": True, "expected_assignments": int(pre_count) + 1})
+        readings.append(rec)
+        return state
     prev_count = state.get("last_assignments")
     state["last_assignments"] = assignments
     pending = state.get("rebaseline_pending")
@@ -289,6 +315,8 @@ def window_rate_decision(state: dict[str, Any], max_rate: float) -> str:
     `above_max` or `ok`."""
     if state.get("assignments_unreadable"):
         return "assignments_unreadable"
+    if state.get("unattributable") and state.get("best_stable") is None:
+        return "unattributable"
     best = state.get("best_stable")
     if best is None:
         return "unread"

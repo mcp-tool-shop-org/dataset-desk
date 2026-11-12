@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     is case-insensitive and covers spaces, `\wsl.localhost`, URL-encoded paths and suffixless files (skips logged in
     `scrub_report.json`); records, sidecars, configs and wave metadata upload as scrubbed copies; an extra file in the
     pinned weight revision refuses `WEIGHT_UNEXPECTED_FILE`.
+  - Parallel-window rate fix ported from polyglot-mcp PR #80 into the vendored `colab_window.sh` and
+    `launch_guards.py` (same semantics, function by function): the open lock is held from a fresh pre-open read
+    through `colab new`, the shape check and the first stable rate read (`PRE_OPEN_READ_FAILED`,
+    `WALL_SHORT_AFTER_LOCK`, lock wait 1200 s, released first in cleanup); a read at the pre-open count is lag and the
+    first counted read must be pre+1 else `RATE_UNATTRIBUTABLE`; GPU spend never comes from the shared account
+    balance (`spend_basis`, `account_balance_drop`, `account_shared`, `pre_open_assignments`,
+    `spend_ccu_at_priced_rate` in window.json).
   - Coverage unchanged (the lane scripts sit outside the measured `dataset_desk` package; floor 90 stays).
 
 ### Added

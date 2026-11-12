@@ -596,6 +596,8 @@ def _cmd_colab_cli(argv: list[str]) -> int:
 
     if subcmd == "usage":
         bal = float(cfg.get("balance_start", 45.0))
+        if cfg.get("balance_active") is not None and int(sess_state.get("open_count", 0)) > 0:
+            bal = float(cfg["balance_active"])
         if sess_state.get("active"):
             if sess_state.get("card_class") == "gpu":
                 rate = float(cfg.get("gpu_rate", 2.10))
@@ -605,6 +607,20 @@ def _cmd_colab_cli(argv: list[str]) -> int:
         else:
             rate = 0.0
             assign = 0
+        if cfg.get("per_session_rate"):
+            # Shared-account mode (parallel windows, polyglot-mcp PR #80): usage is account-wide, every open
+            # session adds per_session_rate, ours plus `neighbours` others. neighbours_when says when they appear
+            # (and stay): "lock_held" once this window holds the open lock, "after_open" once its colab new ran
+            # (they opened outside its lock), "external" only when a test writes neighbours_on.txt.
+            on_f = state_dir / "neighbours_on.txt"
+            when = str(cfg.get("neighbours_when", "lock_held"))
+            held_marker = pathlib.Path(os.environ.get("COLAB_OPEN_LOCK", "/tmp/colab-window-open.lock") + ".held")
+            own = 1 if sess_state.get("active") else 0
+            if not on_f.exists() and ((when == "lock_held" and held_marker.exists()) or (when == "after_open" and own)):
+                on_f.write_text("1", encoding="utf-8")
+            neighbours = int(cfg.get("neighbours", 0)) if on_f.exists() else 0
+            assign = neighbours + own
+            rate = float(cfg["per_session_rate"]) * assign
         print(f"Current balance: {bal:.2f} compute units")
         print(f"Usage rate: {rate:.2f}/hr")
         print(f"Active assignments: {assign}")

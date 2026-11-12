@@ -5395,7 +5395,7 @@
           "path": ".polyglot-pins.json"
         },
         {
-          "hash": "8eab585678ed0d4688d8f2cd78d70827f97ad26d82539c4ec85f07e826fb5e8b",
+          "hash": "76119753805aa292c199e887046fa42acecee8efc92d95ed59a17fbf51a8212b",
           "path": "CHANGELOG.md"
         },
         {
@@ -5482,7 +5482,7 @@
       "externals": 0,
       "files": [
         {
-          "hash": "e5a25bce118d60f95e50ae235ccc91101a348cbcb60699d6a4350d559e2d5752",
+          "hash": "415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725b987132e7",
           "path": "scripts/colab/colab_window.sh"
         },
         {
@@ -6253,7 +6253,7 @@
           "path": "scripts/colab/desk_draft_helper.py"
         },
         {
-          "hash": "d18b519cc2b6a2401ace7582170cecba2990f7da59a820e9842615e77e025510",
+          "hash": "7530fdcb90db9de4fe13a39b91ca74dbb9f404e1f5f3a55cdac8ed84d29df099",
           "path": "scripts/colab/launch_desk_draft.sh"
         },
         {
@@ -6300,49 +6300,49 @@
             {
               "in": "parse_usage_text",
               "kind": "raise",
-              "line": 313
+              "line": 341
             },
             {
               "in": "_select_rate",
               "kind": "raise",
-              "line": 333
+              "line": 361
             },
             {
               "in": "_failure_rates",
               "kind": "except",
-              "line": 346
+              "line": 374
             },
             {
               "in": "parse_usage_text",
               "kind": "except",
-              "line": 422
+              "line": 450
             },
             {
               "in": "parse_usage_text",
               "kind": "raise",
-              "line": 425
+              "line": 453
             },
             {
               "in": "parse_vitals_log",
               "kind": "except",
-              "line": 715
+              "line": 743
             },
             {
               "in": "check_host_ram_projection",
               "kind": "raise",
-              "line": 1104
+              "line": 1132
             },
             {
               "in": "main",
               "kind": "except",
-              "line": 1249
+              "line": 1277
             },
             {
               "kind": "raise",
-              "line": 1363
+              "line": 1391
             }
           ],
-          "hash": "4c0c0ab6410eaa511a808d00f09a09d42d5d5b7d0504d85d58cfe3c65baeb085",
+          "hash": "2998b4f8e3aea3aea2ecc9f779c743b4b44824b30e7ff55fb1da782d7a416c69",
           "path": "scripts/colab/launch_guards.py"
         },
         {
@@ -6518,7 +6518,7 @@
             "resolve_git_bash",
             "to_posix"
           ],
-          "hash": "7e8f3cf1a773cd2b7890b22edb5df80a919c18620aae1382235e17c39ed9f4cf",
+          "hash": "a6a6ece5f54734e016c6b00e8e86a70887cb42fe1a4e94df17d71551c2d9dfd6",
           "names": [
             "scripts/colab/desk_bundle_now.py"
           ],
@@ -6577,7 +6577,7 @@
           "testFramework": "unittest"
         },
         {
-          "hash": "114717ca042870974dd56e50e256e060a771507b3b7186a393eff2f9ca2d9eb9",
+          "hash": "35c4872bbccb6cee7cdfadfd97708e46c864caec8f416d49510b2ec104c5acbc",
           "importOrder": [
             "tests/fakes.py",
             "tests/fake_colab_desk.py",
@@ -7357,7 +7357,7 @@
   ],
   "engine": "1.26.0",
   "generatedFrom": {
-    "commit": "b43a048566a37a3e169171094d030f456b9a04b9",
+    "commit": "2220dec1268b93e38d1fb7517373f23d19409445",
     "tracked": 67
   },
   "landings": [
