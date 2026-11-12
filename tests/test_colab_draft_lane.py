@@ -51,6 +51,22 @@ def _sha256_file(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _detect_image_magic_in_test(data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith((b"II*\x00", b"MM\x00*")):
+        return "image/tiff"
+    if len(data) >= 14 and data[:2] == b"BM" and data[6:10] == b"\x00\x00\x00\x00":
+        return "image/bmp"
+    return None
+
+
 class ColabTempTestCase(fakes.IsolatedDeskTestCase):
     """Base test case providing a cleaned temporary directory per test."""
 
@@ -932,10 +948,20 @@ class EndToEndStubAndGpuDraftingTests(ColabTempTestCase):
         self.assertTrue(len(vm_win["embedder_events"]) >= 1)
         self.assertTrue(all(ev["backend"] == "none" and ev["allowed"] for ev in vm_win["embedder_events"]))
 
-        # Assert private images were NOT bundled into the output archive and VM workdir was wiped.
+        # Assert private images were NOT bundled into the output archive (by name or magic bytes) and VM workdir was wiped.
         with tarfile.open(out_dir / "desk_draft_bundle.tar.gz", "r:gz") as tf:
-            bundled_names = [m.name for m in tf.getmembers()]
+            bundled_names: list[str] = []
+            bundled_magic_hits: list[tuple[str, str]] = []
+            for member in tf.getmembers():
+                bundled_names.append(member.name)
+                if member.isfile():
+                    ext_fh = tf.extractfile(member)
+                    assert ext_fh is not None
+                    hit = _detect_image_magic_in_test(ext_fh.read(64))
+                    if hit is not None:
+                        bundled_magic_hits.append((member.name, hit))
         self.assertTrue(all(not n.endswith(".png") for n in bundled_names))
+        self.assertEqual(bundled_magic_hits, [])
 
     def test_gpu_e2e_qwen3_vl_chunked_transfers_429_retry_and_token_file_shred(self) -> None:
         secret_tok = "hf_" + ("SyntheticTestTok" * 2)
@@ -1033,6 +1059,637 @@ class EndToEndStubAndGpuDraftingTests(ColabTempTestCase):
         self.assertEqual(win["multimodal_pool"], "rustline")
         self.assertEqual(win["vm_workdir_cleanup"]["exit_status"], 0)
         self.assertTrue(win["private_images"]["vm_workdir_deleted"])
+
+
+def _iter_json_strings(obj: object, prefix: str = "$") -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    if isinstance(obj, str):
+        found.append((prefix, obj))
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(k, str):
+                found.append((f"{prefix}.<key>", k))
+            found.extend(_iter_json_strings(v, f"{prefix}.{k}"))
+    elif isinstance(obj, list):
+        for idx, item in enumerate(obj):
+            found.extend(_iter_json_strings(item, f"{prefix}[{idx}]"))
+    return found
+
+
+def _is_abs_host_path_string(val: str, tmp_marker: str) -> bool:
+    s = val.strip()
+    if not s:
+        return False
+    if s.startswith("/") or s.startswith("\\\\"):
+        return True
+    if len(s) >= 3 and s[0].isalpha() and s[1] == ":" and s[2] in ("/", "\\"):
+        return True
+    norm = s.replace("\\", "/").lower()
+    if tmp_marker and tmp_marker.lower() in norm:
+        return True
+    return False
+
+
+class FixTurn1PrivacyAndBoundsTests(ColabTempTestCase):
+    """Fix turn 1 tests (N1, N2, N3, N4, N6, and magic-byte bundle verification)."""
+
+    def test_n1_upload_allowlist_excludes_rejected_contact_sheet_and_dotenv_and_records_counts_only(self) -> None:
+        from PIL import Image
+
+        proj, cap_cfg = self.make_project("n1_src", flagged_count=2, unflagged_count=1)
+        rejected_dir = proj / "rejected"
+        rejected_dir.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (32, 32), (90, 10, 10)).save(rejected_dir / "discarded_plate.png")
+        Image.new("RGB", (64, 64), (20, 20, 20)).save(proj / "outputs" / "contact_sheet.png")
+        Image.new("RGB", (32, 32), (40, 40, 90)).save(proj / "outputs" / "wave-1" / "unreferenced_extra.png")
+        Image.new("RGB", (32, 32), (70, 70, 10)).save(proj / "outputs" / "wave-1" / "rejected_asset.png")
+        (proj / "records" / "rec_rejected_00.json").write_text(
+            json.dumps(
+                {
+                    "id": "rec_rejected_00",
+                    "asset_path": "outputs/wave-1/rejected_asset.png",
+                    "canon": {"subject": "discarded stone"},
+                    "judgment": {"status": "rejected", "explanation": "blurry edge"},
+                    "provenance": {"prompt": "discarded stone"},
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (proj / "outputs" / "wave-1" / "generation.json").write_text(
+            json.dumps({"wave": "wave-1", "seed": 42}) + "\n",
+            encoding="utf-8",
+        )
+        unused_wave = proj / "outputs" / "wave-unused"
+        unused_wave.mkdir(parents=True, exist_ok=True)
+        (unused_wave / "generation.json").write_text(json.dumps({"wave": "unused"}) + "\n", encoding="utf-8")
+        (proj / ".env").write_text("PRIVATE_API_KEY=never_upload_this\n", encoding="utf-8")
+
+        env = self.make_env("n1_env")
+        out_dir = self.tmp_path / "out_n1"
+        res = env.run_launch(
+            [
+                "--project",
+                str(proj),
+                "--caption-config",
+                str(cap_cfg),
+                "--out",
+                str(out_dir),
+                "--stub",
+                "--card",
+                "CPU-high-mem",
+                "--cap",
+                "5.0",
+                "--wall-s",
+                "300",
+                "--margin",
+                "0.5",
+            ]
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+
+        uploaded = env.uploaded_tar_members()
+        self.assertNotIn(".env", uploaded)
+        self.assertFalse(any(m.startswith("rejected/") for m in uploaded), msg=f"rejected leaked: {uploaded}")
+        self.assertNotIn("outputs/contact_sheet.png", uploaded)
+        self.assertNotIn("outputs/wave-1/unreferenced_extra.png", uploaded)
+        self.assertNotIn("outputs/wave-1/rejected_asset.png", uploaded)
+        self.assertNotIn("records/rec_rejected_00.json", uploaded)
+        self.assertNotIn("outputs/wave-unused/generation.json", uploaded)
+        self.assertIn("outputs/wave-1/flagged_00.png", uploaded)
+        self.assertIn("outputs/wave-1/clean_00.png", uploaded)
+        self.assertIn("outputs/wave-1/generation.json", uploaded)
+
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        priv = win["private_images"]
+        self.assertEqual(priv.get("uploaded_file_count"), len(uploaded))
+        self.assertIsInstance(priv.get("uploaded_total_bytes"), int)
+        self.assertGreater(priv["uploaded_total_bytes"], 0)
+        for jpath, sval in _iter_json_strings(win):
+            for forbidden_name in (
+                "flagged_00",
+                "clean_00",
+                "discarded_plate",
+                "contact_sheet",
+                "rec_flagged_00",
+                ".env",
+            ):
+                self.assertNotIn(forbidden_name, sval, msg=f"filename leaked in window.json at {jpath}: {sval!r}")
+
+    def test_n1_link_cycle_refuses_on_rig_with_named_code(self) -> None:
+        import subprocess
+
+        proj, cap_cfg = self.make_project("n1_cycle_src", flagged_count=1, unflagged_count=1)
+        sub_dir = proj / "records" / "nested"
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        loop_link = sub_dir / "cycle_back"
+        used_junction = False
+        try:
+            os.symlink(str(proj), str(loop_link), target_is_directory=True)
+        except OSError:
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(loop_link), str(proj)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            used_junction = True
+
+        def _remove_loop_link() -> None:
+            if used_junction:
+                subprocess.run(["cmd", "/c", "rmdir", str(loop_link)], check=False, capture_output=True)
+            else:
+                try:
+                    loop_link.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        self.addCleanup(_remove_loop_link)
+
+        env = self.make_env("n1_cycle_env")
+        out_dir = self.tmp_path / "out_n1_cycle"
+        res = env.run_launch(
+            [
+                "--project",
+                str(proj),
+                "--caption-config",
+                str(cap_cfg),
+                "--out",
+                str(out_dir),
+                "--stub",
+                "--card",
+                "CPU-high-mem",
+                "--cap",
+                "5.0",
+                "--wall-s",
+                "120",
+                "--margin",
+                "0.5",
+            ],
+            timeout=25.0,
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("PROJECT_LINK_CYCLE", res.stderr)
+        self.assertEqual(env.colab_calls(), [])
+
+    def test_n2_project_manifest_and_kept_artifacts_contain_no_absolute_paths(self) -> None:
+        from PIL import Image
+
+        proj, cap_cfg = self.make_project("n2_src", flagged_count=1, unflagged_count=1)
+        pool_root = self.tmp_path / "studio_pools_secret_host_dir"
+        pool_rust = pool_root / "rustline"
+        pool_tallow = pool_root / "tallow-fen"
+        pool_rust.mkdir(parents=True, exist_ok=True)
+        pool_tallow.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (24, 24), (120, 60, 30)).save(pool_rust / "ref_00.png")
+        Image.new("RGB", (24, 24), (160, 140, 40)).save(pool_tallow / "ref_01.png")
+
+        studio_cfg = self.tmp_path / "studio_config.json"
+        studio_cfg.write_text(
+            json.dumps(
+                {"locked_pool_dirs": {"rustline": str(pool_rust), "tallow-fen": str(pool_tallow)}},
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        env = self.make_env("n2_env")
+        out_dir = self.tmp_path / "out_n2"
+        res = env.run_launch(
+            [
+                "--project",
+                str(proj),
+                "--caption-config",
+                str(cap_cfg),
+                "--out",
+                str(out_dir),
+                "--stub",
+                "--card",
+                "CPU-high-mem",
+                "--cap",
+                "5.0",
+                "--wall-s",
+                "300",
+                "--margin",
+                "0.5",
+            ],
+            extra_env={
+                "DATASET_DESK_USER_CONFIG": str(studio_cfg),
+                "DESK_TEST_ISOLATE_USER_CONFIG": "0",
+            },
+        )
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+
+        tmp_marker = self.tmp_path.name
+        checked_json_files = [
+            out_dir / "project_manifest.json",
+            out_dir / "wheel_manifest.json",
+            out_dir / "outputs" / "desk_artifacts" / "pool-detection.json",
+            out_dir / "outputs" / "desk_artifacts" / "none" / "meta.json",
+        ]
+        for jf in checked_json_files:
+            self.assertTrue(jf.is_file(), msg=f"expected JSON file {jf}")
+            doc = json.loads(jf.read_text(encoding="utf-8"))
+            for jpath, sval in _iter_json_strings(doc):
+                self.assertFalse(
+                    _is_abs_host_path_string(sval, tmp_marker),
+                    msg=f"absolute path leaked in {jf.name} at {jpath}: {sval!r}",
+                )
+
+        manifest = json.loads((out_dir / "project_manifest.json").read_text(encoding="utf-8"))
+        pd = manifest["pool_detection"]
+        self.assertNotIn("sources", pd)
+        self.assertIn("counts", pd)
+        self.assertEqual(pd["counts"].get("rustline"), 1)
+        self.assertEqual(pd["counts"].get("tallow-fen"), 1)
+
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        for jpath, sval in _iter_json_strings(win):
+            self.assertNotIn(
+                tmp_marker.lower(),
+                sval.replace("\\", "/").lower(),
+                msg=f"host path leaked in window.json at {jpath}: {sval!r}",
+            )
+
+        for jsonl_file in (
+            out_dir / "outputs" / "desk_artifacts" / "drafter-raw.jsonl",
+            out_dir / "outputs" / "desk_artifacts" / "description-review.jsonl",
+        ):
+            for idx, ln in enumerate(jsonl_file.read_text(encoding="utf-8").splitlines()):
+                if not ln.strip():
+                    continue
+                for jpath, sval in _iter_json_strings(json.loads(ln), f"line[{idx}]"):
+                    self.assertFalse(
+                        _is_abs_host_path_string(sval, tmp_marker),
+                        msg=f"absolute path leaked in {jsonl_file.name} {jpath}: {sval!r}",
+                    )
+
+    def _find_leftover_staging_entries(self, out_dir: pathlib.Path) -> list[str]:
+        if not out_dir.is_dir():
+            return []
+        bad: list[str] = []
+        for entry in out_dir.iterdir():
+            nm = entry.name
+            if (
+                nm in ("_rig_stage", "_stub_input", "_bundle_extract", "_vm_cleanup_exec.py")
+                or nm.startswith(".sdlab_up_tmp_")
+                or nm.startswith(".sdlab_dl_tmp_")
+                or nm.endswith(".sdlab_reassembling")
+            ):
+                bad.append(nm)
+        return sorted(bad)
+
+    def test_n3_staging_dirs_removed_on_trip_signal_and_refusal(self) -> None:
+        import subprocess
+        import time
+
+        proj, cap_cfg = self.make_project(
+            "n3_src",
+            flagged_count=2,
+            unflagged_count=1,
+            extra_pad_bytes=95000,
+        )
+
+        # 1) Pre-session refusal (CAP_TOO_SMALL_FOR_CLEANUP) must not leave _rig_stage behind.
+        env_ref = self.make_env("n3_ref")
+        out_ref = self.tmp_path / "out_n3_ref"
+        res_ref = env_ref.run_launch(
+            [
+                "--project",
+                str(proj),
+                "--caption-config",
+                str(cap_cfg),
+                "--out",
+                str(out_ref),
+                "--card",
+                "L4",
+                "--cap",
+                "0.1",
+                "--wall-s",
+                "300",
+                "--margin",
+                "0.05",
+            ]
+        )
+        self.assertNotEqual(res_ref.returncode, 0)
+        self.assertIn("CAP_TOO_SMALL_FOR_CLEANUP", res_ref.stderr)
+        self.assertEqual(self._find_leftover_staging_entries(out_ref), [])
+
+        # 2) Wall trip during chunked upload (.sdlab_up_tmp_* active on rig) must wipe all staging dirs.
+        env_trip = self.make_env("n3_trip", config={"upload_part_sleep_s": 12.0})
+        out_trip = self.tmp_path / "out_n3_trip"
+        res_trip = env_trip.run_launch(
+            [
+                "--project",
+                str(proj),
+                "--caption-config",
+                str(cap_cfg),
+                "--out",
+                str(out_trip),
+                "--card",
+                "L4",
+                "--cap",
+                "5.0",
+                "--wall-s",
+                "8",
+                "--grace-s",
+                "1",
+                "--margin",
+                "0.5",
+            ],
+            extra_env={"SDLAB_TEST_UPLOAD_CHUNK_BYTES": "65536"},
+            timeout=90.0,
+        )
+        self.assertNotEqual(res_trip.returncode, 0)
+        self.assertTrue((env_trip.state_dir / "upload_part_in_flight.txt").is_file())
+        self.assertEqual(self._find_leftover_staging_entries(out_trip), [])
+        self.assertFalse(env_trip.session_state().get("active", False))
+
+        # 3) POSIX SIGTERM while chunked upload is in flight must wipe .sdlab_up_tmp_* and stop session.
+        env_sig = self.make_env("n3_sig", config={"upload_part_sleep_s": 8.0})
+        out_sig = self.tmp_path / "out_n3_sig"
+        in_flight_marker = fake_colab_desk.to_posix(env_sig.state_dir / "upload_part_in_flight.txt")
+        launch_posix = fake_colab_desk.to_posix(LAUNCH_SH)
+        proj_posix = fake_colab_desk.to_posix(proj)
+        cap_posix = fake_colab_desk.to_posix(cap_cfg)
+        out_posix = fake_colab_desk.to_posix(out_sig)
+        bash_bin = fake_colab_desk.resolve_git_bash()
+        sig_script = (
+            f'bash "{launch_posix}" --project "{proj_posix}" --caption-config "{cap_posix}" '
+            f'--out "{out_posix}" --card L4 --cap 5.0 --wall-s 300 --margin 0.5 &\n'
+            "lpid=$!\n"
+            "for _i in $(seq 1 200); do\n"
+            f'  if [ -f "{in_flight_marker}" ]; then break; fi\n'
+            "  sleep 0.05\n"
+            "done\n"
+            'kill -TERM "${lpid}" 2>/dev/null || true\n'
+            'wait "${lpid}"\n'
+        )
+        t0 = time.monotonic()
+        res_sig = subprocess.run(
+            [bash_bin, "-c", sig_script],
+            env=env_sig.build_env(extra_env={"SDLAB_TEST_UPLOAD_CHUNK_BYTES": "65536"}),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdin=subprocess.DEVNULL,
+            timeout=60.0,
+            check=False,
+        )
+        _ = t0
+        self.assertNotEqual(res_sig.returncode, 0)
+        self.assertTrue((env_sig.state_dir / "upload_part_in_flight.txt").is_file())
+        self.assertEqual(self._find_leftover_staging_entries(out_sig), [])
+        self.assertFalse(env_sig.session_state().get("active", False))
+
+    def test_n4_vm_cleanup_step_counted_in_cleanup_bounds_and_cap_reserve(self) -> None:
+        proj, cap_cfg = self.make_project("n4_src", flagged_count=1, unflagged_count=1)
+        prod_timing_env: dict[str, str | None] = {
+            "SDLAB_TEST_KILL_GRACE_S": None,
+            "SDLAB_TEST_STOP_TIMEOUT_S": None,
+            "SDLAB_TEST_SESSIONS_TIMEOUT_S": None,
+            "SDLAB_TEST_UPLOAD_TIMEOUT_S": None,
+            "SDLAB_TEST_DOWNLOAD_TIMEOUT_S": None,
+            "SDLAB_TEST_SALVAGE_RESTART_TIMEOUT_S": None,
+            "SDLAB_TEST_SALVAGE_EXEC_TIMEOUT_S": None,
+        }
+
+        # Default bounds include +70 s (60 s stop_timeout + 10 s kill_grace) for desk_run_vm_workdir_cleanup:
+        # 1150 -> 1220 s stop_attempted_by_s, 1290 -> 1360 s cleanup_bound_s.
+        env_dry = self.make_env("n4_dry")
+        out_dry = self.tmp_path / "out_n4_dry"
+        res_dry = env_dry.run_launch(
+            [
+                "--project",
+                str(proj),
+                "--caption-config",
+                str(cap_cfg),
+                "--out",
+                str(out_dry),
+                "--card",
+                "L4",
+                "--cap",
+                "5.0",
+                "--max-rate",
+                "6.0",
+                "--wall-s",
+                "300",
+                "--margin",
+                "0.5",
+                "--dry",
+            ],
+            extra_env=prod_timing_env,
+        )
+        self.assertEqual(res_dry.returncode, 0, msg=res_dry.stderr)
+        plan = json.loads((out_dry / "dry_run_plan.json").read_text(encoding="utf-8"))
+        self.assertEqual(plan["cap_budget"]["cleanup_bound_s"], 1360)
+        self.assertEqual(plan.get("cleanup_stop_attempted_by_s"), 1220)
+
+        # At max_rate=6.0 CCU/hr, margin=0.0, min_runtime_s=60:
+        # 1290 s needed 2.25 CCU (so --cap 2.30 passed at 393a6e4), whereas 1360 s needs 2.3667 CCU -> refuses!
+        env_tight = self.make_env("n4_tight")
+        out_tight = self.tmp_path / "out_n4_tight"
+        res_tight = env_tight.run_launch(
+            [
+                "--project",
+                str(proj),
+                "--caption-config",
+                str(cap_cfg),
+                "--out",
+                str(out_tight),
+                "--card",
+                "L4",
+                "--cap",
+                "2.30",
+                "--max-rate",
+                "6.0",
+                "--wall-s",
+                "300",
+                "--margin",
+                "0.0",
+                "--min-runtime-s",
+                "60",
+                "--dry",
+            ],
+            extra_env=prod_timing_env,
+        )
+        self.assertNotEqual(res_tight.returncode, 0)
+        self.assertIn("CAP_TOO_SMALL_FOR_CLEANUP", res_tight.stderr)
+
+        # Live window.json also records 1220 / 1360 at production timing defaults.
+        env_win = self.make_env("n4_win")
+        out_win = self.tmp_path / "out_n4_win"
+        res_win = env_win.run_launch(
+            [
+                "--project",
+                str(proj),
+                "--caption-config",
+                str(cap_cfg),
+                "--out",
+                str(out_win),
+                "--stub",
+                "--card",
+                "CPU-high-mem",
+                "--cap",
+                "5.0",
+                "--wall-s",
+                "300",
+                "--margin",
+                "0.5",
+            ],
+            extra_env=prod_timing_env,
+        )
+        self.assertEqual(res_win.returncode, 0, msg=res_win.stderr)
+        win = json.loads((out_win / "window.json").read_text(encoding="utf-8"))
+        self.assertEqual(win["cleanup_stop_attempted_by_s"], 1220)
+        self.assertEqual(win["cleanup_bound_s"], 1360)
+
+    def test_n6_model_load_stall_allowance_and_desk_index_report_timeout(self) -> None:
+        proj, cap_cfg = self.make_project("n6_src", flagged_count=1, unflagged_count=1)
+
+        # 1) Separate loading_model allowance lets a slow weight load pass even with a tight 0.15 s draft heartbeat.
+        env_ok = self.make_env("n6_load_ok", config={"model_load_sleep_s": 0.45})
+        out_ok = self.tmp_path / "out_n6_load_ok"
+        res_ok = env_ok.run_launch(
+            [
+                "--project",
+                str(proj),
+                "--caption-config",
+                str(cap_cfg),
+                "--out",
+                str(out_ok),
+                "--card",
+                "L4",
+                "--cap",
+                "5.0",
+                "--wall-s",
+                "300",
+                "--margin",
+                "0.5",
+                "--heartbeat-stall-s",
+                "0.15",
+                "--model-load-stall-s",
+                "3.0",
+            ]
+        )
+        self.assertEqual(res_ok.returncode, 0, msg=res_ok.stderr)
+
+        # 2) Exceeding --model-load-stall-s during loading_model refuses MODEL_LOAD_STALLED.
+        env_stall = self.make_env("n6_load_stall", config={"model_load_sleep_s": 0.6})
+        out_stall = self.tmp_path / "out_n6_load_stall"
+        res_stall = env_stall.run_launch(
+            [
+                "--project",
+                str(proj),
+                "--caption-config",
+                str(cap_cfg),
+                "--out",
+                str(out_stall),
+                "--card",
+                "L4",
+                "--cap",
+                "5.0",
+                "--wall-s",
+                "300",
+                "--margin",
+                "0.5",
+                "--heartbeat-stall-s",
+                "10",
+                "--model-load-stall-s",
+                "0.15",
+            ]
+        )
+        self.assertNotEqual(res_stall.returncode, 0)
+        win_stall = json.loads((out_stall / "window.json").read_text(encoding="utf-8"))
+        self.assertEqual(win_stall["refusal_code"], "MODEL_LOAD_STALLED")
+
+        # 3) Hung `index` and `report` subcommands time out cleanly with DESK_COMMAND_TIMEOUT.
+        for subcmd in ("index", "report"):
+            env_to = self.make_env(
+                f"n6_to_{subcmd}",
+                config={"hang_desk_subcmd": subcmd, "hang_desk_sleep_s": 5.0},
+            )
+            out_to = self.tmp_path / f"out_n6_to_{subcmd}"
+            res_to = env_to.run_launch(
+                [
+                    "--project",
+                    str(proj),
+                    "--caption-config",
+                    str(cap_cfg),
+                    "--out",
+                    str(out_to),
+                    "--stub",
+                    "--card",
+                    "CPU-high-mem",
+                    "--cap",
+                    "5.0",
+                    "--wall-s",
+                    "300",
+                    "--margin",
+                    "0.5",
+                    "--desk-cmd-timeout-s",
+                    "0.2",
+                ],
+                timeout=30.0,
+            )
+            self.assertNotEqual(res_to.returncode, 0)
+            win_to = json.loads((out_to / "window.json").read_text(encoding="utf-8"))
+            self.assertEqual(win_to["refusal_code"], "DESK_COMMAND_TIMEOUT")
+
+    def test_bundle_content_type_magic_bytes_guard_rejects_disguised_images(self) -> None:
+        import io
+
+        proj, cap_cfg = self.make_project("magic_src", flagged_count=1, unflagged_count=1)
+        env = self.make_env("magic_env", config={"inject_disguised_image_in_desk_out": True})
+        out_dir = self.tmp_path / "out_magic"
+        res = env.run_launch(
+            [
+                "--project",
+                str(proj),
+                "--caption-config",
+                str(cap_cfg),
+                "--out",
+                str(out_dir),
+                "--stub",
+                "--card",
+                "CPU-high-mem",
+                "--cap",
+                "5.0",
+                "--wall-s",
+                "300",
+                "--margin",
+                "0.5",
+            ]
+        )
+        self.assertNotEqual(res.returncode, 0)
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertEqual(win["refusal_code"], "PRIVATE_IMAGE_IN_BUNDLE")
+
+        # Direct unit check across PNG, JPEG, WebP, GIF, BMP, and TIFF magic headers disguised as .dat files.
+        helper = _load_module("desk_draft_helper_magic_test", DESK_DRAFT_HELPER_PY)
+        samples = {
+            "png": b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR",
+            "jpeg": b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01",
+            "gif": b"GIF89a\x01\x00\x01\x00\x80\x00\x00",
+            "webp": b"RIFF\x24\x00\x00\x00WEBP",
+            "bmp": b"BM\x36\x00\x00\x00\x00\x00\x00\x00\x36\x00\x00\x00",
+            "tiff": b"II*\x00\x08\x00\x00\x00",
+        }
+        for fmt_name, header in samples.items():
+            case_out = self.tmp_path / f"magic_unit_{fmt_name}"
+            case_out.mkdir(parents=True, exist_ok=True)
+            bundle_p = case_out / "disguised.tar.gz"
+            with tarfile.open(bundle_p, "w:gz") as tf:
+                ti = tarfile.TarInfo(name=f"desk_out/logs/disguised_{fmt_name}.dat")
+                ti.size = len(header)
+                tf.addfile(ti, io.BytesIO(header))
+            ns = mock.MagicMock(out_dir=str(case_out), bundle_path=str(bundle_p), salvage_only=True)
+            with self.assertRaises(helper.RefusalError) as ctx:
+                helper.cmd_extract_and_verify_outputs(ns)
+            self.assertEqual(ctx.exception.code, "PRIVATE_IMAGE_IN_BUNDLE")
 
 
 if __name__ == "__main__":

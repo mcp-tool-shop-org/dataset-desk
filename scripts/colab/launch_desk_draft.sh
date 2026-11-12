@@ -27,10 +27,10 @@ PINNED_QWEN3_VL_REVISION="0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
 PINNED_COLAB_WINDOW_SHA="db761fb414da915c8835bad8ef1544992e39aa5b3d636a1d81d17d231f26e974"
 PINNED_LAUNCH_GUARDS_SHA="4c0c0ab6410eaa511a808d00f09a09d42d5d5b7d0504d85d58cfe3c65baeb085"
 PINNED_REMOTE_RUNNER_SHA="393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
-PINNED_DESK_BUNDLE_NOW_SHA="0e4598472b480f5cb966e321adffc9cfad29978d5f407f414db5a0125163cb80"
-PINNED_DESK_DRAFT_HELPER_SHA="8be3d9f6320a84f5df15a165415fcda43f9a626058a28cea8bee5aed4fd65090"
+PINNED_DESK_BUNDLE_NOW_SHA="b1e83c20f046716433d927fa442e43fe3e6c821c90adc84cd87cfccae9aed1ac"
+PINNED_DESK_DRAFT_HELPER_SHA="2073d17edc976186632d5d5b647f3605d5bfe44a88968d6c8d367d29a8320b15"
 PINNED_DESK_LOCK_SHA="7d718664b0289b53532ff50541e63942166c1921a2f52cb0e48900958bf90510"
-PINNED_SELF_SHA="0012b328869af3b5d4403de77c64da938ec34bb7911d47e4c750f5948eb588c5"
+PINNED_SELF_SHA="39c403cc5311ceb454dd7ce1b99aa6de21ba8853f9f108e3527bcbed739ef592"
 
 if pwd -W >/dev/null 2>&1; then
   export MSYS2_ARG_CONV_EXCL="/content"
@@ -43,6 +43,92 @@ fi
 SELF_SH="${SCRIPT_DIR}/launch_desk_draft.sh"
 # shellcheck source=scripts/colab/colab_window.sh
 source "${SCRIPT_DIR}/colab_window.sh"
+
+# N4: count desk_run_vm_workdir_cleanup (up to COLAB_STOP_TIMEOUT_S + COLAB_KILL_GRACE_S = 70 s default)
+# in COLAB_CLEANUP_STOP_ATTEMPTED_BY_S (1150 -> 1220 s default) and COLAB_CLEANUP_BOUND_S (1290 -> 1360 s default),
+# and therefore in --dry, pre-open cap gates, live cap/wall guards, and window.json without modifying colab_window.sh.
+eval "_sdlab_orig_$(declare -f colab_compute_cleanup_bounds)"
+colab_compute_cleanup_bounds() {
+  local lane="$1"
+  _sdlab_orig_colab_compute_cleanup_bounds "${lane}"
+  local stop_timeout_s="${COLAB_STOP_TIMEOUT_S:-60}"
+  local kill_grace_s="${COLAB_KILL_GRACE_S:-10}"
+  local desk_vm_cleanup_s=$(( stop_timeout_s + kill_grace_s ))
+  export DESK_VM_CLEANUP_BOUND_S="${desk_vm_cleanup_s}"
+  export COLAB_CLEANUP_STOP_ATTEMPTED_BY_S=$(( COLAB_CLEANUP_STOP_ATTEMPTED_BY_S + desk_vm_cleanup_s ))
+  export COLAB_CLEANUP_BOUND_S=$(( COLAB_CLEANUP_BOUND_S + desk_vm_cleanup_s ))
+}
+
+eval "_sdlab_orig_$(declare -f colab_write_window_and_outcome)"
+colab_write_window_and_outcome() {
+  local py_bin="$1"
+  local out_dir="$2"
+  _sdlab_orig_colab_write_window_and_outcome "$@"
+  colab_compute_cleanup_bounds "train"
+  "${py_bin}" - "${out_dir}" "${COLAB_CLEANUP_STOP_ATTEMPTED_BY_S}" "${COLAB_CLEANUP_BOUND_S}" "${DESK_VM_CLEANUP_BOUND_S}" << 'PYFIXBOUNDS'
+import json, pathlib, sys
+out_dir = pathlib.Path(sys.argv[1])
+stop_by_s = int(sys.argv[2])
+bound_s = int(sys.argv[3])
+desk_clean_s = int(sys.argv[4])
+
+def _bname(v: object) -> str:
+    return pathlib.PurePath(str(v).replace("\\", "/")).name
+
+def _clean_rec(rec: dict) -> dict:
+    out = dict(rec)
+    for k in ("local", "src"):
+        if isinstance(out.get(k), str) and out[k]:
+            out[k] = _bname(out[k])
+    return out
+
+receipts_p = out_dir / "upload_receipts.jsonl"
+if receipts_p.is_file():
+    rows = []
+    for ln in receipts_p.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not ln.strip():
+            continue
+        try:
+            r = json.loads(ln)
+            rows.append(json.dumps(_clean_rec(r) if isinstance(r, dict) else r, sort_keys=True))
+        except ValueError:
+            pass
+    receipts_p.write_text("\n".join(rows) + ("\n" if rows else ""), encoding="utf-8", newline="\n")
+
+for bd_name in ("bundle_download.json", "salvage_bundle_download.json"):
+    bd_p = out_dir / bd_name
+    if bd_p.is_file():
+        try:
+            bd = json.loads(bd_p.read_text(encoding="utf-8"))
+            if isinstance(bd, dict):
+                bd_p.write_text(json.dumps(_clean_rec(bd), indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+        except ValueError:
+            pass
+
+for doc_name in ("window.json", "outcome.draft.json", "outcome.train.json"):
+    doc_p = out_dir / doc_name
+    if not doc_p.is_file():
+        continue
+    doc = json.loads(doc_p.read_text(encoding="utf-8"))
+    if isinstance(doc.get("upload_transfers"), list):
+        doc["upload_transfers"] = [_clean_rec(u) if isinstance(u, dict) else u for u in doc["upload_transfers"]]
+    for bd_k in ("bundle_download", "salvage_bundle_download"):
+        if isinstance(doc.get(bd_k), dict):
+            doc[bd_k] = _clean_rec(doc[bd_k])
+    if isinstance(doc.get("input_shas"), dict):
+        doc["input_shas"] = {_bname(k): v for k, v in sorted(doc["input_shas"].items(), key=lambda kv: _bname(kv[0]))}
+    if doc_name == "window.json":
+        doc["cleanup_stop_attempted_by_s"] = stop_by_s
+        doc["cleanup_bound_s"] = bound_s
+        doc["desk_vm_cleanup_bound_s"] = desk_clean_s
+        pr = doc.get("rate_used_for_cap_and_projection")
+        if pr is not None and doc.get("cap") is not None and doc.get("margin") is not None:
+            reserve = round((bound_s / 3600.0) * float(pr), 6)
+            doc["cleanup_reserve_units"] = reserve
+            doc["effective_trip_units"] = round(float(doc["cap"]) - float(doc["margin"]) - reserve, 6)
+    doc_p.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+PYFIXBOUNDS
+}
 
 PROJECT_DIR=""
 CAPTION_CONFIG=""
@@ -62,6 +148,9 @@ DRY_RUN=0
 STUB_MODE=0
 DOWNLOAD_BOUND_S="600"
 HEARTBEAT_STALL_S="180"
+# Separate stall allowance for ~17.5 GB Qwen3-VL-8B bf16 shard load from Colab disk (distinct from 180 s draft heartbeat).
+MODEL_LOAD_STALL_S="420"
+DESK_CMD_TIMEOUT_S="300"
 MIN_DISK_GIB="35"
 MIN_RAM_GIB="12"
 VRAM_BUDGET_MIB="22000"
@@ -185,6 +274,26 @@ while [ "$#" -gt 0 ]; do
       HEARTBEAT_STALL_S="${2:-}"
       shift 2
       ;;
+    --heartbeat-stall-s=*)
+      HEARTBEAT_STALL_S="${1#*=}"
+      shift
+      ;;
+    --model-load-stall-s)
+      MODEL_LOAD_STALL_S="${2:-}"
+      shift 2
+      ;;
+    --model-load-stall-s=*)
+      MODEL_LOAD_STALL_S="${1#*=}"
+      shift
+      ;;
+    --desk-cmd-timeout-s)
+      DESK_CMD_TIMEOUT_S="${2:-}"
+      shift 2
+      ;;
+    --desk-cmd-timeout-s=*)
+      DESK_CMD_TIMEOUT_S="${1#*=}"
+      shift
+      ;;
     --min-disk-gib)
       MIN_DISK_GIB="${2:-}"
       shift 2
@@ -234,6 +343,18 @@ if [ -z "${WALL_S}" ] || ! [[ "${WALL_S}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || [[ "${WAL
 fi
 if [ -z "${MARGIN}" ] || ! [[ "${MARGIN}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   echo "REFUSED: MARGIN_REQUIRED: pass non-negative --margin <ccu>" >&2
+  exit 2
+fi
+if [ -z "${HEARTBEAT_STALL_S}" ] || ! [[ "${HEARTBEAT_STALL_S}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || [[ "${HEARTBEAT_STALL_S}" =~ ^0+(\.0+)?$ ]]; then
+  echo "REFUSED: HEARTBEAT_STALL_S_INVALID: pass positive --heartbeat-stall-s <seconds>" >&2
+  exit 2
+fi
+if [ -z "${MODEL_LOAD_STALL_S}" ] || ! [[ "${MODEL_LOAD_STALL_S}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || [[ "${MODEL_LOAD_STALL_S}" =~ ^0+(\.0+)?$ ]]; then
+  echo "REFUSED: MODEL_LOAD_STALL_S_INVALID: pass positive --model-load-stall-s <seconds>" >&2
+  exit 2
+fi
+if [ -z "${DESK_CMD_TIMEOUT_S}" ] || ! [[ "${DESK_CMD_TIMEOUT_S}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || [[ "${DESK_CMD_TIMEOUT_S}" =~ ^0+(\.0+)?$ ]]; then
+  echo "REFUSED: DESK_CMD_TIMEOUT_S_INVALID: pass positive --desk-cmd-timeout-s <seconds>" >&2
   exit 2
 fi
 
@@ -347,6 +468,53 @@ PIN_OVERRIDE_VARS=(
 )
 
 mkdir -p "${OUT_DIR}"
+export COLAB_ACTIVE_OUT_DIR="${OUT_DIR}"
+TOKEN_DIR=""
+
+desk_clean_rig_staging() {
+  [ -n "${OUT_DIR:-}" ] && [ -d "${OUT_DIR}" ] || return 0
+  local _try
+  for _try in 1 2 3 4 5; do
+    rm -rf \
+      "${OUT_DIR}/_rig_stage" \
+      "${OUT_DIR}/_stub_input" \
+      "${OUT_DIR}/_bundle_extract" \
+      "${OUT_DIR}/_vm_cleanup_exec.py" \
+      "${OUT_DIR}"/.sdlab_up_tmp_* \
+      "${OUT_DIR}"/.sdlab_dl_tmp_* \
+      "${OUT_DIR}"/*.sdlab_reassembling 2>/dev/null || true
+    local _leftover=""
+    local _cand
+    for _cand in \
+      "${OUT_DIR}/_rig_stage" \
+      "${OUT_DIR}/_stub_input" \
+      "${OUT_DIR}/_bundle_extract" \
+      "${OUT_DIR}/_vm_cleanup_exec.py" \
+      "${OUT_DIR}"/.sdlab_up_tmp_* \
+      "${OUT_DIR}"/.sdlab_dl_tmp_* \
+      "${OUT_DIR}"/*.sdlab_reassembling; do
+      if [ -e "${_cand}" ]; then
+        _leftover="${_cand}"
+        break
+      fi
+    done
+    [ -z "${_leftover}" ] && break
+    sleep 0.1
+  done
+}
+
+desk_pre_session_exit() {
+  local rc=$?
+  if [ -n "${TOKEN_DIR:-}" ]; then
+    rm -rf "${TOKEN_DIR}" 2>/dev/null || true
+    TOKEN_DIR=""
+  fi
+  desk_clean_rig_staging
+  exit "${rc}"
+}
+trap desk_pre_session_exit EXIT
+trap 'exit 143' TERM INT
+
 colab_refuse_live_pin_overrides "${OUT_DIR}" "${TEST_MODE}" "${PIN_OVERRIDE_VARS[@]}"
 colab_apply_test_cleanup_overrides "${TEST_MODE}"
 
@@ -428,21 +596,23 @@ if ! WHEEL_BUILD_OUT="$("${PY_BIN}" "${HELPER_PY}" build-wheel --repo-root "${RE
   printf '%s\n' "${WHEEL_BUILD_OUT}" | tee -a "${OUT_DIR}/guards.log" >&2
   exit 2
 fi
-IFS=$'\t' read -r WHEEL_NAME WHEEL_PATH WHEEL_SHA < <(
+IFS=$'\t' read -r WHEEL_NAME WHEEL_REL_PATH WHEEL_SHA < <(
   "${PY_BIN}" -c 'import json, sys; d = json.load(open(sys.argv[1], encoding="utf-8")); print(d["wheel_name"] + "\t" + d["wheel_path"] + "\t" + d["sha256"])' "${OUT_DIR}/wheel_manifest.json" | tr -d '\r'
 )
+WHEEL_PATH="${OUT_DIR}/${WHEEL_REL_PATH}"
 
 PROJECT_TAR="${OUT_DIR}/_rig_stage/project_input.tar"
 STAGED_CAPTION_CONFIG="${OUT_DIR}/_rig_stage/caption_config.json"
 
 if [ "${DRY_RUN}" = "1" ]; then
+  colab_compute_cleanup_bounds "train"
   DRY_CAP_OUT=""
   if ! DRY_CAP_OUT="$(colab_dry_cap_budget "${PY_BIN}" "${GUARDS_PY}" "train" "${CARD}" "${CAP}" "${MARGIN}" "${MAX_RATE}" "${RATE_CCU_PER_HOUR:-0.26}" "${MIN_RUNTIME_S}" 2>&1)"; then
-    rm -rf "${OUT_DIR}/_rig_stage" "${OUT_DIR}/_stub_input"
+    desk_clean_rig_staging
     printf '%s\n' "${DRY_CAP_OUT}" | tee -a "${OUT_DIR}/guards.log" >&2
     exit 2
   fi
-  "${PY_BIN}" - "${OUT_DIR}" "${MODE_NAME}" "${CARD}" "${SHAPE}" "${CAP}" "${WALL_S}" "${MARGIN}" "${REPO_COMMIT}" "${SDLAB_VENDORED_COMMIT}" "${DRY_CAP_OUT}" << 'PYDRYEOF'
+  "${PY_BIN}" - "${OUT_DIR}" "${MODE_NAME}" "${CARD}" "${SHAPE}" "${CAP}" "${WALL_S}" "${MARGIN}" "${REPO_COMMIT}" "${SDLAB_VENDORED_COMMIT}" "${DRY_CAP_OUT}" "${COLAB_CLEANUP_STOP_ATTEMPTED_BY_S}" "${COLAB_CLEANUP_BOUND_S}" "${DESK_VM_CLEANUP_BOUND_S}" "${HEARTBEAT_STALL_S}" "${MODEL_LOAD_STALL_S}" "${DESK_CMD_TIMEOUT_S}" << 'PYDRYEOF'
 import json, pathlib, sys
 out_dir = pathlib.Path(sys.argv[1])
 proj_m = json.loads((out_dir / "project_manifest.json").read_text(encoding="utf-8"))
@@ -465,14 +635,22 @@ plan = {
     "multimodal_pool_locked": proj_m["multimodal_pool_locked"],
     "project_archive_bytes": proj_m["archive_bytes"],
     "project_archive_sha256": proj_m["archive_sha256"],
+    "uploaded_file_count": proj_m["uploaded_file_count"],
+    "uploaded_total_bytes": proj_m["uploaded_total_bytes"],
     "desk_wheel": whl_m["wheel_name"],
     "desk_wheel_sha256": whl_m["sha256"],
+    "cleanup_stop_attempted_by_s": int(sys.argv[11]),
+    "cleanup_bound_s": int(sys.argv[12]),
+    "desk_vm_cleanup_bound_s": int(sys.argv[13]),
+    "heartbeat_stall_s": float(sys.argv[14]),
+    "model_load_stall_s": float(sys.argv[15]),
+    "desk_cmd_timeout_s": float(sys.argv[16]),
     "cap_budget": cap_plan,
 }
 (out_dir / "dry_run_plan.json").write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
 print(json.dumps(plan, sort_keys=True))
 PYDRYEOF
-  rm -rf "${OUT_DIR}/_rig_stage" "${OUT_DIR}/_stub_input"
+  desk_clean_rig_staging
   exit 0
 fi
 
@@ -691,6 +869,8 @@ cmd = [
     "--grant-id", os.environ["DESK_GRANT_ID"],
     "--vram-budget-mib", os.environ["DESK_VRAM_BUDGET_MIB"],
     "--heartbeat-stall-s", os.environ["DESK_HEARTBEAT_STALL_S"],
+    "--model-load-stall-s", os.environ["DESK_MODEL_LOAD_STALL_S"],
+    "--desk-cmd-timeout-s", os.environ["DESK_CMD_TIMEOUT_S"],
     "--heartbeat-poll-s", os.environ.get("DESK_HEARTBEAT_POLL_S", "0.2"),
 ]
 raise SystemExit(subprocess.call(cmd))
@@ -818,9 +998,23 @@ desk_salvage_bundle_after_failure() {
   esac
 }
 
+desk_kill_tracked_children() {
+  if [ -f "${OUT_DIR}/.watcher_tracked_pids.txt" ]; then
+    local _tpid=""
+    while IFS= read -r _tpid || [ -n "${_tpid}" ]; do
+      _tpid="${_tpid//$'\r'/}"
+      [ -n "${_tpid}" ] || continue
+      [ "${_tpid}" = "${WALL_WATCHER_PID:-}" ] && continue
+      pkill -9 -P "${_tpid}" 2>/dev/null || true
+      kill -9 "${_tpid}" 2>/dev/null || true
+    done < "${OUT_DIR}/.watcher_tracked_pids.txt"
+  fi
+}
+
 cleanup_on_exit() {
   local rc=$?
   colab_enter_cleanup_trap "${OUT_DIR}"
+  desk_kill_tracked_children
   if [ -n "${EXEC_PID}" ]; then
     pkill -P "${EXEC_PID}" 2>/dev/null || true
     kill -9 "${EXEC_PID}" 2>/dev/null || true
@@ -830,7 +1024,7 @@ cleanup_on_exit() {
     rm -rf "${TOKEN_DIR}" || true
     TOKEN_DIR=""
   fi
-  rm -rf "${OUT_DIR}/_rig_stage" "${OUT_DIR}/_stub_input" || true
+  desk_clean_rig_staging
 
   if [ "${rc}" -ne 0 ] && [ "${EXEC_IN_FLIGHT}" = "1" ] && [ ! -s "${OUT_DIR}/desk_draft_bundle.tar.gz" ]; then
     desk_salvage_bundle_after_failure \
@@ -855,6 +1049,7 @@ cleanup_on_exit() {
   fi
 
   if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
+    desk_clean_rig_staging
     sleep 3600
     exit 137
   fi
@@ -864,6 +1059,7 @@ cleanup_on_exit() {
     colab_stop_and_log_closing "${PY_BIN}" "${SESSION}" "${OUT_DIR}"
   fi
   if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
+    desk_clean_rig_staging
     sleep 3600
     exit 137
   fi
@@ -876,6 +1072,7 @@ cleanup_on_exit() {
     wait "${WALL_WATCHER_PID}" 2>/dev/null || true
   fi
   rm -f "${OUT_DIR}/.watcher_tracked_pids.txt"
+  desk_clean_rig_staging
 
   local closed_at
   closed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -889,6 +1086,7 @@ cleanup_on_exit() {
     --mode "${MODE_NAME}" \
     --drafter "${DRAFTER_NAME}" || true
   colab_scrub_all_logs "${PY_BIN}" "${GUARDS_PY}" "${OUT_DIR}" || true
+  desk_clean_rig_staging
   exit "${rc}"
 }
 trap cleanup_on_exit EXIT
@@ -926,10 +1124,13 @@ case "${OSTYPE:-}" in
     WALL_WATCHER_PID="$!"
     ;;
   *)
-    colab_run_wall_watcher \
-      "${MAIN_PID}" "${WALL_LIMIT_S}" "${PY_BIN}" "${GUARDS_PY}" "${OUT_DIR}" \
-      "train" "${SESSION}" "${CARD}" "${CAP}" "${WALL_S}" "${GRACE_S}" "${MARGIN}" \
-      "${OPENED_AT}" "${SHAS_JSON}" &
+    (
+      colab_run_wall_watcher \
+        "${MAIN_PID}" "${WALL_LIMIT_S}" "${PY_BIN}" "${GUARDS_PY}" "${OUT_DIR}" \
+        "train" "${SESSION}" "${CARD}" "${CAP}" "${WALL_S}" "${GRACE_S}" "${MARGIN}" \
+        "${OPENED_AT}" "${SHAS_JSON}" || true
+      desk_clean_rig_staging
+    ) &
     WALL_WATCHER_PID="$!"
     ;;
 esac
@@ -974,6 +1175,8 @@ REMOTE_ENV=(
   "DESK_MIN_RAM_GIB=${MIN_RAM_GIB}"
   "DESK_DOWNLOAD_BOUND_S=${DOWNLOAD_BOUND_S}"
   "DESK_HEARTBEAT_STALL_S=${HEARTBEAT_STALL_S}"
+  "DESK_MODEL_LOAD_STALL_S=${MODEL_LOAD_STALL_S}"
+  "DESK_CMD_TIMEOUT_S=${DESK_CMD_TIMEOUT_S}"
   "PINNED_UV_VERSION=${PINNED_UV_VERSION}"
   "PINNED_UV_WHEEL_SHA256=${PINNED_UV_WHEEL_SHA256}"
   "PINNED_PYTHON_VERSION=${PINNED_PYTHON_VERSION}"

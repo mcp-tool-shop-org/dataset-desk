@@ -344,9 +344,18 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import time
 from types import SimpleNamespace
 
 import numpy as np
+
+
+def _cfg() -> dict:
+    sd = os.environ.get("FAKE_COLAB_STATE_DIR", "").strip()
+    if not sd:
+        return {}
+    p = pathlib.Path(sd) / "config.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
 
 
 def _log(rec: dict) -> None:
@@ -468,6 +477,9 @@ class AutoModelForImageTextToText:
         **_kw,
     ):
         _, cfg_doc = _resolve_snapshot(repo_id, revision, local_files_only)
+        load_sleep_s = float(_cfg().get("model_load_sleep_s") or 0.0)
+        if load_sleep_s > 0.0:
+            time.sleep(load_sleep_s)
         _log(
             {
                 "dtype": str(dtype),
@@ -657,6 +669,10 @@ def _cmd_colab_cli(argv: list[str]) -> int:
         src_p = _local_path(src_str)
         dst_p = _map_vm_path(dst_str, vm_content)
 
+        if cfg.get("upload_part_sleep_s") and ".part.0000" in dst_p.name:
+            (state_dir / "upload_part_in_flight.txt").write_text("1\n", encoding="utf-8")
+            time.sleep(float(cfg["upload_part_sleep_s"]))
+
         if cfg.get("upload_fail_500_once"):
             marker = state_dir / "upload_failed_once.txt"
             if not marker.is_file() and ("project_input" in dst_p.name or ".part.0000" in dst_p.name):
@@ -666,6 +682,12 @@ def _cmd_colab_cli(argv: list[str]) -> int:
 
         dst_p.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_p, dst_p)
+        if dst_p.name == "project_input.tar" and tarfile.is_tarfile(dst_p):
+            with tarfile.open(dst_p, "r:*") as tf_up:
+                _write_json(
+                    state_dir / "uploaded_tar_members.json",
+                    {"members": sorted(m.name for m in tf_up.getmembers())},
+                )
         if dst_p.name == "desk_hf_token" and os.name != "nt":
             dst_p.chmod(0o600)
         if cfg.get("corrupt_wheel_on_vm") and dst_p.name.endswith(".whl"):
@@ -771,6 +793,17 @@ def _cmd_colab_cli(argv: list[str]) -> int:
                     f"--step {crash_step}",
                     f"--step {crash_step}\nexit 17",
                 )
+            if cfg.get("inject_disguised_image_in_desk_out"):
+                disguised_hook = (
+                    f'"{to_posix(sys.executable)}" -c '
+                    f'"import pathlib; p = pathlib.Path(\'{vm_content_posix}/desk_out/logs/disguised_plate.bin\'); '
+                    f'p.parent.mkdir(parents=True, exist_ok=True); '
+                    f'p.write_bytes(b\'\\\\xff\\\\xd8\\\\xff\\\\xe0\\\\x00\\\\x10JFIF\\\\x00\\\\x01\\\\x01\\\\x00\\\\x00\\\\x01\\\\x00\\\\x01\\\\x00\\\\x00\\\\xff\\\\xd9\')"\n'
+                )
+                sh_txt = sh_txt.replace(
+                    "--step bundle_outputs",
+                    f"--step bundle_outputs\n{disguised_hook.strip()}",
+                )
             if cfg.get("delete_output_file") or cfg.get("corrupt_output_file"):
                 hook = (
                     f'\n"{to_posix(sys.executable)}" "{to_posix(__file__)}" '
@@ -796,6 +829,13 @@ def _cmd_colab_cli(argv: list[str]) -> int:
                 stdin=subprocess.DEVNULL,
             )
             rc = proc.wait()
+            up_tar = vm_content / "project_input.tar"
+            if up_tar.is_file() and not (state_dir / "uploaded_tar_members.json").is_file() and tarfile.is_tarfile(up_tar):
+                with tarfile.open(up_tar, "r:*") as tf_up:
+                    _write_json(
+                        state_dir / "uploaded_tar_members.json",
+                        {"members": sorted(m.name for m in tf_up.getmembers())},
+                    )
             if target_py.name == "desk_bundle_now.py":
                 _mutate_bundle_for_fault(vm_content / "desk_draft_bundle.tar.gz", cfg)
             return int(rc)
@@ -911,7 +951,13 @@ def _cmd_vm_uv(argv: list[str]) -> int:
         desk_script = bin_dir / "dataset-desk"
         desk_code = (
             f"#!{py_exe}\n"
-            "import sys\n"
+            "import json, os, pathlib, sys, time\n"
+            "_sd = os.environ.get('FAKE_COLAB_STATE_DIR', '').strip()\n"
+            "if _sd and len(sys.argv) > 1:\n"
+            "    _cp = pathlib.Path(_sd) / 'config.json'\n"
+            "    _cfg = json.loads(_cp.read_text(encoding='utf-8')) if _cp.is_file() else {}\n"
+            "    if _cfg.get('hang_desk_subcmd') == sys.argv[1]:\n"
+            "        time.sleep(float(_cfg.get('hang_desk_sleep_s', 5.0)))\n"
             "from dataset_desk.desk import run\n"
             "if __name__ == '__main__':\n"
             "    raise SystemExit(run())\n"
@@ -1108,6 +1154,10 @@ class FakeColabEnv:
     def session_state(self) -> dict:
         return _read_json(self.state_dir / "session_state.json")
 
+    def uploaded_tar_members(self) -> list[str]:
+        doc = _read_json(self.state_dir / "uploaded_tar_members.json")
+        return list(doc.get("members") or [])
+
 
 def make_synthetic_project(
     root: pathlib.Path,
@@ -1118,7 +1168,7 @@ def make_synthetic_project(
     extra_pad_bytes: int = 0,
 ) -> tuple[pathlib.Path, pathlib.Path]:
     """Create a synthetic desk project with gate-flagged and gate-passing records."""
-    from PIL import Image
+    from PIL import Image, PngImagePlugin
 
     proj = root / "project"
     wave = proj / "outputs" / "wave-1"
@@ -1138,7 +1188,13 @@ def make_synthetic_project(
         c = colors[idx % len(colors)]
         idx += 1
         img_rel = f"outputs/wave-1/flagged_{f_i:02d}.png"
-        Image.new("RGB", (56, 56), c).save(proj / img_rel)
+        png_info = None
+        if f_i == 0 and extra_pad_bytes > 0:
+            png_info = PngImagePlugin.PngInfo()
+            seed_hex = hashlib.sha256(b"synthetic-pad-seed").hexdigest()
+            repeats = (extra_pad_bytes + len(seed_hex) - 1) // len(seed_hex)
+            png_info.add_text("synthetic_pad", (seed_hex * repeats)[:extra_pad_bytes], zip=False)
+        Image.new("RGB", (56, 56), c).save(proj / img_rel, pnginfo=png_info)
         rec = {
             "id": f"rec_flagged_{f_i:02d}",
             "asset_path": img_rel,

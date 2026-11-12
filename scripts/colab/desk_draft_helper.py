@@ -26,6 +26,13 @@ QWEN3_VL_REVISION = "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
 GPU_CARDS_ALLOWED = {"L4", "A100", "A100-40GB", "A100-80GB", "H100"}
 GPU_MIN_VRAM_MIB = 22000
 
+DEFAULT_MODEL_LOAD_STALL_S = 420.0
+DEFAULT_HEARTBEAT_STALL_S = 180.0
+DEFAULT_DESK_CMD_TIMEOUT_S = 300.0
+DEFAULT_DESK_VM_CLEANUP_BOUND_S = 70
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+
 FORBIDDEN_MOUNT_FSTYPES = {
     "fuse",
     "fuse.drive",
@@ -90,6 +97,128 @@ def write_json_lf(path: pathlib.Path, obj: object) -> None:
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
+def detect_image_magic_bytes(data: bytes) -> str | None:
+    """Return MIME type if `data` starts with raster image magic bytes (PNG/JPEG/GIF/WebP/TIFF/BMP)."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith((b"II*\x00", b"MM\x00*")):
+        return "image/tiff"
+    if len(data) >= 14 and data[:2] == b"BM" and data[6:10] == b"\x00\x00\x00\x00":
+        return "image/bmp"
+    return None
+
+
+def sanitize_pool_detection(pd: object) -> object:
+    """Store pool names and integer counts only; strip all `sources`, `path`, and `config_path` entries."""
+    if not isinstance(pd, dict):
+        return pd
+    status = str(pd.get("status") or "off")
+    if status != "on":
+        out_off: dict[str, object] = {"status": status}
+        if isinstance(pd.get("warning"), str):
+            out_off["warning"] = pd["warning"]
+        return out_off
+
+    counts_raw = pd.get("counts")
+    pools_raw = pd.get("pools")
+    clean_counts: dict[str, int] = {}
+    if isinstance(counts_raw, dict):
+        for k in sorted(counts_raw):
+            if isinstance(counts_raw[k], (int, float)):
+                clean_counts[str(k)] = int(counts_raw[k])
+    elif isinstance(pools_raw, dict):
+        for k in sorted(pools_raw):
+            entry = pools_raw[k]
+            if isinstance(entry, dict) and isinstance(entry.get("count"), (int, float)):
+                clean_counts[str(k)] = int(entry["count"])
+
+    clean_pools = {k: {"count": v} for k, v in sorted(clean_counts.items())}
+    cfg_pools = pd.get("configured_pools")
+    clean_cfg = (
+        sorted(str(x) for x in cfg_pools if isinstance(x, str))
+        if isinstance(cfg_pools, list)
+        else [k for k, v in sorted(clean_counts.items()) if v > 0]
+    )
+    out_on: dict[str, object] = {
+        "configured_pools": clean_cfg,
+        "counts": clean_counts,
+        "pools": clean_pools,
+        "status": "on",
+    }
+    if isinstance(pd.get("stem_check"), str):
+        out_on["stem_check"] = pd["stem_check"]
+    if isinstance(pd.get("command"), str):
+        out_on["command"] = pd["command"]
+    return out_on
+
+
+def _sanitize_artifact_json_obj(obj: object, *, file_name: str) -> object:
+    if isinstance(obj, dict):
+        out: dict[str, object] = {}
+        for k, v in obj.items():
+            if k == "pool_detection" and isinstance(v, dict):
+                out[k] = sanitize_pool_detection(v)
+            elif k == "last_path" and ("heartbeat" in file_name or file_name == "vm_window.json"):
+                continue
+            elif k == "heartbeat_last" and isinstance(v, dict):
+                out[k] = {hk: hv for hk, hv in v.items() if hk != "last_path"}
+            elif k == "project" and file_name == "meta.json" and isinstance(v, str):
+                norm = v.replace("\\", "/").rstrip("/")
+                out[k] = norm.rsplit("/", 1)[-1] if "/" in norm else norm
+            else:
+                out[k] = _sanitize_artifact_json_obj(v, file_name=file_name)
+        return out
+    if isinstance(obj, list):
+        return [_sanitize_artifact_json_obj(item, file_name=file_name) for item in obj]
+    return obj
+
+
+def _sanitize_json_tree(root: pathlib.Path) -> None:
+    if not root.is_dir():
+        return
+    for p in sorted(root.rglob("*")):
+        if not p.is_file():
+            continue
+        suf = p.suffix.lower()
+        if suf == ".json":
+            try:
+                doc = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            cleaned = _sanitize_artifact_json_obj(doc, file_name=p.name)
+            if cleaned != doc:
+                write_json_lf(p, cleaned)
+        elif suf == ".jsonl":
+            try:
+                lines = p.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeDecodeError):
+                continue
+            changed = False
+            out_lines: list[str] = []
+            for ln in lines:
+                if not ln.strip():
+                    continue
+                try:
+                    row = json.loads(ln)
+                except json.JSONDecodeError:
+                    out_lines.append(ln)
+                    continue
+                cleaned_row = _sanitize_artifact_json_obj(row, file_name=p.name)
+                if cleaned_row != row:
+                    changed = True
+                    out_lines.append(json.dumps(cleaned_row, sort_keys=True))
+                else:
+                    out_lines.append(ln)
+            if changed:
+                p.write_text(("\n".join(out_lines) + "\n") if out_lines else "", encoding="utf-8", newline="\n")
+
+
 def record_vm_step(state_dir: pathlib.Path, step: str) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     (state_dir / "remote_step.txt").write_text(f"{step}\n", encoding="utf-8", newline="\n")
@@ -132,6 +261,166 @@ def _check_no_private_uri(raw: str, label: str) -> None:
             f"{label} references forbidden external/Drive/bucket/HF route: {val!r}; "
             "private images may reach the VM only via colab_upload_checked",
         )
+
+
+def _verify_inside_project(proj_dir: pathlib.Path, candidate: pathlib.Path, *, label: str) -> pathlib.Path:
+    real = candidate.resolve()
+    try:
+        in_proj = os.path.commonpath([str(proj_dir), str(real)]) == str(proj_dir)
+    except ValueError:
+        in_proj = False
+    if not in_proj:
+        raise RefusalError(
+            "PRIVATE_IMAGE_ROUTE_FORBIDDEN",
+            f"project entry {label!r} symlink/junction resolves outside project root",
+        )
+    return real
+
+
+def _walk_followlinks_guard_cycles(
+    top: pathlib.Path,
+    proj_dir: pathlib.Path,
+    *,
+    prune_fn=None,
+    _ancestors: frozenset[str] = frozenset(),
+):
+    """Walk `top` following symlinks and Windows directory junctions, refusing any cycle with PROJECT_LINK_CYCLE."""
+    real_path = _verify_inside_project(proj_dir, top, label=top.name or ".")
+    real_key = os.path.normcase(str(real_path))
+    if real_key in _ancestors:
+        rel_lbl = top.relative_to(proj_dir).as_posix() if top != proj_dir else "."
+        raise RefusalError(
+            "PROJECT_LINK_CYCLE",
+            f"followed symlink/junction cycle detected at {rel_lbl!r}",
+        )
+    next_ancestors = _ancestors | {real_key}
+    try:
+        entries = list(os.scandir(top))
+    except OSError:
+        return
+    dirs: list[str] = []
+    files: list[str] = []
+    for entry in entries:
+        try:
+            if entry.is_dir(follow_symlinks=True):
+                dirs.append(entry.name)
+            elif entry.is_file(follow_symlinks=True):
+                files.append(entry.name)
+        except OSError:
+            continue
+    dirs.sort()
+    files.sort()
+    if prune_fn is not None:
+        prune_fn(str(top), dirs, str(proj_dir))
+    yield top, dirs, files
+    for d in dirs:
+        yield from _walk_followlinks_guard_cycles(
+            top / d,
+            proj_dir,
+            prune_fn=prune_fn,
+            _ancestors=next_ancestors,
+        )
+
+
+def _collect_compose_upload_files(
+    proj_dir: pathlib.Path,
+    desk_mod,
+    gate_mod,
+) -> tuple[list[tuple[str, pathlib.Path]], int]:
+    """Build the minimal upload allowlist of files that `index`, `report`, and `compose` actually read."""
+    # Guard both the pruned project walk (reusing desk.prune_project_walk_dirs) and top-level records/ against link cycles.
+    for _root, _dirs, _files in _walk_followlinks_guard_cycles(
+        proj_dir,
+        proj_dir,
+        prune_fn=desk_mod.prune_project_walk_dirs,
+    ):
+        pass
+    rec_dir = proj_dir / "records"
+    if rec_dir.exists():
+        for _root, _dirs, _files in _walk_followlinks_guard_cycles(
+            rec_dir,
+            proj_dir,
+            prune_fn=lambda _r, ds, _p: ds.__setitem__(slice(None), [d for d in ds if d not in desk_mod.PRUNED_WALK_DIRS]),
+        ):
+            pass
+
+    images = desk_mod.enumerate_project_images(str(proj_dir), sidecars=True, include_record_assets=True)
+    if not images:
+        raise RefusalError("PROJECT_EMPTY", f"--project {proj_dir.name!r} contains zero readable images")
+
+    selected_rels: set[str] = set()
+    approved_image_count = 0
+    raw_recs = gate_mod.load_project_records(str(proj_dir)) if rec_dir.is_dir() else []
+
+    if raw_recs:
+        approved = [e for e in (gate_mod._extract_record_fields(r) for r in raw_recs) if e["status"] == "approved"]
+        if not approved:
+            raise RefusalError("NO_APPROVED_RECORDS", f"--project {proj_dir.name!r} contains zero approved records")
+        for entry in approved:
+            rec_rel = str(entry["record_file"]).replace("\\", "/").strip("/")
+            asset_rel = str(entry["asset_path"]).replace("\\", "/").strip("/")
+            if not asset_rel:
+                raise RefusalError("PROJECT_RECORD_INVALID", f"{rec_rel}: missing asset_path")
+            asset_cand = proj_dir / asset_rel
+            if not asset_cand.exists() or not asset_cand.is_file():
+                raise RefusalError("PROJECT_FILE_MISSING", f"{rec_rel}: approved asset missing at {asset_rel!r}")
+            selected_rels.add(rec_rel)
+            selected_rels.add(asset_rel)
+            approved_image_count += 1
+
+            sidecar_rel = entry.get("sidecar_file")
+            if isinstance(sidecar_rel, str) and sidecar_rel.strip():
+                sc_norm = sidecar_rel.replace("\\", "/").strip("/")
+                if (proj_dir / sc_norm).is_file():
+                    selected_rels.add(sc_norm)
+
+            parts = pathlib.PurePosixPath(asset_rel).parts
+            if len(parts) >= 3 and parts[0] == "outputs":
+                wave_rel = f"outputs/{parts[1]}"
+                for wave_meta_name in ("generation.json", "_curation.json"):
+                    meta_rel = f"{wave_rel}/{wave_meta_name}"
+                    if (proj_dir / meta_rel).is_file():
+                        selected_rels.add(meta_rel)
+    else:
+        sc_scan = gate_mod.scan_sidecar_project(str(proj_dir))
+        approved_sc = [
+            e for e in (gate_mod._extract_record_fields(r) for r in sc_scan.get("records", [])) if e["status"] == "approved"
+        ]
+        if not approved_sc:
+            raise RefusalError("NO_APPROVED_RECORDS", f"--project {proj_dir.name!r} contains zero paired sidecar records")
+        for entry in approved_sc:
+            asset_rel = str(entry["asset_path"]).replace("\\", "/").strip("/")
+            selected_rels.add(asset_rel)
+            approved_image_count += 1
+            sidecar_rel = entry.get("sidecar_file")
+            if isinstance(sidecar_rel, str) and sidecar_rel.strip():
+                sc_norm = sidecar_rel.replace("\\", "/").strip("/")
+                if (proj_dir / sc_norm).is_file():
+                    selected_rels.add(sc_norm)
+            parts = pathlib.PurePosixPath(asset_rel).parts
+            if len(parts) >= 3 and parts[0] == "outputs":
+                wave_rel = f"outputs/{parts[1]}"
+                for wave_meta_name in ("generation.json", "_curation.json"):
+                    meta_rel = f"{wave_rel}/{wave_meta_name}"
+                    if (proj_dir / meta_rel).is_file():
+                        selected_rels.add(meta_rel)
+
+    for cfg_name in desk_mod.PROJECT_CONFIG_FILENAMES:
+        cfg_cand = proj_dir / cfg_name
+        if cfg_cand.is_file():
+            selected_rels.add(cfg_name)
+
+    rel_files: list[tuple[str, pathlib.Path]] = []
+    for rel_posix in sorted(selected_rels):
+        norm_rel = rel_posix.replace("\\", "/")
+        if norm_rel.startswith("/") or ".." in pathlib.PurePosixPath(norm_rel).parts:
+            raise RefusalError("PRIVATE_IMAGE_ROUTE_FORBIDDEN", f"project path escapes root: {rel_posix!r}")
+        cand = proj_dir / norm_rel
+        real = _verify_inside_project(proj_dir, cand, label=norm_rel)
+        if not real.is_file():
+            raise RefusalError("PROJECT_FILE_MISSING", f"expected file missing at {norm_rel!r}")
+        rel_files.append((norm_rel, real))
+    return rel_files, approved_image_count
 
 
 def cmd_make_stub_project(args: argparse.Namespace) -> int:
@@ -241,6 +530,29 @@ def cmd_preflight_project(args: argparse.Namespace) -> int:
     except DeskError as exc:
         raise RefusalError("CAPTION_CONFIG_INVALID", exc.message) from exc
 
+    rec_dir = proj_dir / "records"
+    if rec_dir.is_dir():
+        for rfile in sorted(rec_dir.glob("*.json")):
+            try:
+                rdoc = json.loads(rfile.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RefusalError("PROJECT_RECORD_INVALID", f"invalid record JSON {rfile.name}: {exc}") from exc
+            if isinstance(rdoc, dict):
+                for fld in ("asset_path", "image_url", "url", "source_url", "uri"):
+                    val = rdoc.get(fld)
+                    if isinstance(val, str) and val.strip():
+                        _check_no_private_uri(val, f"{rfile.name}:{fld}")
+                ap_val = rdoc.get("asset_path")
+                if isinstance(ap_val, str) and ap_val.strip():
+                    norm_ap = ap_val.replace("\\", "/")
+                    if norm_ap.startswith("/") or ".." in pathlib.PurePosixPath(norm_ap).parts:
+                        raise RefusalError(
+                            "PRIVATE_IMAGE_ROUTE_FORBIDDEN",
+                            f"{rfile.name}:asset_path escapes project root: {ap_val!r}",
+                        )
+
+    rel_files, approved_image_count = _collect_compose_upload_files(proj_dir, desk, description_gate)
+
     class _Qwen3VLProbe:
         name = "qwen3-vl"
         drafter_id = QWEN3_VL_REPO
@@ -265,50 +577,6 @@ def cmd_preflight_project(args: argparse.Namespace) -> int:
                 os.environ.pop("DATASET_DESK_USER_CONFIG", None)
             else:
                 os.environ["DATASET_DESK_USER_CONFIG"] = prev_user_cfg
-
-    rec_dir = proj_dir / "records"
-    if rec_dir.is_dir():
-        for rfile in sorted(rec_dir.glob("*.json")):
-            try:
-                rdoc = json.loads(rfile.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                raise RefusalError("PROJECT_RECORD_INVALID", f"invalid record JSON {rfile.name}: {exc}") from exc
-            if isinstance(rdoc, dict):
-                for fld in ("asset_path", "image_url", "url", "source_url", "uri"):
-                    val = rdoc.get(fld)
-                    if isinstance(val, str) and val.strip():
-                        _check_no_private_uri(val, f"{rfile.name}:{fld}")
-                ap_val = rdoc.get("asset_path")
-                if isinstance(ap_val, str) and ap_val.strip():
-                    norm_ap = ap_val.replace("\\", "/")
-                    if norm_ap.startswith("/") or ".." in pathlib.PurePosixPath(norm_ap).parts:
-                        raise RefusalError(
-                            "PRIVATE_IMAGE_ROUTE_FORBIDDEN",
-                            f"{rfile.name}:asset_path escapes project root: {ap_val!r}",
-                        )
-
-    images = desk.enumerate_project_images(str(proj_dir), sidecars=True, include_record_assets=True)
-    if not images:
-        raise RefusalError("PROJECT_EMPTY", f"--project {str(proj_dir)!r} contains zero readable images")
-
-    rel_files: list[tuple[str, pathlib.Path]] = []
-    for root, dirs, files in os.walk(proj_dir, followlinks=True):
-        dirs[:] = sorted(d for d in dirs if d not in (".git", "__pycache__"))
-        for fname in sorted(files):
-            full = pathlib.Path(root) / fname
-            real = full.resolve()
-            try:
-                in_proj = os.path.commonpath([str(proj_dir), str(real)]) == str(proj_dir)
-            except ValueError:
-                in_proj = False
-            if not in_proj:
-                raise RefusalError(
-                    "PRIVATE_IMAGE_ROUTE_FORBIDDEN",
-                    f"project file {fname!r} symlink/junction resolves outside project root",
-                )
-            rel_posix = full.relative_to(proj_dir).as_posix()
-            rel_files.append((rel_posix, real))
-    rel_files.sort(key=lambda item: item[0])
 
     stage_dir = out_dir / "_rig_stage"
     stage_dir.mkdir(parents=True, exist_ok=True)
@@ -341,6 +609,8 @@ def cmd_preflight_project(args: argparse.Namespace) -> int:
     cap_bytes = json.dumps(cap_doc, indent=2, sort_keys=True).encode("utf-8") + b"\n"
     staged_cap.write_bytes(cap_bytes)
 
+    uploaded_file_count = len(manifest_entries)
+    uploaded_total_bytes = sum(int(item["bytes"]) for item in manifest_entries)
     archive_sha = sha256_file(tar_path)
     archive_bytes = tar_path.stat().st_size
     manifest_doc = {
@@ -350,10 +620,12 @@ def cmd_preflight_project(args: argparse.Namespace) -> int:
         "caption_config_sha256": sha256_bytes(cap_bytes),
         "delivery_method": "colab_upload_checked",
         "files": manifest_entries,
-        "image_count": len(images),
+        "image_count": approved_image_count,
         "multimodal_pool": pool_tag,
         "multimodal_pool_locked": True,
-        "pool_detection": pool_detection,
+        "pool_detection": sanitize_pool_detection(pool_detection),
+        "uploaded_file_count": uploaded_file_count,
+        "uploaded_total_bytes": uploaded_total_bytes,
     }
     manifest_path = out_dir / "project_manifest.json"
     write_json_lf(manifest_path, manifest_doc)
@@ -451,7 +723,7 @@ def cmd_build_wheel(args: argparse.Namespace) -> int:
         "sha256": w_sha,
         "version": version,
         "wheel_name": wheel_name,
-        "wheel_path": str(wheel_path),
+        "wheel_path": f"_rig_stage/{wheel_name}",
     }
     write_json_lf(out_dir / "wheel_manifest.json", doc)
     print(json.dumps(doc, sort_keys=True))
@@ -482,12 +754,12 @@ def _collect_usr_local_cuda(usr_local: pathlib.Path) -> list[str]:
     for entry in sorted(usr_local.glob("cuda*"), key=lambda p: p.name):
         if entry.is_symlink():
             try:
-                target = os.readlink(entry)
+                target = pathlib.Path(os.readlink(entry)).name
             except OSError:
                 target = "?"
-            out.append(f"{entry.as_posix()} -> {target}")
+            out.append(f"{entry.name} -> {target}")
         else:
-            out.append(entry.as_posix())
+            out.append(entry.name)
     return out
 
 
@@ -948,19 +1220,22 @@ def cmd_download_weights(args: argparse.Namespace) -> int:
                 )
             sha_verified_count += 1
 
+    try:
+        snapshot_rel = snapshot_dir.resolve().relative_to(hf_home.resolve()).as_posix()
+    except ValueError:
+        snapshot_rel = snapshot_dir.name
     doc = {
         "attempts": attempts,
         "download_bound_s": bound_s,
         "elapsed_s": round(total_elapsed, 4),
         "file_count": len(siblings),
-        "hf_home": str(hf_home),
-        "local_disk_mount": mp,
+        "hf_home_dir": hf_home.name,
         "local_disk_verified": True,
         "repo_id": args.repo_id,
         "retried_429_count": retried_429,
         "revision": args.revision,
         "sha_verified_count": sha_verified_count,
-        "snapshot_dir": str(snapshot_dir),
+        "snapshot_rel_dir": snapshot_rel,
     }
     write_json_lf(state_dir / "weight_download.json", doc)
     print(json.dumps(doc, sort_keys=True))
@@ -1081,6 +1356,24 @@ def cmd_unpack_project(args: argparse.Namespace) -> int:
     return 0
 
 
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    pid = proc.pid
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True,
+            check=False,
+        )
+    else:
+        subprocess.run(["pkill", "-KILL", "-P", str(pid)], capture_output=True, check=False)
+        proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
 def _run_desk_checked(
     desk_bin: str,
     argv: list[str],
@@ -1088,19 +1381,32 @@ def _run_desk_checked(
     env: dict[str, str],
     log_path: pathlib.Path,
     step: str,
+    timeout_s: float = DEFAULT_DESK_CMD_TIMEOUT_S,
 ) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = _build_exec_cmd(desk_bin, argv, env=env)
-    proc = subprocess.run(cmd, env=env, capture_output=True, text=True, check=False)
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        out_txt, err_txt = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        _kill_process_tree(proc)
+        with log_path.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(f"$ {' '.join(cmd)}\n[timeout after {timeout_s:.2f}s]\n")
+        raise RefusalError(
+            "DESK_COMMAND_TIMEOUT",
+            f"dataset-desk {argv[0]} exceeded {timeout_s:.2f}s timeout",
+            step=step,
+        ) from exc
+
     with log_path.open("a", encoding="utf-8", newline="\n") as fh:
         fh.write(f"$ {' '.join(cmd)}\n")
-        if proc.stdout:
-            fh.write(proc.stdout)
-        if proc.stderr:
-            fh.write(proc.stderr)
+        if out_txt:
+            fh.write(out_txt)
+        if err_txt:
+            fh.write(err_txt)
         fh.write(f"[rc={proc.returncode}]\n")
     if proc.returncode != 0:
-        combined = f"{proc.stderr}\n{proc.stdout}".strip()
+        combined = f"{err_txt}\n{out_txt}".strip()
         m = re.search(r"error\s+([A-Z0-9_]+):\s*(.+)", combined)
         if m:
             raise RefusalError(m.group(1), m.group(2).strip(), step=step)
@@ -1118,6 +1424,7 @@ def _run_compose_with_heartbeat(
     env: dict[str, str],
     hb_path: pathlib.Path,
     stall_s: float,
+    model_load_stall_s: float = DEFAULT_MODEL_LOAD_STALL_S,
     poll_s: float,
     log_path: pathlib.Path,
     step: str,
@@ -1163,17 +1470,21 @@ def _run_compose_with_heartbeat(
                 log_fh.write(f"[rc={rc}]\n")
                 log_fh.flush()
                 break
+            phase_now = str(last_hb_doc.get("phase") or "startup")
+            in_model_load = phase_now in ("startup", "loading_model")
+            active_bound_s = model_load_stall_s if in_model_load else stall_s
             idle_s = time.monotonic() - last_progress_mono
-            if idle_s > stall_s:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=5)
+            if idle_s > active_bound_s:
+                _kill_process_tree(proc)
                 drafted_now = last_hb_doc.get("drafted", 0)
                 total_now = last_hb_doc.get("total", "?")
-                phase_now = last_hb_doc.get("phase", "startup")
+                if in_model_load:
+                    raise RefusalError(
+                        "MODEL_LOAD_STALLED",
+                        f"compose model load stalled for {idle_s:.2f}s > {model_load_stall_s:.2f}s bound "
+                        f"(phase={phase_now})",
+                        step=step,
+                    )
                 raise RefusalError(
                     "DRAFT_HEARTBEAT_STALLED",
                     f"compose drafter stalled for {idle_s:.2f}s > {stall_s:.2f}s bound "
@@ -1188,7 +1499,7 @@ def _run_compose_with_heartbeat(
         if m:
             raise RefusalError(m.group(1), m.group(2).strip(), step=step)
         raise RefusalError("COMPOSE_FAILED", f"dataset-desk compose exited {proc.returncode}: {tail.strip()[:240]}", step=step)
-    return last_hb_doc
+    return {k: v for k, v in last_hb_doc.items() if k != "last_path"}
 
 
 def cmd_run_compose_and_report(args: argparse.Namespace) -> int:
@@ -1206,6 +1517,8 @@ def cmd_run_compose_and_report(args: argparse.Namespace) -> int:
     env = dict(os.environ)
     env.pop("HF_TOKEN", None)
     env.pop("HUGGING_FACE_HUB_TOKEN", None)
+    env.pop("DATASET_DESK_POOL_MANIFEST", None)
+    env.pop("DATASET_DESK_POOL_DIRS", None)
     env["HF_HOME"] = str(pathlib.Path(args.hf_home))
     env["HF_HUB_OFFLINE"] = "1"
     env["TRANSFORMERS_OFFLINE"] = "1"
@@ -1214,6 +1527,7 @@ def cmd_run_compose_and_report(args: argparse.Namespace) -> int:
     env["DATASET_DESK_DRAFT_HEARTBEAT_FILE"] = str(hb_file)
     env["DATASET_DESK_USER_CONFIG"] = ""
 
+    desk_cmd_timeout_s = float(args.desk_cmd_timeout_s)
     record_vm_step(state_dir, "desk_index_report")
     _run_desk_checked(
         args.desk_bin,
@@ -1231,6 +1545,7 @@ def cmd_run_compose_and_report(args: argparse.Namespace) -> int:
         env=env,
         log_path=desk_log,
         step="desk_index_report",
+        timeout_s=desk_cmd_timeout_s,
     )
     _run_desk_checked(
         args.desk_bin,
@@ -1250,6 +1565,7 @@ def cmd_run_compose_and_report(args: argparse.Namespace) -> int:
         env=env,
         log_path=desk_log,
         step="desk_index_report",
+        timeout_s=desk_cmd_timeout_s,
     )
 
     record_vm_step(state_dir, "desk_compose")
@@ -1272,6 +1588,7 @@ def cmd_run_compose_and_report(args: argparse.Namespace) -> int:
         env=env,
         hb_path=hb_file,
         stall_s=float(args.heartbeat_stall_s),
+        model_load_stall_s=float(args.model_load_stall_s),
         poll_s=float(args.heartbeat_poll_s),
         log_path=desk_log,
         step="desk_compose",
@@ -1329,6 +1646,9 @@ def cmd_run_compose_and_report(args: argparse.Namespace) -> int:
         if not (out_root / rel_req).is_file():
             raise RefusalError("OUTPUT_FILE_MISSING", f"VM output missing required file {rel_req!r}", step="verify_vm_outputs")
 
+    _sanitize_json_tree(out_root)
+    _sanitize_json_tree(state_dir)
+
     out_files: list[dict] = []
     for fpath in sorted(out_root.rglob("*")):
         if not fpath.is_file():
@@ -1375,19 +1695,37 @@ def cmd_extract_and_verify_outputs(args: argparse.Namespace) -> int:
     stage_extract = out_dir / "_bundle_extract"
     if stage_extract.exists():
         shutil.rmtree(stage_extract)
-    _safe_extract_tar(bundle_path, stage_extract, step="fetch_outputs")
+    try:
+        _safe_extract_tar(bundle_path, stage_extract, step="fetch_outputs")
+        for extracted_f in sorted(stage_extract.rglob("*")):
+            if not extracted_f.is_file():
+                continue
+            rel_member = extracted_f.relative_to(stage_extract).as_posix()
+            with extracted_f.open("rb") as fh:
+                magic_mime = detect_image_magic_bytes(fh.read(64))
+            if magic_mime is not None:
+                raise RefusalError(
+                    "PRIVATE_IMAGE_IN_BUNDLE",
+                    f"downloaded bundle member {rel_member!r} contains raster image magic bytes ({magic_mime})",
+                )
+            if extracted_f.suffix.lower() in IMAGE_EXTS:
+                raise RefusalError(
+                    "PRIVATE_IMAGE_IN_BUNDLE",
+                    f"downloaded bundle member {rel_member!r} has forbidden image extension {extracted_f.suffix.lower()!r}",
+                )
 
-    outputs_dest = out_dir / "outputs"
-    vm_state_dest = out_dir / "vm_state"
-    if (stage_extract / "desk_out").is_dir():
-        if outputs_dest.exists():
-            shutil.rmtree(outputs_dest)
-        shutil.copytree(stage_extract / "desk_out", outputs_dest)
-    if (stage_extract / "desk_state").is_dir():
-        if vm_state_dest.exists():
-            shutil.rmtree(vm_state_dest)
-        shutil.copytree(stage_extract / "desk_state", vm_state_dest)
-    shutil.rmtree(stage_extract, ignore_errors=True)
+        outputs_dest = out_dir / "outputs"
+        vm_state_dest = out_dir / "vm_state"
+        if (stage_extract / "desk_out").is_dir():
+            if outputs_dest.exists():
+                shutil.rmtree(outputs_dest)
+            shutil.copytree(stage_extract / "desk_out", outputs_dest)
+        if (stage_extract / "desk_state").is_dir():
+            if vm_state_dest.exists():
+                shutil.rmtree(vm_state_dest)
+            shutil.copytree(stage_extract / "desk_state", vm_state_dest)
+    finally:
+        shutil.rmtree(stage_extract, ignore_errors=True)
 
     if args.salvage_only:
         return 0
@@ -1537,6 +1875,53 @@ def _read_optional_json(path: pathlib.Path) -> dict:
         return {}
 
 
+def _basename_only(raw_val: object) -> str:
+    return pathlib.PurePath(str(raw_val).replace("\\", "/")).name
+
+
+def _sanitize_transfer_record_dict(rec: dict) -> dict:
+    cleaned = dict(rec)
+    for k in ("local", "src"):
+        if isinstance(cleaned.get(k), str) and cleaned[k]:
+            cleaned[k] = _basename_only(cleaned[k])
+    return cleaned
+
+
+def _sanitize_window_host_paths(out_dir: pathlib.Path, win: dict, outcome: dict) -> None:
+    receipts_p = out_dir / "upload_receipts.jsonl"
+    if receipts_p.is_file():
+        cleaned_lines: list[str] = []
+        for raw_ln in receipts_p.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not raw_ln.strip():
+                continue
+            try:
+                rec = json.loads(raw_ln)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict):
+                rec = _sanitize_transfer_record_dict(rec)
+            cleaned_lines.append(json.dumps(rec, sort_keys=True))
+        receipts_p.write_text("\n".join(cleaned_lines) + ("\n" if cleaned_lines else ""), encoding="utf-8", newline="\n")
+
+    for bd_name in ("bundle_download.json", "salvage_bundle_download.json"):
+        bd_p = out_dir / bd_name
+        if bd_p.is_file():
+            bd_doc = _read_optional_json(bd_p)
+            if bd_doc:
+                write_json_lf(bd_p, _sanitize_transfer_record_dict(bd_doc))
+
+    for doc in (win, outcome):
+        if isinstance(doc.get("upload_transfers"), list):
+            doc["upload_transfers"] = [
+                _sanitize_transfer_record_dict(u) if isinstance(u, dict) else u for u in doc["upload_transfers"]
+            ]
+        for bd_key in ("bundle_download", "salvage_bundle_download"):
+            if isinstance(doc.get(bd_key), dict):
+                doc[bd_key] = _sanitize_transfer_record_dict(doc[bd_key])
+        if isinstance(doc.get("input_shas"), dict):
+            doc["input_shas"] = {_basename_only(k): v for k, v in sorted(doc["input_shas"].items(), key=lambda kv: _basename_only(kv[0]))}
+
+
 def cmd_finalize_window_record(args: argparse.Namespace) -> int:
     out_dir = pathlib.Path(args.out_dir).resolve()
     win_path = out_dir / "window.json"
@@ -1545,6 +1930,7 @@ def cmd_finalize_window_record(args: argparse.Namespace) -> int:
 
     win = _read_optional_json(win_path)
     outcome = _read_optional_json(outcome_path) or _read_optional_json(legacy_outcome_path)
+    _sanitize_window_host_paths(out_dir, win, outcome)
 
     proj_manifest = _read_optional_json(out_dir / "project_manifest.json")
     wheel_manifest = _read_optional_json(out_dir / "wheel_manifest.json")
@@ -1618,10 +2004,40 @@ def cmd_finalize_window_record(args: argparse.Namespace) -> int:
         else:
             retry_disposition = "never_retry" if status != "completed" else "none"
 
+    if isinstance(win.get("heartbeat_last"), dict):
+        win["heartbeat_last"] = {k: v for k, v in win["heartbeat_last"].items() if k != "last_path"}
+
+    stop_timeout_s = int(os.environ.get("COLAB_STOP_TIMEOUT_S", "60"))
+    kill_grace_s = int(os.environ.get("COLAB_KILL_GRACE_S", "10"))
+    desk_vm_cleanup_bound_s = stop_timeout_s + kill_grace_s
+    env_stop_by = os.environ.get("COLAB_CLEANUP_STOP_ATTEMPTED_BY_S", "").strip()
+    env_bound = os.environ.get("COLAB_CLEANUP_BOUND_S", "").strip()
+    if env_stop_by.isdigit() and env_bound.isdigit():
+        cleanup_stop_attempted_by_s = int(env_stop_by)
+        cleanup_bound_s = int(env_bound)
+    else:
+        base_stop_by = int(win.get("cleanup_stop_attempted_by_s") or 1150)
+        base_bound = int(win.get("cleanup_bound_s") or 1290)
+        cleanup_stop_attempted_by_s = base_stop_by + desk_vm_cleanup_bound_s
+        cleanup_bound_s = base_bound + desk_vm_cleanup_bound_s
+
+    priced_rate = win.get("rate_used_for_cap_and_projection")
+    if priced_rate is None and (out_dir / "max_rate.txt").is_file():
+        try:
+            priced_rate = float((out_dir / "max_rate.txt").read_text(encoding="utf-8").strip())
+        except ValueError:
+            priced_rate = None
+    if priced_rate is not None and win.get("cap") is not None and win.get("margin") is not None:
+        win["cleanup_reserve_units"] = round((cleanup_bound_s / 3600.0) * float(priced_rate), 6)
+        win["effective_trip_units"] = round(float(win["cap"]) - float(win["margin"]) - win["cleanup_reserve_units"], 6)
+
     win.update(
         {
+            "cleanup_bound_s": cleanup_bound_s,
+            "cleanup_stop_attempted_by_s": cleanup_stop_attempted_by_s,
             "colab_runtime_version": vm_probe.get("colab_runtime_version"),
             "config_only_load": cfg_load or None,
+            "desk_vm_cleanup_bound_s": desk_vm_cleanup_bound_s,
             "desk_wheel": {
                 "git_commit": wheel_manifest.get("git_commit"),
                 "sha256": wheel_manifest.get("sha256"),
@@ -1643,6 +2059,8 @@ def cmd_finalize_window_record(args: argparse.Namespace) -> int:
                 "archive_sha256": proj_manifest.get("archive_sha256"),
                 "delivery_method": "colab_upload_checked",
                 "external_urls_allowed": False,
+                "uploaded_file_count": proj_manifest.get("uploaded_file_count"),
+                "uploaded_total_bytes": proj_manifest.get("uploaded_total_bytes"),
                 "vm_workdir_cleanup_attempted": cleanup_attempted,
                 "vm_workdir_cleanup_exit_status": cleanup_rc,
                 "vm_workdir_deleted": cleanup_ok,
@@ -1790,7 +2208,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--device", default="cpu")
     p_run.add_argument("--grant-id", default="")
     p_run.add_argument("--vram-budget-mib", type=int, default=22000)
-    p_run.add_argument("--heartbeat-stall-s", type=float, default=180.0)
+    p_run.add_argument("--heartbeat-stall-s", type=float, default=DEFAULT_HEARTBEAT_STALL_S)
+    p_run.add_argument("--model-load-stall-s", type=float, default=DEFAULT_MODEL_LOAD_STALL_S)
+    p_run.add_argument("--desk-cmd-timeout-s", type=float, default=DEFAULT_DESK_CMD_TIMEOUT_S)
     p_run.add_argument("--heartbeat-poll-s", type=float, default=0.2)
     p_run.set_defaults(func=cmd_run_compose_and_report)
 

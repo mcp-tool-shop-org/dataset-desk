@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     HTTP 412 never-retry vs HTTP 503 retry-later classification).
   - Adds `EMBEDDING_BACKEND_FORBIDDEN` (`DATASET_DESK_FORBID_EMBEDDERS=1`), `DATASET_DESK_EMBEDDER_LOG_FILE`, and
     `DATASET_DESK_DRAFT_HEARTBEAT_FILE` support in `dataset_desk/backends.py` and `dataset_desk/errors.py`.
+  - Privacy and bounds hardening: compose-allowlist project upload tar (`prune_project_walk_dirs`, followed-link cycle
+    refusal `PROJECT_LINK_CYCLE`, and `uploaded_file_count` / `uploaded_total_bytes` window telemetry without file
+    names), path-free `pool_detection` and manifests/window records, rig chunk-staging cleanup across normal exits,
+    refusals, guard trips, and signals, `+70 s` VM-cleanup step reserve in `COLAB_CLEANUP_STOP_ATTEMPTED_BY_S` and
+    `COLAB_CLEANUP_BOUND_S`, separate `--model-load-stall-s` (`420` s default, `MODEL_LOAD_STALLED`) and
+    `--desk-cmd-timeout-s` (`300` s default, `DESK_COMMAND_TIMEOUT`), and magic-byte image inspection on output bundles.
 
 ## [0.3.0] - 2026-11-12
 
