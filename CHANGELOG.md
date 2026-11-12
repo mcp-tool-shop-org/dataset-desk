@@ -16,11 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     `.txt` caption sidecars when `records/` is absent, extracts embedded ComfyUI PNG `tEXt` generation prompts and wave
     `generation.json` prompts for prompt-echo checks, reports images without a `.txt` sidecar instead of inventing text,
     and writes `<out>/sidecar-records.jsonl` and `<out>/sidecar-import.json` strictly under `--out`.
-  - `compose` (and `report --compose`, `--manifest-name`): assembles training captions into `<out>/captions-manifest.json`
-    (`style-dataset-lab` lane-3 `run_dataset` format) from per-project `caption-rules.json` (`--caption-config`:
-    `prefix`, `classes`, `class_field`, `class_pattern`, `backdrop`, `banned_words`, `drafter`, `drafter_prompt`),
-    blind drafts, and imported seat edits, with per-part `writers` provenance (`config:<file>:<line>`,
-    `drafter:<id>@<rev>:<prompt sha>`, `seat:<name>`, `record:<file>`, `sidecar:<file>`).
+  - `compose` (and `report --compose`, `--manifest-name`, `--all`): assembles training captions into
+    `<out>/captions-manifest.json` (`style-dataset-lab` lane-3 `run_dataset` format) from per-project
+    `caption-rules.json` (`--caption-config`: `prefix`, `classes`, `class_field`, `class_pattern`, `backdrop`,
+    `banned_words`, `drafter`, `drafter_prompt`) and imported seat edits, with per-part `writers` provenance
+    (`config:<file>:<line>`, `drafter:<id>@<rev>:<prompt sha>`, `seat:<name>`, `record:<file>`, `sidecar:<file>`). By
+    default, `compose` and `report --compose` draft **only** records flagged by the model-free gate into the review
+    queue (`description-review.jsonl` and `description-worksheet.md`) — never straight into the training caption — and
+    leave unflagged records untouched; `--all` also drafts unflagged records as side-by-side offers (`draft_offer` and
+    `draft_offer_writer`), and human and sidecar text is never replaced unless a seat edit is imported.
   - `import-edits` (`--worksheet`, `--seat`): re-imports edited rows from `description-worksheet.md` into
     `<out>/seat-edits.jsonl` with `seat:<name>`, recording the draft text and drafter writer the seat saw.
   - **Drafter registry (`registry.DRAFTER_REGISTRY`):** adds `qwen3-vl` (`Qwen/Qwen3-VL-8B-Instruct` pinned at
@@ -64,13 +68,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `drafter-raw.jsonl`, `seat-edits.jsonl`, `captions-manifest.json`, `sidecar-import.json`, and
   `sidecar-records.jsonl` under `--out`; `<out>/<backend>/meta.json`, `<out>/<backend>/text/meta.json`, and
   `description-review.jsonl` gain `pool_detection` (and review rows gain provenance fields including `writers`,
-  `parts`, `draft`, `drafter_writer`, `seat_edit`, `seat_id`, and `final_caption`). New 0.3.0 JSON-stdout commands
+  `parts`, `draft`, `drafter_writer`, `draft_offer`, `draft_offer_writer`, `seat_edit`, `seat_id`, and
+  `final_caption`). New 0.3.0 JSON-stdout commands
   (`scan`, `sidecar-import`, `import-edits`) include `pool_detection` in stdout JSON; existing 0.2.x JSON-stdout
   commands (`dupes`, `text-dupes`, `lineage`) keep their stdout JSON shapes unchanged.
-- **`--draft` takes an optional value and `compose` drafts by default:** `--draft` now accepts an optional drafter name
-  (`none`, `fake`, `plain-sight`, `florence2`, `qwen3-vl`), a bare `--draft` means `plain-sight`, and `compose` (as
-  well as `report --compose`) drafts every unedited record by default when `--draft` is absent (using `rules.drafter`
-  if set in `caption-rules.json`, else `plain-sight`; pass `--draft none` to compose without drafting).
+- **`--draft` takes an optional value; `compose` drafts only flagged records into the review queue:** `--draft` now
+  accepts an optional drafter name (`none`, `fake`, `plain-sight`, `florence2`, `qwen3-vl`), and a bare `--draft` means
+  `plain-sight`. `compose` (and `report --compose`) drafts only records flagged by the model-free gate into the review
+  queue (using `rules.drafter` if set in `caption-rules.json`, else `plain-sight`; pass `--draft none` to skip
+  drafting), leaving unflagged records untouched and never writing unedited drafts into training captions; `--all`
+  offers drafts beside unflagged originals (`draft_offer` / `draft_offer_writer`), and human and sidecar text is never
+  replaced without an imported seat edit.
 - **Python API, provenance strata, and error codes:** `desk.check_multimodal_pool` returns the `pool_detection` `dict`
   (was `None`); `desk.check_drafter_pool` defaults `getattr(drafter, "is_arm_model", True)` so unknown drafter objects
   are treated as arm models; sidecar descriptions carry `author_kind: "sidecar"` (never `"human"`) and `"sidecar"` is

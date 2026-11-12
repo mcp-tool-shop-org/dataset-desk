@@ -516,16 +516,15 @@ class CompositionAndProvenanceTests(fakes.IsolatedDeskTestCase):
             f"drafter:Qwen/Qwen3-VL-8B-Instruct@0c351dd01ed87e9c1b53cbc748cba10e6187ff3b:{expected_psha}"
         )
 
-        # v1: unedited drafter caption -> captioner_draft_unedited
+        # v1: flagged record with NO seat edit -> draft stays in review queue, caption keeps record text
         it_v1 = items["v1"]
         self.assertEqual(it_v1["image"], "vessel_01.png")
         self.assertEqual(it_v1["sha256"], self.sha_v1)
         self.assertEqual(
             it_v1["caption"],
-            "etching plate, timber hull, coiled rope, plain parchment ground, "
-            "broad wooden skiff resting beside stone pilings at low tide",
+            "etching plate, timber hull, coiled rope, plain parchment ground, short bad",
         )
-        self.assertEqual(it_v1["author_kind"], "captioner_draft_unedited")
+        self.assertEqual(it_v1["author_kind"], "human")
         self.assertEqual(
             it_v1["writers"],
             [
@@ -533,9 +532,10 @@ class CompositionAndProvenanceTests(fakes.IsolatedDeskTestCase):
                 "config:caption-rules.json:13",
                 "config:caption-rules.json:14",
                 "config:caption-rules.json:7",
-                expected_drafter_writer,
+                "record:records/v1.json",
             ],
         )
+        self.assertIsNone(it_v1["drafter_writer"])
 
         # v2: seat-edited drafter caption + record-field backdrop -> captioner_assisted
         it_v2 = items["v2"]
@@ -559,12 +559,17 @@ class CompositionAndProvenanceTests(fakes.IsolatedDeskTestCase):
         )
         self.assertEqual(it_v2["drafter_writer"], expected_drafter_writer)
 
-        # Review queue carries identical provenance and strata, and both composed captions pass the model-free gate
+        # Review queue queues v1's draft for the seat (still flagged) while v2 passes after seat edit
         with open(os.path.join(self.out, "description-review.jsonl"), encoding="utf-8") as f:
             rev_rows = {r["id"]: r for r in (json.loads(line) for line in f if line.strip())}
-        self.assertEqual(rev_rows["v1"]["author_kind"], "captioner_draft_unedited")
-        self.assertEqual(rev_rows["v1"]["writers"], it_v1["writers"])
-        self.assertTrue(rev_rows["v1"]["passed_model_free"], rev_rows["v1"]["flags"])
+        self.assertEqual(rev_rows["v1"]["author_kind"], "captioner_assisted")
+        self.assertEqual(
+            rev_rows["v1"]["draft"],
+            "broad wooden skiff resting beside stone pilings at low tide",
+        )
+        self.assertEqual(rev_rows["v1"]["drafter_writer"], expected_drafter_writer)
+        self.assertEqual(rev_rows["v1"]["writers"], [*it_v1["writers"], expected_drafter_writer])
+        self.assertFalse(rev_rows["v1"]["passed_model_free"])
         self.assertEqual(rev_rows["v2"]["author_kind"], "captioner_assisted")
         self.assertEqual(rev_rows["v2"]["writers"], it_v2["writers"])
         self.assertTrue(rev_rows["v2"]["passed_model_free"], rev_rows["v2"]["flags"])
@@ -585,7 +590,7 @@ class CompositionAndProvenanceTests(fakes.IsolatedDeskTestCase):
         rec_v1_path = os.path.join(self.proj, "records", "v1.json")
         with open(rec_v1_path, encoding="utf-8") as f:
             v1_doc = json.load(f)
-        v1_doc["judgment"]["explanation"] = "weathered fishing lugger beached beside wooden capstan"
+        v1_doc["judgment"]["explanation"] = "weathered fishing lugger beached beside wooden capstan post"
         with open(rec_v1_path, "w", encoding="utf-8") as f:
             json.dump(v1_doc, f)
 
@@ -594,7 +599,7 @@ class CompositionAndProvenanceTests(fakes.IsolatedDeskTestCase):
         self.assertEqual(by_id["v1"]["author_kind"], "human")
         self.assertEqual(by_id["v1"]["writers"][-1], "record:records/v1.json")
 
-        # Also exercise `report --compose --draft fake`
+        # Also exercise `report --compose --draft fake` (unflagged v1 stays human, untouched)
         out2 = os.path.join(self.tmp, "out2")
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(desk.run(["index", "--project", self.proj, "--out", out2, "--backend", "none"]), EXIT_OK)
@@ -606,6 +611,11 @@ class CompositionAndProvenanceTests(fakes.IsolatedDeskTestCase):
                 EXIT_OK,
             )
         self.assertTrue(os.path.isfile(os.path.join(out2, "captions-manifest.json")))
+        with open(os.path.join(out2, "captions-manifest.json"), encoding="utf-8") as f:
+            mf2 = json.load(f)
+        by_id2 = {it["id"]: it for it in mf2["items"]}
+        self.assertEqual(by_id2["v1"]["author_kind"], "human")
+        self.assertEqual(by_id2["v1"]["writers"][-1], "record:records/v1.json")
 
 
 class BlindWorksheetAndReimportTests(fakes.IsolatedDeskTestCase):
@@ -2112,6 +2122,299 @@ class Addendum3LockAndProvenanceTests(fakes.IsolatedDeskTestCase):
                         f"{fn}:{attr_val.__name__} does not inherit IsolatedDeskTestCase",
                     )
         self.assertGreaterEqual(checked_classes, 30)
+
+
+class Addendum3bComposeDraftingTests(fakes.IsolatedDeskTestCase):
+    """Synthetic tests for Addendum 3b (Parts 1-4); every test fails at 1c0f656."""
+
+    def setUp(self):
+        super().setUp()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = self._tmp.name
+
+    @staticmethod
+    def _set_worksheet_edit(ws_path: str, row_id: str, edited_text: str) -> None:
+        with open(ws_path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        edit_col = -1
+        out_lines: list[str] = []
+        for ln in lines:
+            s = ln.strip()
+            if not s.startswith("|"):
+                edit_col = -1
+                out_lines.append(ln)
+                continue
+            cells = ln.split("|")
+            lower = [c.strip().lower() for c in cells]
+            if "id" in lower and "edited text" in lower:
+                edit_col = lower.index("edited text")
+                out_lines.append(ln)
+                continue
+            if edit_col >= 0 and s.startswith(f"| `{row_id}` |"):
+                cells[edit_col] = f" {edited_text} "
+                ln = "|".join(cells)
+            out_lines.append(ln)
+        with open(ws_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(out_lines) + "\n")
+
+    def test_1_unflagged_human_record_untouched_by_default(self):
+        # Fails at 1c0f656 dataset_desk/description_gate.py:2220 and :2341-2348 (drafted every unedited record and
+        # replaced human text/writers/author_kind with unedited drafter output).
+        proj = os.path.join(self.tmp, "proj-human")
+        os.makedirs(os.path.join(proj, "records"), exist_ok=True)
+        _write_png(os.path.join(proj, "outputs", "w1", "h_01.png"), (65, 110, 145), seed=201)
+        with open(os.path.join(proj, "caption-rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"prefix": "copperplate study,", "drafter": "fake"}, f, indent=2)
+        human_text = "copperplate study, weathered limestone arch above flagged stone steps"
+        with open(os.path.join(proj, "records", "h_01.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "id": "h_01",
+                "asset_path": "outputs/w1/h_01.png",
+                "judgment": {"status": "approved", "explanation": human_text, "author_kind": "human"},
+                "provenance": {"prompt": "distant coastal fog"},
+            }, f)
+
+        # Spy drafter must not even be invoked when every record passes the model-free gate
+        class _NeverCalledDrafter:
+            drafter_id = "spy-drafter"
+            revision = "spy-v1"
+            is_arm_model = False
+
+            def draft(self, paths):
+                raise AssertionError(f"drafter must not be called on unflagged records, got {paths!r}")
+
+        out_spy = os.path.join(self.tmp, "out-spy")
+        with contextlib.redirect_stderr(io.StringIO()):
+            spy_comp = description_gate.compose_captions(proj, out_spy, drafter=_NeverCalledDrafter())
+        self.assertEqual(spy_comp["items"][0]["caption"], human_text)
+        self.assertEqual(spy_comp["items"][0]["author_kind"], "human")
+        self.assertEqual(
+            spy_comp["items"][0]["writers"],
+            ["config:caption-rules.json:2", "record:records/h_01.json"],
+        )
+
+        # CLI `compose` (default drafting) and `report --compose` both leave h_01 untouched
+        out_comp = os.path.join(self.tmp, "out-comp")
+        out_rep = os.path.join(self.tmp, "out-rep")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(desk.run(["compose", "--project", proj, "--out", out_comp]), EXIT_OK)
+            self.assertEqual(desk.run(["index", "--project", proj, "--out", out_rep, "--backend", "none"]), EXIT_OK)
+            self.assertEqual(
+                desk.run(["report", "--project", proj, "--out", out_rep, "--backend", "none", "--compose"]),
+                EXIT_OK,
+            )
+
+        for check_out in (out_comp, out_rep):
+            with open(os.path.join(check_out, "captions-manifest.json"), encoding="utf-8") as f:
+                mf = json.load(f)
+            it = mf["items"][0]
+            self.assertEqual(it["caption"], human_text)
+            self.assertEqual(it["author_kind"], "human")
+            self.assertEqual(it["writers"], ["config:caption-rules.json:2", "record:records/h_01.json"])
+            self.assertIsNone(it["drafter_writer"])
+
+            with open(os.path.join(check_out, "description-review.jsonl"), encoding="utf-8") as f:
+                rev = json.loads(f.readline())
+            self.assertEqual(rev["author_kind"], "human")
+            self.assertEqual(rev["writers"], ["config:caption-rules.json:2", "record:records/h_01.json"])
+            self.assertEqual(rev["draft"], "")
+            self.assertIsNone(rev["draft_offer"])
+            self.assertIsNone(rev["draft_offer_writer"])
+
+    def test_2_unflagged_sidecar_record_untouched_by_default(self):
+        # Fails at 1c0f656 dataset_desk/description_gate.py:2220 and :2341-2348 (drafted unflagged sidecar records
+        # and replaced sidecar text/writers/author_kind with unedited drafter output).
+        sc_proj = os.path.join(self.tmp, "proj-sidecar")
+        os.makedirs(sc_proj, exist_ok=True)
+        _write_png(os.path.join(sc_proj, "plate_01.png"), (90, 125, 110), seed=202)
+        sidecar_text = "copperplate study, carved timber gate set between mortared stone piers"
+        with open(os.path.join(sc_proj, "plate_01.txt"), "w", encoding="utf-8") as f:
+            f.write(sidecar_text)
+        with open(os.path.join(sc_proj, "caption-rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"prefix": "copperplate study,", "drafter": "fake"}, f, indent=2)
+
+        out_comp = os.path.join(self.tmp, "out-sc-comp")
+        out_rep = os.path.join(self.tmp, "out-sc-rep")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(desk.run(["compose", "--project", sc_proj, "--out", out_comp]), EXIT_OK)
+            self.assertEqual(
+                desk.run(["index", "--project", sc_proj, "--out", out_rep, "--backend", "none", "--sidecars"]),
+                EXIT_OK,
+            )
+            self.assertEqual(
+                desk.run(["report", "--project", sc_proj, "--out", out_rep, "--backend", "none", "--compose"]),
+                EXIT_OK,
+            )
+
+        for check_out in (out_comp, out_rep):
+            with open(os.path.join(check_out, "captions-manifest.json"), encoding="utf-8") as f:
+                mf = json.load(f)
+            it = mf["items"][0]
+            self.assertEqual(it["caption"], sidecar_text)
+            self.assertEqual(it["author_kind"], "sidecar")
+            self.assertEqual(it["writers"], ["config:caption-rules.json:2", "sidecar:plate_01.txt"])
+            self.assertIsNone(it["drafter_writer"])
+
+            with open(os.path.join(check_out, "description-review.jsonl"), encoding="utf-8") as f:
+                rev = json.loads(f.readline())
+            self.assertEqual(rev["author_kind"], "sidecar")
+            self.assertEqual(rev["writers"], ["config:caption-rules.json:2", "sidecar:plate_01.txt"])
+            self.assertEqual(rev["draft"], "")
+            self.assertIsNone(rev["draft_offer"])
+            self.assertIsNone(rev["draft_offer_writer"])
+
+    def test_3_all_flag_keeps_unflagged_human_text_and_writes_draft_only_as_offer(self):
+        # Fails at 1c0f656 dataset_desk/desk.py:3506-3524 (no `--all` CLI flag), description_gate.py:1755-1795
+        # (no `draft_offer` / `draft_offer_writer` fields), and description_gate.py:2341-2348 (replaced human text).
+        proj = os.path.join(self.tmp, "proj-all")
+        os.makedirs(os.path.join(proj, "records"), exist_ok=True)
+        _write_png(os.path.join(proj, "outputs", "w1", "h_01.png"), (80, 115, 150), seed=203)
+        with open(os.path.join(proj, "caption-rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"prefix": "copperplate study,", "drafter": "fake"}, f, indent=2)
+        human_text = "copperplate study, weathered limestone arch above flagged stone steps"
+        with open(os.path.join(proj, "records", "h_01.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "id": "h_01",
+                "asset_path": "outputs/w1/h_01.png",
+                "judgment": {"status": "approved", "explanation": human_text, "author_kind": "human"},
+                "provenance": {"prompt": "distant coastal fog"},
+            }, f)
+
+        out_all = os.path.join(self.tmp, "out-all")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(desk.run(["compose", "--project", proj, "--out", out_all, "--all"]), EXIT_OK)
+
+        with open(os.path.join(out_all, "captions-manifest.json"), encoding="utf-8") as f:
+            mf = json.load(f)
+        it = mf["items"][0]
+        # Human text, writers, and author_kind are NEVER replaced by --all
+        self.assertEqual(it["caption"], human_text)
+        self.assertEqual(it["author_kind"], "human")
+        self.assertEqual(it["writers"], ["config:caption-rules.json:2", "record:records/h_01.json"])
+        self.assertIsNone(it["drafter_writer"])
+
+        # Draft appears ONLY as the offer field (with its writer) in description-review.jsonl and worksheet
+        expected_offer_writer = description_gate.drafter_writer_id("fake-drafter", "fake-drafter-v1", None)
+        with open(os.path.join(out_all, "description-review.jsonl"), encoding="utf-8") as f:
+            rev = json.loads(f.readline())
+        self.assertEqual(rev["author_kind"], "human")
+        self.assertEqual(rev["writers"], ["config:caption-rules.json:2", "record:records/h_01.json"])
+        self.assertEqual(rev["draft"], "")
+        self.assertEqual(rev["florence2_draft"], "")
+        self.assertIsNone(rev["drafter_id"])
+        self.assertIsNone(rev["drafter_writer"])
+        self.assertTrue(rev["draft_offer"].startswith("blind draft for h_01.png"))
+        self.assertEqual(rev["draft_offer_writer"], expected_offer_writer)
+
+        ws_path = os.path.join(out_all, "description-worksheet.md")
+        with open(ws_path, encoding="utf-8") as f:
+            ws_text = f.read()
+        self.assertIn("draft_offer", ws_text)
+        self.assertIn(expected_offer_writer, ws_text)
+        self.assertIn(human_text, ws_text)
+
+        # Only when a seat edit accepts/edits the offer does the caption change
+        self._set_worksheet_edit(ws_path, "h_01", "carved limestone archway above worn flagstones")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                desk.run(["import-edits", "--project", proj, "--out", out_all, "--seat", "seat-offer"]),
+                EXIT_OK,
+            )
+            self.assertEqual(
+                desk.run(["compose", "--project", proj, "--out", out_all, "--draft", "none"]),
+                EXIT_OK,
+            )
+        with open(os.path.join(out_all, "captions-manifest.json"), encoding="utf-8") as f:
+            mf_after = json.load(f)
+        it_after = mf_after["items"][0]
+        self.assertEqual(
+            it_after["caption"],
+            "copperplate study, carved limestone archway above worn flagstones",
+        )
+        self.assertEqual(it_after["author_kind"], "captioner_assisted")
+        self.assertEqual(it_after["writers"], ["config:caption-rules.json:2", "seat:seat-offer"])
+        self.assertEqual(it_after["drafter_writer"], expected_offer_writer)
+
+    def test_4_flagged_record_gets_draft_in_review_queue_and_caption_unchanged_until_seat_edit(self):
+        # Fails at 1c0f656 dataset_desk/description_gate.py:2341-2348 (wrote unedited draft straight into the
+        # training caption in captions-manifest.json with author_kind 'captioner_draft_unedited' before any seat edit).
+        proj = os.path.join(self.tmp, "proj-flagged")
+        os.makedirs(os.path.join(proj, "records"), exist_ok=True)
+        _write_png(os.path.join(proj, "outputs", "w1", "f_01.png"), (145, 95, 75), seed=204)
+        with open(os.path.join(proj, "caption-rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"prefix": "copperplate study,", "drafter": "fake"}, f, indent=2)
+        with open(os.path.join(proj, "records", "f_01.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "id": "f_01",
+                "asset_path": "outputs/w1/f_01.png",
+                "judgment": {"status": "approved", "explanation": "short bad"},
+                "provenance": {"prompt": "misty quay"},
+            }, f)
+
+        out_nodraft = os.path.join(self.tmp, "out-nodraft")
+        out_drafted = os.path.join(self.tmp, "out-drafted")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                desk.run(["compose", "--project", proj, "--out", out_nodraft, "--draft", "none"]),
+                EXIT_OK,
+            )
+            self.assertEqual(
+                desk.run(["compose", "--project", proj, "--out", out_drafted]),
+                EXIT_OK,
+            )
+
+        with open(os.path.join(out_nodraft, "captions-manifest.json"), encoding="utf-8") as f:
+            mf_nodraft = json.load(f)
+        with open(os.path.join(out_drafted, "captions-manifest.json"), encoding="utf-8") as f:
+            mf_drafted = json.load(f)
+
+        # No change to its training caption, writers, or author_kind before a seat edit is imported
+        self.assertEqual(mf_drafted["items"][0]["caption"], mf_nodraft["items"][0]["caption"])
+        self.assertEqual(mf_drafted["items"][0]["caption"], "copperplate study, short bad")
+        self.assertEqual(mf_drafted["items"][0]["author_kind"], "human")
+        self.assertEqual(
+            mf_drafted["items"][0]["writers"],
+            ["config:caption-rules.json:2", "record:records/f_01.json"],
+        )
+        self.assertIsNone(mf_drafted["items"][0]["drafter_writer"])
+
+        # Draft IS in the review queue and worksheet for the seat
+        expected_d_writer = description_gate.drafter_writer_id("fake-drafter", "fake-drafter-v1", None)
+        with open(os.path.join(out_drafted, "description-review.jsonl"), encoding="utf-8") as f:
+            rev_before = json.loads(f.readline())
+        self.assertFalse(rev_before["passed_model_free"])
+        self.assertTrue(rev_before["draft"].startswith("blind draft for f_01.png"))
+        self.assertEqual(rev_before["drafter_writer"], expected_d_writer)
+
+        ws_path = os.path.join(out_drafted, "description-worksheet.md")
+        with open(ws_path, encoding="utf-8") as f:
+            ws_before = f.read()
+        self.assertIn("| `f_01` |", ws_before)
+        self.assertIn("blind draft for f_01.png", ws_before)
+
+        # Import a seat edit -> NOW compose updates the training caption
+        self._set_worksheet_edit(ws_path, "f_01", "weathered stone arch spanning narrow cobbled lane")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                desk.run(["import-edits", "--project", proj, "--out", out_drafted, "--seat", "seat-fix"]),
+                EXIT_OK,
+            )
+            self.assertEqual(
+                desk.run(["compose", "--project", proj, "--out", out_drafted, "--draft", "none"]),
+                EXIT_OK,
+            )
+
+        with open(os.path.join(out_drafted, "captions-manifest.json"), encoding="utf-8") as f:
+            mf_after = json.load(f)
+        it_after = mf_after["items"][0]
+        self.assertEqual(
+            it_after["caption"],
+            "copperplate study, weathered stone arch spanning narrow cobbled lane",
+        )
+        self.assertEqual(it_after["author_kind"], "captioner_assisted")
+        self.assertEqual(it_after["writers"], ["config:caption-rules.json:2", "seat:seat-fix"])
+        self.assertEqual(it_after["drafter_writer"], expected_d_writer)
 
 
 if __name__ == "__main__":

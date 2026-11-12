@@ -2445,6 +2445,7 @@ def report(
     *,
     caption_rules=None,
     compose: bool = False,
+    draft_all: bool = False,
     manifest_name: str = description_gate.CAPTION_MANIFEST_FILENAME,
     sidecars: bool = False,
     caption_config: str | None = None,
@@ -2487,38 +2488,6 @@ def report(
         else description_gate.load_caption_rules(project=project, config_path=caption_config)
     )
     eff_sidecars = bool(sidecars or meta.get("sidecars"))
-    raw_recs = description_gate.load_project_records(project) if not eff_sidecars else []
-    if not raw_recs:
-        sc_recs, sc_missing = description_gate.load_sidecar_import(out)
-        if sc_recs:
-            raw_recs = sc_recs
-            if sc_missing and not meta.get("images_without_sidecar"):
-                meta = {**meta, "images_without_sidecar": sc_missing}
-        elif eff_sidecars:
-            sc_scan = description_gate.scan_sidecar_project(project)
-            description_gate.save_sidecar_import(out, sc_scan, pool_detection=pool_state.pool_detection)
-            raw_recs = sc_scan["records"]
-            if sc_scan["images_without_sidecar"] and not meta.get("images_without_sidecar"):
-                meta = {**meta, "images_without_sidecar": sc_scan["images_without_sidecar"]}
-    if raw_recs:
-        desc_audit = description_gate.audit_records(raw_recs, token_counter=token_counter, caption_rules=eff_rules)
-    else:
-        synth = [
-            {
-                "id": it.record.get("id") or it.paths[0],
-                "asset_path": it.paths[0],
-                **({"_sidecar_file": it.record["sidecar_file"]} if it.record.get("sidecar_file") else {}),
-                **it.record,
-            }
-            for it in items
-            if it.record and it.record.get("recorded")
-        ]
-        desc_audit = description_gate.audit_records(synth, token_counter=token_counter, caption_rules=eff_rules)
-    desc_audit["pool_detection"] = pool_state.pool_detection
-    if meta.get("images_without_sidecar"):
-        desc_audit["images_without_sidecar"] = list(meta["images_without_sidecar"])
-    if drafter is not None:
-        description_gate.draft_flagged_records(project, desc_audit, drafter)
     dhashes = {p: it.dhash for it in items for p in it.paths if it.dhash}
     sib_vecs = _resolve_sibling_image_vecs(
         project,
@@ -2532,14 +2501,6 @@ def report(
         locked_pool_dirs=locked_pool_dirs,
         _pool_state=pool_state,
     )
-    rev_jsonl, rev_ws = description_gate.write_review_files(
-        project,
-        out,
-        desc_audit,
-        dhashes=dhashes,
-        image_vecs=sib_vecs,
-        pool_detection=pool_state.pool_detection,
-    )
     composed_manifest_path: str | None = None
     if compose:
         comp = description_gate.compose_captions(
@@ -2547,6 +2508,7 @@ def report(
             out,
             caption_rules=eff_rules,
             drafter=drafter,
+            draft_all=draft_all,
             dhashes=dhashes,
             image_vecs=sib_vecs,
             token_counter=token_counter,
@@ -2554,7 +2516,53 @@ def report(
             sidecars=eff_sidecars,
             pool_detection=pool_state.pool_detection,
         )
+        desc_audit = comp["audit"]
+        rev_jsonl = comp["review_jsonl_path"]
+        rev_ws = comp["worksheet_path"]
         composed_manifest_path = comp["manifest_path"]
+        if comp["images_without_sidecar"] and not meta.get("images_without_sidecar"):
+            meta = {**meta, "images_without_sidecar": comp["images_without_sidecar"]}
+    else:
+        raw_recs = description_gate.load_project_records(project) if not eff_sidecars else []
+        if not raw_recs:
+            sc_recs, sc_missing = description_gate.load_sidecar_import(out)
+            if sc_recs:
+                raw_recs = sc_recs
+                if sc_missing and not meta.get("images_without_sidecar"):
+                    meta = {**meta, "images_without_sidecar": sc_missing}
+            elif eff_sidecars:
+                sc_scan = description_gate.scan_sidecar_project(project)
+                description_gate.save_sidecar_import(out, sc_scan, pool_detection=pool_state.pool_detection)
+                raw_recs = sc_scan["records"]
+                if sc_scan["images_without_sidecar"] and not meta.get("images_without_sidecar"):
+                    meta = {**meta, "images_without_sidecar": sc_scan["images_without_sidecar"]}
+        if raw_recs:
+            desc_audit = description_gate.audit_records(raw_recs, token_counter=token_counter, caption_rules=eff_rules)
+        else:
+            synth = [
+                {
+                    "id": it.record.get("id") or it.paths[0],
+                    "asset_path": it.paths[0],
+                    **({"_sidecar_file": it.record["sidecar_file"]} if it.record.get("sidecar_file") else {}),
+                    **it.record,
+                }
+                for it in items
+                if it.record and it.record.get("recorded")
+            ]
+            desc_audit = description_gate.audit_records(synth, token_counter=token_counter, caption_rules=eff_rules)
+        desc_audit["pool_detection"] = pool_state.pool_detection
+        if meta.get("images_without_sidecar"):
+            desc_audit["images_without_sidecar"] = list(meta["images_without_sidecar"])
+        if drafter is not None:
+            description_gate.draft_flagged_records(project, desc_audit, drafter, draft_all=draft_all)
+        rev_jsonl, rev_ws = description_gate.write_review_files(
+            project,
+            out,
+            desc_audit,
+            dhashes=dhashes,
+            image_vecs=sib_vecs,
+            pool_detection=pool_state.pool_detection,
+        )
 
     L = [f"# Dataset desk: {os.path.basename(os.path.abspath(project))} ({meta['backend']})", "",
          f"{meta['files']} image files, {meta['unique']} unique by content, {meta['records']} records; "
@@ -3505,8 +3513,11 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
                          f"({', '.join(sorted(MULTIMODAL_POOL))}) once its counted run is done")
     ap.add_argument("--draft", default=None, nargs="?", const=registry.DEFAULT_DRAFTER,
                     choices=["none", "fake", "plain-sight", "florence2", "qwen3-vl"],
-                    help="report/compose: draft descriptions blind from image pixels (default drafter: plain-sight; "
-                         "also supports qwen3-vl, fake, none)")
+                    help="report/compose: draft flagged descriptions blind from image pixels into the review queue "
+                         "(default drafter: plain-sight; also supports qwen3-vl, fake, none)")
+    ap.add_argument("--all", dest="draft_all", action="store_true",
+                    help="compose/report: also draft unflagged records as side-by-side offers (draft_offer) without "
+                         "replacing human or sidecar text")
     ap.add_argument("--drafter-prompt", dest="drafter_prompt", default=None,
                     help="override the drafter prompt string (defaults to drafter_prompt in caption-rules.json)")
     ap.add_argument("--caption-config", dest="caption_config", default=None,
@@ -3847,6 +3858,7 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
             out,
             caption_rules=rules,
             drafter=drafter,
+            draft_all=a.draft_all,
             dhashes=dhashes,
             image_vecs=sib_vecs,
             token_counter=_token_counter() if a.count_tokens else None,
@@ -3960,7 +3972,11 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         eff_draft = (
             a.draft
             if a.draft is not None
-            else ((rules.drafter if (rules and rules.drafter is not None) else registry.DEFAULT_DRAFTER) if a.compose else "none")
+            else (
+                (rules.drafter if (rules and rules.drafter is not None) else registry.DEFAULT_DRAFTER)
+                if (a.compose or a.draft_all)
+                else "none"
+            )
         )
         if eff_draft not in ("fake", "none", "", None):
             lower_priority()
@@ -3976,7 +3992,7 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         print(report(project, out, items, img, txt, meta, cov,
                      images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool, drafter=drafter,
                      token_counter=_token_counter() if a.count_tokens else None,
-                     caption_rules=rules, compose=a.compose, manifest_name=a.manifest_name,
+                     caption_rules=rules, compose=a.compose, draft_all=a.draft_all, manifest_name=a.manifest_name,
                      sidecars=a.sidecars, caption_config=a.caption_config,
                      pool_manifest=a.pool_manifest, locked_pool_dirs=a.locked_pool_dirs,
                      _pool_state=pool_state))

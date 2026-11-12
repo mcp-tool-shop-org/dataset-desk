@@ -1513,18 +1513,32 @@ def audit_project(
     )
 
 
-def draft_flagged_records(project: str, audit: dict, drafter) -> dict:
-    """Ask plain-sight (Florence-2), Qwen3-VL, or a test drafter for a blind draft of each flagged record.
+def draft_flagged_records(
+    project: str,
+    audit: dict,
+    drafter,
+    *,
+    draft_all: bool = False,
+) -> dict:
+    """Ask plain-sight (Florence-2), Qwen3-VL, or a test drafter for a blind draft of flagged records.
 
     Passes ONLY the image file path to the drafter — never the generation prompt, `canon.subject`, or the current text.
-    Stores the prompt text, prompt SHA-256, and full raw output with each draft.
+    Stores the prompt text, prompt SHA-256, and full raw output with each draft. When `draft_all=True` (`--all`),
+    unflagged records are also drafted as side-by-side offers (`draft_offer` / `draft_offer_writer`) without touching
+    their caption text, `writers`, or `author_kind`.
     """
-    flagged = audit.get("flagged") or []
+    flagged = list(audit.get("flagged") or [])
+    offer_rows = (
+        [r for r in (audit.get("records") or []) if r.get("passed_model_free") and not r.get("seat_edit")]
+        if draft_all
+        else []
+    )
+    targets = flagged + offer_rows
     drafter_id = getattr(drafter, "drafter_id", getattr(drafter, "name", None))
     drafter_rev = getattr(drafter, "revision", None)
     d_prompt = getattr(drafter, "prompt", None)
     d_prompt_sha = prompt_sha256(d_prompt)
-    if not flagged:
+    if not targets:
         audit["drafter_id"] = drafter_id
         audit["drafter_revision"] = drafter_rev
         audit["drafter_prompt"] = d_prompt
@@ -1533,7 +1547,7 @@ def draft_flagged_records(project: str, audit: dict, drafter) -> dict:
 
     image_paths = [
         os.path.join(project, r["asset_path"]) if r.get("asset_path") else ""
-        for r in flagged
+        for r in targets
     ]
     drafts = drafter.draft(image_paths)
     # Re-read drafter_id and revision after lazy _ensure_model() inside draft()
@@ -1543,27 +1557,40 @@ def draft_flagged_records(project: str, audit: dict, drafter) -> dict:
     last_raw = getattr(drafter, "last_raw_outputs", None)
     d_writer = drafter_writer_id(drafter_id, drafter_rev, d_prompt)
 
-    for idx, (r, img_p, dtext) in enumerate(zip(flagged, image_paths, drafts, strict=True)):
+    for idx, (r, img_p, dtext) in enumerate(zip(targets, image_paths, drafts, strict=True)):
         clean = (dtext or "").strip()
         raw_out = (
             last_raw[idx]
             if (isinstance(last_raw, list) and idx < len(last_raw))
             else raw_map.get(img_p, dtext or "")
         )
-        r["draft"] = clean
-        r["florence2_draft"] = clean
-        r["author_kind"] = "captioner_assisted"
-        r["caption_stratum"] = "captioner_draft_unedited"
-        r["drafter_id"] = drafter_id
-        r["drafter_revision"] = drafter_rev
-        r["drafter_prompt"] = d_prompt
-        r["drafter_prompt_sha256"] = d_prompt_sha
-        r["drafter_raw_output"] = raw_out
-        r["drafter_writer"] = d_writer
-        existing_w = list(r.get("writers") or [])
-        if d_writer not in existing_w:
-            existing_w.append(d_writer)
-        r["writers"] = existing_w
+        if not r.get("passed_model_free"):
+            r["draft"] = clean
+            r["florence2_draft"] = clean
+            r["author_kind"] = "captioner_assisted"
+            r["caption_stratum"] = "captioner_draft_unedited"
+            r["drafter_id"] = drafter_id
+            r["drafter_revision"] = drafter_rev
+            r["drafter_prompt"] = d_prompt
+            r["drafter_prompt_sha256"] = d_prompt_sha
+            r["drafter_raw_output"] = raw_out
+            r["drafter_writer"] = d_writer
+            existing_w = list(r.get("writers") or [])
+            if d_writer not in existing_w:
+                existing_w.append(d_writer)
+            r["writers"] = existing_w
+        else:
+            r["draft_offer"] = clean
+            r["draft_offer_writer"] = d_writer
+            r["_offer_raw"] = {
+                "drafter_id": drafter_id,
+                "drafter_revision": drafter_rev,
+                "drafter_prompt": d_prompt,
+                "drafter_prompt_sha256": d_prompt_sha,
+                "drafter_writer": d_writer,
+                "raw_output": raw_out,
+                "draft": clean,
+            }
 
     audit["drafter_id"] = drafter_id
     audit["drafter_revision"] = drafter_rev
@@ -1580,14 +1607,12 @@ def write_drafter_raw(
     pool_detection: dict | None = None,
 ) -> str | None:
     """Persist per-image full raw drafter outputs under `<out_dir>/drafter-raw.jsonl` when present."""
-    drafted = [r for r in rows if r.get("drafter_id") and (r.get("drafter_raw_output") is not None or r.get("draft") or r.get("florence2_draft"))]
-    if not drafted:
-        return None
-    os.makedirs(out_dir, exist_ok=True)
-    raw_path = os.path.join(out_dir, DRAFTER_RAW_FILENAME)
-    with open(raw_path, "w", encoding="utf-8") as f:
-        for r in drafted:
-            row_doc: dict[str, Any] = {
+    raw_entries: list[dict] = []
+    for r in rows:
+        if r.get("drafter_id") and (
+            r.get("drafter_raw_output") is not None or r.get("draft") or r.get("florence2_draft")
+        ):
+            raw_entries.append({
                 "id": r["id"],
                 "asset_path": r.get("asset_path", ""),
                 "drafter_id": r.get("drafter_id"),
@@ -1601,7 +1626,26 @@ def write_drafter_raw(
                     else (r.get("draft") or r.get("florence2_draft") or "")
                 ),
                 "draft": r.get("draft") or r.get("florence2_draft") or "",
-            }
+            })
+        elif isinstance(r.get("_offer_raw"), dict):
+            off = r["_offer_raw"]
+            raw_entries.append({
+                "id": r["id"],
+                "asset_path": r.get("asset_path", ""),
+                "drafter_id": off.get("drafter_id"),
+                "drafter_revision": off.get("drafter_revision"),
+                "drafter_prompt": off.get("drafter_prompt"),
+                "drafter_prompt_sha256": off.get("drafter_prompt_sha256"),
+                "drafter_writer": off.get("drafter_writer"),
+                "raw_output": off.get("raw_output") if off.get("raw_output") is not None else (off.get("draft") or ""),
+                "draft": off.get("draft") or "",
+            })
+    if not raw_entries:
+        return None
+    os.makedirs(out_dir, exist_ok=True)
+    raw_path = os.path.join(out_dir, DRAFTER_RAW_FILENAME)
+    with open(raw_path, "w", encoding="utf-8") as f:
+        for row_doc in raw_entries:
             if pool_detection is not None:
                 row_doc["pool_detection"] = pool_detection
             f.write(json.dumps(row_doc, ensure_ascii=False) + "\n")
@@ -1770,6 +1814,8 @@ def write_review_files(
                 "drafter_writer": drafter_writer_val,
                 "draft": draft_val,
                 "florence2_draft": r.get("florence2_draft") or draft_val,
+                "draft_offer": r.get("draft_offer"),
+                "draft_offer_writer": r.get("draft_offer_writer"),
                 "seat_edit": seat_edit_val,
                 "seat_id": seat_id_val,
                 "writers": row_writers,
@@ -1788,7 +1834,7 @@ def write_review_files(
                 "duplicate_group_size": r["duplicate_group_size"],
                 "siglip2_tokens": r["siglip2_tokens"],
                 "stopwords_sha256": audit["stopwords_sha256"],
-                "current_text": r["text"] or r["judgment_explanation"],
+                "current_text": r.get("original_text") or r["text"] or r["judgment_explanation"],
                 "canon_subject": r["canon_subject"],
                 "prompt": r["prompt"],
             }
@@ -1834,17 +1880,49 @@ def write_review_files(
 
     human_rows = [r for r in audit["records"] if r["passed_model_free"]]
     if human_rows:
-        lines += [
-            "",
-            "## Existing descriptions passing model-free gate (`author_kind: human | sidecar`)",
-            "",
-            "| id | target image | gate_status | author_kind |",
-            "|---|---|---|---|",
-        ]
-        for r in human_rows:
-            lines.append(
-                f"| `{r['id']}` | {_fmt_link(r['asset_path'])} | `{r['gate_status']}` | `{r['author_kind']}` |"
-            )
+        if any(r.get("draft_offer") for r in human_rows):
+            lines += [
+                "",
+                "## Existing descriptions passing model-free gate "
+                "(`author_kind: human | sidecar`; `--all` offers beside originals)",
+                "",
+                "| id | target image | gate_status | author_kind | original text "
+                "| draft_offer | draft_offer_writer | edited text | seat_id |",
+                "|---|---|---|---|---|---|---|---|---|",
+            ]
+            for r in human_rows:
+                orig_clean = _escape_md_cell(
+                    r.get("original_text") or r.get("text") or r.get("judgment_explanation")
+                )
+                offer_clean = _escape_md_cell(r.get("draft_offer"))
+                offer_w_clean = (
+                    f"`{_escape_md_cell(r.get('draft_offer_writer'))}`"
+                    if r.get("draft_offer_writer")
+                    else ""
+                )
+                ed_entry = edits.get(str(r["id"]))
+                seat_edit_clean = _escape_md_cell(
+                    r.get("seat_edit") or (ed_entry["edited_text"] if ed_entry else "")
+                )
+                seat_id_clean = _escape_md_cell(
+                    r.get("seat_id") or (ed_entry["seat"] if ed_entry else "")
+                )
+                lines.append(
+                    f"| `{r['id']}` | {_fmt_link(r['asset_path'])} | `{r['gate_status']}` | `{r['author_kind']}` | "
+                    f"{orig_clean} | {offer_clean} | {offer_w_clean} | {seat_edit_clean} | {seat_id_clean} |"
+                )
+        else:
+            lines += [
+                "",
+                "## Existing descriptions passing model-free gate (`author_kind: human | sidecar`)",
+                "",
+                "| id | target image | gate_status | author_kind |",
+                "|---|---|---|---|",
+            ]
+            for r in human_rows:
+                lines.append(
+                    f"| `{r['id']}` | {_fmt_link(r['asset_path'])} | `{r['gate_status']}` | `{r['author_kind']}` |"
+                )
 
     missing_sc = list(audit.get("images_without_sidecar") or [])
     if missing_sc:
@@ -1955,6 +2033,7 @@ def import_worksheet_edits(
     header_cols: list[str] | None = None
     id_idx = -1
     draft_idx = -1
+    offer_writer_idx = -1
     edit_idx = -1
     seat_idx = -1
     imported_rows: list[dict] = []
@@ -1962,8 +2041,9 @@ def import_worksheet_edits(
     for line in raw_lines:
         s = line.strip()
         if not s.startswith("|"):
-            if header_cols is not None and s.startswith("## "):
-                break
+            if header_cols is not None:
+                header_cols = None
+                id_idx = draft_idx = offer_writer_idx = edit_idx = seat_idx = -1
             continue
         cells = _split_md_table_row(s)
         lower_cells = [c.lower() for c in cells]
@@ -1973,8 +2053,13 @@ def import_worksheet_edits(
                 id_idx = lower_cells.index("id")
                 edit_idx = lower_cells.index("edited text")
                 seat_idx = lower_cells.index("seat_id") if "seat_id" in lower_cells else -1
+                offer_writer_idx = (
+                    lower_cells.index("draft_offer_writer") if "draft_offer_writer" in lower_cells else -1
+                )
                 if "florence-2 draft" in lower_cells:
                     draft_idx = lower_cells.index("florence-2 draft")
+                elif "draft_offer" in lower_cells:
+                    draft_idx = lower_cells.index("draft_offer")
                 elif "draft" in lower_cells:
                     draft_idx = lower_cells.index("draft")
             continue
@@ -1997,13 +2082,20 @@ def import_worksheet_edits(
             raise DeskError("INPUT_BAD_ARGUMENT", f"invalid seat name {eff_seat!r} on row {rid!r}")
 
         ws_draft = cells[draft_idx].strip() if (draft_idx >= 0 and draft_idx < len(cells)) else ""
+        ws_offer_writer = (
+            cells[offer_writer_idx].strip().strip("`").strip()
+            if (offer_writer_idx >= 0 and offer_writer_idx < len(cells))
+            else ""
+        )
         rev_row = cached_rev.get(rid)
         raw_row = cached_raw.get(rid)
         prev_ed = merged.get(rid)
-        rev_draft_writer: str | None = None
-        if rev_row:
+        rev_draft_writer: str | None = ws_offer_writer or None
+        if not rev_draft_writer and rev_row:
             if rev_row.get("drafter_writer"):
                 rev_draft_writer = str(rev_row["drafter_writer"])
+            elif rev_row.get("draft_offer_writer"):
+                rev_draft_writer = str(rev_row["draft_offer_writer"])
             elif rev_row.get("drafter_id"):
                 rev_draft_writer = drafter_writer_id(
                     str(rev_row["drafter_id"]),
@@ -2030,8 +2122,12 @@ def import_worksheet_edits(
                 or header_drafter_writer
                 or drafter_writer_id("worksheet", "unknown", None)
             )
-        elif draft_idx < 0 and rev_row and (rev_row.get("draft") or rev_row.get("florence2_draft")):
-            seen_draft_text = (rev_row.get("draft") or rev_row.get("florence2_draft") or "").strip() or None
+        elif draft_idx < 0 and rev_row and (
+            rev_row.get("draft") or rev_row.get("florence2_draft") or rev_row.get("draft_offer")
+        ):
+            seen_draft_text = (
+                rev_row.get("draft") or rev_row.get("florence2_draft") or rev_row.get("draft_offer") or ""
+            ).strip() or None
             seen_draft_writer = rev_draft_writer
 
         imported_rows.append({
@@ -2068,7 +2164,9 @@ def import_worksheet_edits(
             if ed is not None:
                 r["seat_edit"] = ed["edited_text"]
                 r["seat_id"] = ed["seat"]
-                has_draft = bool(r.get("drafter_id") or ed.get("draft_writer") or ed.get("draft_text"))
+                has_draft = bool(
+                    r.get("drafter_id") or r.get("draft_offer_writer") or ed.get("draft_writer") or ed.get("draft_text")
+                )
                 r["author_kind"] = "captioner_assisted" if has_draft else "human"
                 if ed.get("draft_text") and not (r.get("draft") or r.get("florence2_draft")):
                     r["draft"] = ed["draft_text"]
@@ -2081,8 +2179,6 @@ def import_worksheet_edits(
                 if not existing_writers or existing_writers[-1] != ed["writer"]:
                     existing_writers.append(ed["writer"])
                 r["writers"] = existing_writers
-            elif r.get("drafter_id") and not r.get("seat_edit"):
-                r["author_kind"] = "captioner_draft_unedited"
         with open(rev_path, "w", encoding="utf-8") as f:
             for r in updated_rev:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
@@ -2157,6 +2253,7 @@ def compose_captions(
     *,
     caption_rules: CaptionRules | dict | str | None = None,
     drafter=None,
+    draft_all: bool = False,
     seat_edits: dict[str, dict] | None = None,
     dhashes: dict[str, str] | None = None,
     image_vecs: dict[str, Any] | None = None,
@@ -2171,11 +2268,16 @@ def compose_captions(
     1. `prefix` verbatim from project config (`config:<file>:<line>`);
     2. `class` required terms verbatim from project config (`config:<file>:<line>`);
     3. optional `backdrop` slot (`record:<file>`, `sidecar:<file>`, or `config:<file>:<line>`);
-    4. free visible-content part from `seat:<name>` edit if one exists, else `drafter:<id>@<rev>:<prompt sha>`, else
-       the existing approved record/sidecar description (`record:<file>` or `sidecar:<file>`).
+    4. free visible-content part from an imported `seat:<name>` edit if one exists, else the existing approved
+       record/sidecar description (`record:<file>` or `sidecar:<file>`).
 
-    Edited drafter captions carry `author_kind: "captioner_assisted"`; unedited drafter captions carry
-    `author_kind: "captioner_draft_unedited"`.
+    Drafting rules:
+    - By default (`draft_all=False`), `compose` drafts ONLY records flagged by the model-free gate; unflagged records
+      keep their text, `writers`, and `author_kind` untouched.
+    - Flagged records' drafts go to the review queue (`description-review.jsonl` and `description-worksheet.md`),
+      never straight into the training caption until a seat edit is imported.
+    - With `draft_all=True` (`--all`), unflagged records are also drafted, and the draft is written beside the
+      original solely as `draft_offer` (with `draft_offer_writer`); human and sidecar text is never replaced.
     """
     _ensure_out_outside_project(project, out_dir)
     rules = (
@@ -2190,7 +2292,11 @@ def compose_captions(
         )
     from . import desk
 
-    eff_pd = pool_detection if pool_detection is not None else desk.check_multimodal_pool(project, "none", images_only=True)
+    eff_pd = (
+        pool_detection
+        if pool_detection is not None
+        else desk.check_multimodal_pool(project, "none", images_only=True)
+    )
 
     raw_recs = load_project_records(project) if not sidecars else []
     missing_sidecars: list[str] = []
@@ -2215,14 +2321,101 @@ def compose_captions(
         edits_map.update(seat_edits)
     cached_rev = _load_cached_review_rows(out_dir)
 
+    seen_img_names: set[str] = set()
+    seen_stems: set[str] = set()
+    prep_by_id: dict[str, dict[str, Any]] = {}
+    existing_composed_by_id: dict[str, str] = {}
+
+    for e in extracted:
+        rid = str(e["id"])
+        asset_path = e["asset_path"]
+        img_abs = os.path.join(project, asset_path) if asset_path else ""
+        if not asset_path or not os.path.isfile(img_abs):
+            raise DeskError("INPUT_BAD_ARGUMENT", f"record {rid!r} missing image file: {asset_path!r}")
+        img_name = os.path.basename(asset_path)
+        stem, suffix = os.path.splitext(img_name)
+        if not _SAFE_IMAGE_NAME_RE.match(img_name) or not suffix or suffix.lower() == ".txt":
+            raise DeskError("INPUT_BAD_ARGUMENT", f"record {rid!r} has invalid image filename {img_name!r}")
+        if img_name in seen_img_names or stem in seen_stems:
+            raise DeskError("INPUT_BAD_ARGUMENT", f"duplicate image filename or caption stem {img_name!r}")
+        seen_img_names.add(img_name)
+        seen_stems.add(stem)
+        img_sha = _sha256_file(img_abs)
+
+        leading_parts: list[dict] = []
+        leading_texts: list[str] = []
+
+        # 1. Required prefix verbatim from config
+        leading_parts.append({
+            "part": "prefix",
+            "text": rules.prefix,
+            "writer": f"config:{rules.config_label}:{rules.prefix_line}",
+        })
+        leading_texts.append(rules.prefix)
+
+        # 2. Per-class required terms verbatim from config
+        rec_class = rules.resolve_class(e["raw_record"], asset_path)
+        for req_term, term_line in rules.required_terms_for_class(rec_class):
+            leading_parts.append({
+                "part": "class",
+                "text": req_term,
+                "writer": f"config:{rules.config_label}:{term_line}",
+            })
+            leading_texts.append(req_term)
+
+        # 3. Optional backdrop slot
+        b_text, b_writer = rules.resolve_backdrop(
+            e["raw_record"], e["record_file"], record_writer=e["record_writer"]
+        )
+        if b_text and b_writer:
+            leading_parts.append({
+                "part": "backdrop",
+                "text": b_text,
+                "writer": b_writer,
+            })
+            leading_texts.append(b_text)
+
+        existing_free = _strip_leading_segments(e["text"], leading_texts)
+        existing_parts_texts = [p["text"] for p in leading_parts] + ([existing_free] if existing_free else [])
+        existing_composed_by_id[rid] = _join_caption_parts(existing_parts_texts)
+        prep_by_id[rid] = {
+            "img_abs": img_abs,
+            "img_name": img_name,
+            "img_sha": img_sha,
+            "leading_parts": leading_parts,
+            "leading_texts": leading_texts,
+            "existing_free": existing_free,
+        }
+
+    # Pre-composition model-free gate evaluation on existing record/sidecar text and rules
+    base_audit = audit_records(raw_recs, token_counter=token_counter, caption_rules=None)
+    base_rows_by_id = {str(r["id"]): r for r in base_audit["records"]}
+    existing_comp_audit = audit_records(
+        raw_recs,
+        queries=existing_composed_by_id,
+        token_counter=token_counter,
+        caption_rules=rules,
+        allow_composed_source=True,
+    )
+    existing_comp_rows_by_id = {str(r["id"]): r for r in existing_comp_audit["records"]}
+    flagged_ids = {
+        str(e["id"])
+        for e in extracted
+        if (
+            not base_rows_by_id[str(e["id"])]["passed_model_free"]
+            or not existing_comp_rows_by_id[str(e["id"])]["passed_model_free"]
+        )
+    }
+
     live_drafts: dict[str, dict] = {}
     if drafter is not None:
-        todo_entries = [e for e in extracted if str(e["id"]) not in edits_map]
+        todo_entries = [
+            e
+            for e in extracted
+            if str(e["id"]) not in edits_map and (draft_all or str(e["id"]) in flagged_ids)
+        ]
         if todo_entries:
-            todo_paths = [os.path.join(project, e["asset_path"]) for e in todo_entries]
-            for e, p in zip(todo_entries, todo_paths, strict=True):
-                if not e["asset_path"] or not os.path.isfile(p):
-                    raise DeskError("INPUT_BAD_ARGUMENT", f"record {e['id']!r} missing image file: {e['asset_path']!r}")
+            todo_paths = [prep_by_id[str(e["id"])]["img_abs"] for e in todo_entries]
             draft_texts = drafter.draft(todo_paths)
             d_id = getattr(drafter, "drafter_id", getattr(drafter, "name", "plain-sight"))
             d_rev = getattr(drafter, "revision", "unknown")
@@ -2247,8 +2440,6 @@ def compose_captions(
                     "drafter_writer": d_writer,
                 }
 
-    seen_img_names: set[str] = set()
-    seen_stems: set[str] = set()
     composed_by_id: dict[str, str] = {}
     meta_by_id: dict[str, dict] = {}
     manifest_items: list[dict] = []
@@ -2256,71 +2447,35 @@ def compose_captions(
     for e in extracted:
         rid = str(e["id"])
         asset_path = e["asset_path"]
-        img_abs = os.path.join(project, asset_path) if asset_path else ""
-        if not asset_path or not os.path.isfile(img_abs):
-            raise DeskError("INPUT_BAD_ARGUMENT", f"record {rid!r} missing image file: {asset_path!r}")
-        img_name = os.path.basename(asset_path)
-        stem, suffix = os.path.splitext(img_name)
-        if not _SAFE_IMAGE_NAME_RE.match(img_name) or not suffix or suffix.lower() == ".txt":
-            raise DeskError("INPUT_BAD_ARGUMENT", f"record {rid!r} has invalid image filename {img_name!r}")
-        if img_name in seen_img_names or stem in seen_stems:
-            raise DeskError("INPUT_BAD_ARGUMENT", f"duplicate image filename or caption stem {img_name!r}")
-        seen_img_names.add(img_name)
-        seen_stems.add(stem)
-        img_sha = _sha256_file(img_abs)
+        prep = prep_by_id[rid]
+        img_name = prep["img_name"]
+        img_sha = prep["img_sha"]
+        parts = [dict(p) for p in prep["leading_parts"]]
+        leading_texts = prep["leading_texts"]
 
-        parts: list[dict] = []
-        leading_texts: list[str] = []
-
-        # 1. Required prefix verbatim from config
-        parts.append({
-            "part": "prefix",
-            "text": rules.prefix,
-            "writer": f"config:{rules.config_label}:{rules.prefix_line}",
-        })
-        leading_texts.append(rules.prefix)
-
-        # 2. Per-class required terms verbatim from config
-        rec_class = rules.resolve_class(e["raw_record"], asset_path)
-        for req_term, term_line in rules.required_terms_for_class(rec_class):
-            parts.append({
-                "part": "class",
-                "text": req_term,
-                "writer": f"config:{rules.config_label}:{term_line}",
-            })
-            leading_texts.append(req_term)
-
-        # 3. Optional backdrop slot
-        b_text, b_writer = rules.resolve_backdrop(
-            e["raw_record"], e["record_file"], record_writer=e["record_writer"]
-        )
-        if b_text and b_writer:
-            parts.append({
-                "part": "backdrop",
-                "text": b_text,
-                "writer": b_writer,
-            })
-            leading_texts.append(b_text)
-
-        # 4. Free visible-content part: seat edit > drafter > existing record/sidecar
         ed = edits_map.get(rid)
-        d_info = live_drafts.get(rid)
-        if d_info is None:
-            c_row = cached_rev.get(rid)
-            if c_row and c_row.get("drafter_id") and (c_row.get("draft") or c_row.get("florence2_draft")):
-                c_prompt = c_row.get("drafter_prompt")
-                c_id = str(c_row["drafter_id"])
-                c_rev = str(c_row.get("drafter_revision") or "unknown")
-                d_info = {
-                    "draft": (c_row.get("draft") or c_row.get("florence2_draft") or "").strip(),
-                    "drafter_id": c_id,
-                    "drafter_revision": c_rev,
-                    "drafter_prompt": c_prompt,
-                    "drafter_prompt_sha256": c_row.get("drafter_prompt_sha256") or prompt_sha256(c_prompt),
-                    "drafter_raw_output": c_row.get("drafter_raw_output"),
-                    "drafter_writer": c_row.get("drafter_writer") or drafter_writer_id(c_id, c_rev, c_prompt),
-                }
+        c_row = cached_rev.get(rid)
+        live_di = live_drafts.get(rid)
+        cached_flagged_di: dict[str, Any] | None = None
+        if c_row and c_row.get("drafter_id") and (c_row.get("draft") or c_row.get("florence2_draft")):
+            c_prompt = c_row.get("drafter_prompt")
+            c_id = str(c_row["drafter_id"])
+            c_rev = str(c_row.get("drafter_revision") or "unknown")
+            cached_flagged_di = {
+                "draft": (c_row.get("draft") or c_row.get("florence2_draft") or "").strip(),
+                "drafter_id": c_id,
+                "drafter_revision": c_rev,
+                "drafter_prompt": c_prompt,
+                "drafter_prompt_sha256": c_row.get("drafter_prompt_sha256") or prompt_sha256(c_prompt),
+                "drafter_raw_output": c_row.get("drafter_raw_output"),
+                "drafter_writer": c_row.get("drafter_writer") or drafter_writer_id(c_id, c_rev, c_prompt),
+            }
 
+        review_draft_info: dict[str, Any] | None = None
+        offer_info: dict[str, Any] | None = None
+        item_drafter_writer: str | None = None
+
+        # 4. Free visible-content part: imported seat edit > untouched record/sidecar text (never unedited draft)
         if ed is not None:
             free_clean = _strip_leading_segments(ed["edited_text"], leading_texts)
             seat_writer = f"seat:{ed['seat']}"
@@ -2329,8 +2484,17 @@ def compose_captions(
                 "text": free_clean,
                 "writer": seat_writer,
             }
-            eff_draft_writer = (d_info["drafter_writer"] if d_info is not None else None) or ed.get("draft_writer")
-            eff_draft_text = (d_info["draft"] if d_info is not None else None) or ed.get("draft_text")
+            seen_di = live_di or cached_flagged_di
+            eff_draft_writer = (
+                (seen_di["drafter_writer"] if seen_di is not None else None)
+                or ed.get("draft_writer")
+                or (str(c_row["draft_offer_writer"]) if (c_row and c_row.get("draft_offer_writer")) else None)
+            )
+            eff_draft_text = (
+                (seen_di["draft"] if seen_di is not None else None)
+                or ed.get("draft_text")
+                or (str(c_row["draft_offer"]) if (c_row and c_row.get("draft_offer")) else None)
+            )
             if eff_draft_writer or eff_draft_text:
                 if eff_draft_writer:
                     free_part["draft_writer"] = eff_draft_writer
@@ -2338,16 +2502,10 @@ def compose_captions(
             else:
                 stratum = "human"
             parts.append(free_part)
-        elif d_info is not None:
-            free_clean = _strip_leading_segments(d_info["draft"], leading_texts)
-            parts.append({
-                "part": "free",
-                "text": free_clean,
-                "writer": d_info["drafter_writer"],
-            })
-            stratum = "captioner_draft_unedited"
+            item_drafter_writer = eff_draft_writer
+            review_draft_info = seen_di
         else:
-            free_clean = _strip_leading_segments(e["text"], leading_texts)
+            free_clean = prep["existing_free"]
             if free_clean:
                 parts.append({
                     "part": "free",
@@ -2356,9 +2514,9 @@ def compose_captions(
                 })
             is_sidecar = bool(e.get("sidecar_file"))
             valid_composed_strata: tuple[str, ...] = (
-                ("sidecar", "captioner_assisted", "captioner_draft_unedited")
+                ("sidecar", "captioner_assisted")
                 if is_sidecar
-                else KNOWN_AUTHOR_STRATA
+                else ("human", "captioner_assisted")
             )
             default_composed_stratum = "sidecar" if is_sidecar else "human"
             stratum = (
@@ -2366,24 +2524,40 @@ def compose_captions(
                 if e["existing_author_kind"] in valid_composed_strata
                 else default_composed_stratum
             )
+            if rid in flagged_ids:
+                review_draft_info = live_di or cached_flagged_di
+            else:
+                if live_di is not None:
+                    offer_info = live_di
+                elif draft_all and c_row and c_row.get("draft_offer"):
+                    offer_info = {
+                        "draft": str(c_row["draft_offer"]).strip(),
+                        "drafter_id": None,
+                        "drafter_revision": None,
+                        "drafter_prompt": None,
+                        "drafter_prompt_sha256": None,
+                        "drafter_raw_output": None,
+                        "drafter_writer": c_row.get("draft_offer_writer"),
+                    }
 
         final_caption = _join_caption_parts([p["text"] for p in parts])
         writers = [str(p["writer"]) for p in parts]
-        item_drafter_writer = (
-            d_info["drafter_writer"]
-            if d_info is not None
-            else (ed.get("draft_writer") if ed is not None else None)
-        )
         composed_by_id[rid] = final_caption
         meta_by_id[rid] = {
             "author_kind": stratum,
             "source": e["record_writer"],
+            "original_text": e["text"],
             "writers": writers,
             "parts": parts,
             "final_caption": final_caption,
-            "draft_info": d_info,
+            "draft_info": review_draft_info,
+            "offer_info": offer_info,
             "drafter_writer": item_drafter_writer,
-            "draft_text": d_info["draft"] if d_info is not None else (ed.get("draft_text") if ed is not None else None),
+            "draft_text": (
+                review_draft_info["draft"]
+                if review_draft_info is not None
+                else (ed.get("draft_text") if ed is not None else None)
+            ),
             "seat_edit": ed["edited_text"] if ed else None,
             "seat_id": ed["seat"] if ed else None,
         }
@@ -2410,7 +2584,14 @@ def compose_captions(
     audit["pool_detection"] = eff_pd
     if missing_sidecars:
         audit["images_without_sidecar"] = list(missing_sidecars)
-    first_d_info = next((m["draft_info"] for m in meta_by_id.values() if m["draft_info"] is not None), None)
+    first_d_info = next(
+        (
+            m["draft_info"] or (m["offer_info"] if (m["offer_info"] and m["offer_info"].get("drafter_id")) else None)
+            for m in meta_by_id.values()
+            if (m["draft_info"] is not None or (m["offer_info"] and m["offer_info"].get("drafter_id")))
+        ),
+        None,
+    )
     if first_d_info is not None:
         audit["drafter_id"] = first_d_info["drafter_id"]
         audit["drafter_revision"] = first_d_info["drafter_revision"]
@@ -2418,16 +2599,37 @@ def compose_captions(
         audit["drafter_prompt_sha256"] = first_d_info["drafter_prompt_sha256"]
 
     for r in audit["records"]:
-        m = meta_by_id.get(str(r["id"]))
+        rid_str = str(r["id"])
+        m = meta_by_id.get(rid_str)
         if m is None:
             continue
+        # Preserve intrinsic model-free flags from the unedited record when no seat edit has been imported yet
+        if rid_str not in edits_map and rid_str in flagged_ids:
+            base_r = base_rows_by_id.get(rid_str)
+            if base_r and base_r["flags"]:
+                merged_flags = list(r["flags"])
+                merged_reasons = list(r["reasons"])
+                for flg in base_r["flags"]:
+                    if flg not in merged_flags:
+                        merged_flags.append(flg)
+                for rsn in base_r["reasons"]:
+                    if rsn not in merged_reasons:
+                        merged_reasons.append(rsn)
+                r["flags"] = merged_flags
+                r["reasons"] = merged_reasons
+                r["passed_model_free"] = len(merged_flags) == 0
+                r["gate_status"] = "failed" if merged_flags else r["gate_status"]
+                r["passed"] = r["gate_status"] == "passed"
+
+        r["original_text"] = m["original_text"]
         r["author_kind"] = m["author_kind"]
-        r["writers"] = m["writers"]
+        r["writers"] = list(m["writers"])
         r["parts"] = m["parts"]
         r["final_caption"] = m["final_caption"]
         r["seat_edit"] = m["seat_edit"]
         r["seat_id"] = m["seat_id"]
         di = m["draft_info"]
+        off = m["offer_info"]
         if di is not None:
             r["draft"] = di["draft"]
             r["florence2_draft"] = di["draft"]
@@ -2437,13 +2639,40 @@ def compose_captions(
             r["drafter_prompt_sha256"] = di["drafter_prompt_sha256"]
             r["drafter_raw_output"] = di["drafter_raw_output"]
             r["drafter_writer"] = di["drafter_writer"]
+            if rid_str not in edits_map and rid_str in flagged_ids:
+                r["author_kind"] = "captioner_assisted"
+                if di["drafter_writer"] and di["drafter_writer"] not in r["writers"]:
+                    r["writers"].append(str(di["drafter_writer"]))
         else:
             if m["draft_text"]:
                 r["draft"] = m["draft_text"]
                 r["florence2_draft"] = m["draft_text"]
             if m["drafter_writer"]:
                 r["drafter_writer"] = m["drafter_writer"]
+        if off is not None:
+            r["draft_offer"] = off["draft"]
+            r["draft_offer_writer"] = off["drafter_writer"]
+            if off.get("drafter_id"):
+                r["_offer_raw"] = {
+                    "drafter_id": off["drafter_id"],
+                    "drafter_revision": off["drafter_revision"],
+                    "drafter_prompt": off["drafter_prompt"],
+                    "drafter_prompt_sha256": off["drafter_prompt_sha256"],
+                    "drafter_writer": off["drafter_writer"],
+                    "raw_output": off["drafter_raw_output"],
+                    "draft": off["draft"],
+                }
+
+    audit["flagged"] = [r for r in audit["records"] if r["gate_status"] == "failed"]
+    audit["queue"] = audit["flagged"]
+    audit["flagged_count"] = len(audit["flagged"])
+    audit["passed_model_free_count"] = sum(1 for r in audit["records"] if r["passed_model_free"])
+    audit["passed_count"] = sum(1 for r in audit["records"] if r["passed"])
+    audit["unchecked_count"] = sum(1 for r in audit["records"] if r["gate_status"] == "unchecked")
+    audit["passed_gate"] = len(audit["records"]) > 0 and audit["passed_count"] == len(audit["records"])
+    audit["passed_model_free_gate"] = len(audit["records"]) > 0 and audit["flagged_count"] == 0
     audit["strata_counts"] = _count_strata(audit["records"])
+    manifest_strata_counts = _count_strata(manifest_items)
 
     rev_jsonl, rev_ws = write_review_files(
         project,
@@ -2459,7 +2688,7 @@ def compose_captions(
     manifest_path = os.path.join(out_dir, manifest_name)
     manifest_doc = {
         "pool_detection": eff_pd,
-        "strata_counts": audit["strata_counts"],
+        "strata_counts": manifest_strata_counts,
         "items": manifest_items,
     }
     with open(manifest_path, "w", encoding="utf-8", newline="\n") as f:
@@ -2472,7 +2701,7 @@ def compose_captions(
         "review_jsonl_path": rev_jsonl,
         "worksheet_path": rev_ws,
         "items": manifest_items,
-        "strata_counts": audit["strata_counts"],
+        "strata_counts": manifest_strata_counts,
         "images_without_sidecar": missing_sidecars,
         "pool_detection": eff_pd,
         "audit": audit,
