@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import shutil
 import tarfile
 import tempfile
@@ -34,7 +35,7 @@ DESK_DRAFT_HELPER_PY = COLAB_DIR / "desk_draft_helper.py"
 DESK_LOCK_FILE = COLAB_DIR / "locks" / "desk_draft.lock"
 
 EXPECTED_SDLAB_COMMIT = "df9a1b3be2f8729a57776253e9b0cb32b7f5299c"
-EXPECTED_COLAB_WINDOW_SHA = "db761fb414da915c8835bad8ef1544992e39aa5b3d636a1d81d17d231f26e974"
+EXPECTED_COLAB_WINDOW_SHA = "3ad4cfb34de3d559f66976a8a2a5e73509b48a9b1be37ebf8bf82644cbaa8267"
 EXPECTED_LAUNCH_GUARDS_SHA = "4c0c0ab6410eaa511a808d00f09a09d42d5d5b7d0504d85d58cfe3c65baeb085"
 EXPECTED_REMOTE_RUNNER_SHA = "393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 
@@ -429,8 +430,8 @@ class RigPreflightAndDryRunTests(ColabTempTestCase):
             "STUB_CARD_MISMATCH",
         )
         self._assert_rig_refused_before_colab(
-            [*self._base_gpu_args(proj, cap_cfg, self.tmp_path / "o_l4std"), "--shape", "standard"],
-            "SHAPE_STANDARD_UNAVAILABLE",
+            [*self._base_gpu_args(proj, cap_cfg, self.tmp_path / "o_l4hm"), "--shape", "high-mem"],
+            "SHAPE_HIGH_MEM_UNAVAILABLE",
         )
 
         # --out must be on E:, empty, and outside --project
@@ -667,7 +668,7 @@ class SessionOpenAndVmRefusalTests(ColabTempTestCase):
         self.assertEqual([c["subcmd"] for c in env_503.colab_calls()].count("new"), 1)
 
         # Post-open shape mismatch -> SHAPE_MISMATCH
-        env_shp, out_shp, rc_shp, win_shp = self._run_gpu("shape_mm", config={"session_shape_override": "Standard"})
+        env_shp, out_shp, rc_shp, win_shp = self._run_gpu("shape_mm", config={"session_shape_override": "High-RAM"})
         self._assert_vm_failure_record_and_cleanup(env_shp, out_shp, rc_shp, win_shp, "SHAPE_MISMATCH")
 
     def test_vm_pre_download_guards_gpu_vram_disk_ram_and_drive_mount(self) -> None:
@@ -1690,6 +1691,303 @@ class FixTurn1PrivacyAndBoundsTests(ColabTempTestCase):
             with self.assertRaises(helper.RefusalError) as ctx:
                 helper.cmd_extract_and_verify_outputs(ns)
             self.assertEqual(ctx.exception.code, "PRIVATE_IMAGE_IN_BUNDLE")
+
+
+class PreL4HardeningTests(ColabTempTestCase):
+    """Five fixes made before the first real L4 window (private training images go to a Colab VM)."""
+
+    FORBIDDEN_RIG_PATH_PATTERNS = (
+        re.compile(r"/home/[A-Za-z0-9_.-]+"),
+        re.compile(r"/mnt/[A-Za-z]/Users"),
+        re.compile(r"[A-Za-z]:[\\/]+Users", re.IGNORECASE),
+        re.compile(r"/Users/[A-Za-z0-9_.-]+"),
+        re.compile(r"\.config/dataset-desk"),
+    )
+
+    def _gpu_args(self, proj: pathlib.Path, cap_cfg: pathlib.Path, out_dir: pathlib.Path, *extra: str) -> list[str]:
+        return [
+            "--project", str(proj), "--caption-config", str(cap_cfg), "--out", str(out_dir),
+            "--card", "L4", "--cap", "5.0", "--wall-s", "300", "--margin", "0.5", *extra,
+        ]
+
+    def _stub_args(self, proj: pathlib.Path, cap_cfg: pathlib.Path, out_dir: pathlib.Path) -> list[str]:
+        return [
+            "--project", str(proj), "--caption-config", str(cap_cfg), "--out", str(out_dir), "--stub",
+            "--card", "CPU-high-mem", "--cap", "5.0", "--wall-s", "300", "--margin", "0.5",
+        ]
+
+    def _assert_no_rig_paths(self, out_dir: pathlib.Path, label: str) -> int:
+        scanned = 0
+        for f in sorted(out_dir.rglob("*")):
+            if not f.is_file() or f.name.endswith((".tar", ".gz", ".whl", ".safetensors", ".png")):
+                continue
+            raw = f.read_bytes()
+            if b"\x00" in raw:
+                continue
+            text = raw.decode("utf-8", errors="replace")
+            for pat in self.FORBIDDEN_RIG_PATH_PATTERNS:
+                m = pat.search(text)
+                self.assertIsNone(m, msg=f"{label}: {f.relative_to(out_dir)} names a rig path {m and m.group(0)!r}")
+            scanned += 1
+        return scanned
+
+    # ---- fix 1: kill only our own descendants (launch_desk_draft.sh desk_kill_tracked_children) ----
+
+    @unittest.skipUnless(os.name == "posix", "needs /proc")
+    def test_tracked_pid_kill_spares_unrelated_process_and_kills_own_descendants(self) -> None:
+        import subprocess
+
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        starts = [text.index(m) for m in ("desk_pid_stat_fields() {", "desk_kill_tracked_children() {") if m in text]
+        funcs = text[min(starts) : text.index("cleanup_on_exit() {")]
+        outd = self.tmp_path / "kill_out"
+        outd.mkdir()
+        unrelated = subprocess.Popen(["sleep", "300"], start_new_session=True)
+        self.addCleanup(unrelated.wait)
+        self.addCleanup(unrelated.kill)
+        driver = (
+            "set -u\n"
+            + funcs
+            + f'OUT_DIR="{outd}"\n'
+            + "sleep 300 & CHILD=$!\n"
+            + "bash -c 'sleep 300 & echo $! > \"$0\"; wait' \"${OUT_DIR}/grandchild.pid\" & MID=$!\n"
+            + 'for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "${OUT_DIR}/grandchild.pid" ] && break; sleep 0.1; done\n'
+            + 'GC="$(cat "${OUT_DIR}/grandchild.pid")"\n'
+            + f'printf "%s\\n%s\\n%s\\n999999\\n" "${{CHILD}}" "${{MID}}" "{unrelated.pid}" > "${{OUT_DIR}}/.watcher_tracked_pids.txt"\n'
+            + 'printf "%s\\n" "${GC}" >> "${OUT_DIR}/.watcher_tracked_pids.txt"\n'
+            + "desk_kill_tracked_children\n"
+            + "sleep 0.5\n"
+            + 'for p in "${CHILD}" "${MID}" "${GC}"; do kill -0 "${p}" 2>/dev/null && echo "alive:${p}" || echo "dead:${p}"; done\n'
+        )
+        res = subprocess.run(["bash", "-c", driver], capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertIsNone(unrelated.poll(), msg="an unrelated process holding a tracked PID was killed")
+        self.assertEqual(sum(1 for ln in res.stdout.splitlines() if ln.startswith("dead:")), 3, msg=res.stdout)
+
+    # ---- fix 2: no absolute rig paths in any kept file ----
+
+    def test_no_rig_paths_in_any_kept_file_on_every_exit_path(self) -> None:
+        home_root = self.tmp_path / "home" / "mikey"
+        studio_cfg = "/home/mikey/.config/dataset-desk/config.json"
+        proj, cap_cfg = fake_colab_desk.make_synthetic_project(home_root / "src", flagged_count=2, unflagged_count=1)
+        total = 0
+
+        # (a) pool-config failure at preflight (guards.log + helper refusal)
+        env = self.make_env("rp_pool")
+        out_a = home_root / "out_pool"
+        res = env.run_launch(
+            self._gpu_args(proj, cap_cfg, out_a),
+            extra_env={"DATASET_DESK_USER_CONFIG": studio_cfg, "DESK_TEST_ISOLATE_USER_CONFIG": "0"},
+        )
+        self.assertEqual(res.returncode, 2, msg=res.stderr)
+        self.assertIn("user config file", (out_a / "guards.log").read_text(encoding="utf-8"))
+        total += self._assert_no_rig_paths(out_a, "pool-config failure")
+
+        # (b) upload failure (colab_window.sh UPLOAD_FAILED -> guards.log + window.json refusal why)
+        env = self.make_env("rp_up", config={"upload_fail_always": True})
+        out_b = home_root / "out_upload"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_b))
+        self.assertNotEqual(res.returncode, 0)
+        self.assertEqual(json.loads((out_b / "window.json").read_text(encoding="utf-8"))["refusal_code"], "UPLOAD_FAILED")
+        total += self._assert_no_rig_paths(out_b, "upload failure")
+
+        # (c) dry run and (d) full stub run
+        env = self.make_env("rp_dry")
+        out_c = home_root / "out_dry"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_c, "--dry"))
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        total += self._assert_no_rig_paths(out_c, "dry run")
+
+        env = self.make_env("rp_stub")
+        out_d = home_root / "out_stub"
+        res = env.run_launch(self._stub_args(proj, cap_cfg, out_d))
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        total += self._assert_no_rig_paths(out_d, "stub run")
+        self.assertGreater(total, 20)
+
+    def test_scrub_rig_paths_unit(self) -> None:
+        helper = _load_module("desk_draft_helper_scrub_test", DESK_DRAFT_HELPER_PY)
+        cases = {
+            "/home/mikey/x/y": "<rig>/x/y",
+            "C:\\Users\\mikey\\a": "<rig>\\a",
+            "C:\\\\Users\\\\mikey\\\\a": "<rig>\\\\a",
+            "C:/Users/mikey/a": "<rig>/a",
+            "/mnt/c/Users/mikey/z": "<rig>/z",
+            "/mnt/e/AI/x": "<rig>/AI/x",
+            "https://example.test/a": "https://example.test/a",
+        }
+        for raw, want in cases.items():
+            self.assertEqual(helper.scrub_rig_paths(raw), want)
+        self.assertEqual(helper.scrub_rig_paths("/tmp/o/guards.log", [("/tmp/o", "<out>")]), "<out>/guards.log")
+
+    # ---- fix 3: rejected/ never uploads; every uploaded asset is an image ----
+
+    def _sidecar_project(self, name: str) -> pathlib.Path:
+        from PIL import Image
+
+        proj = self.tmp_path / name
+        (proj / "rejected").mkdir(parents=True)
+        (proj / "Rejected" / "deep").mkdir(parents=True)
+        (proj / "keep").mkdir(parents=True)
+        for rel in ("rejected/x", "Rejected/deep/z", "keep/y"):
+            Image.new("RGB", (16, 16), (10, 20, 30)).save(proj / f"{rel}.png")
+            (proj / f"{rel}.txt").write_text("a caption", encoding="utf-8")
+        return proj
+
+    def test_rejected_directory_never_uploads_in_sidecar_and_record_modes(self) -> None:
+        from dataset_desk import description_gate, desk
+
+        helper = _load_module("desk_draft_helper_rejected_test", DESK_DRAFT_HELPER_PY)
+        proj = self._sidecar_project("sc_rejected")
+        rel_files, count = helper._collect_compose_upload_files(proj, desk, description_gate)
+        rels = [r for r, _ in rel_files]
+        self.assertEqual(count, 1, msg=rels)
+        self.assertEqual(sorted(rels), ["keep/y.png", "keep/y.txt"])
+        for r in rels:
+            self.assertFalse(helper.has_rejected_component(r))
+
+        # Record mode: an approved record whose asset sits under rejected/ is excluded.
+        proj2, _cfg = self.make_project("rec_rejected", flagged_count=1, unflagged_count=1)
+        (proj2 / "outputs" / "rejected").mkdir(parents=True)
+        shutil.copy2(proj2 / "outputs" / "wave-1" / "flagged_00.png", proj2 / "outputs" / "rejected" / "bad.png")
+        (proj2 / "records" / "bad.json").write_text(
+            json.dumps(
+                {"id": "bad", "asset_path": "outputs/rejected/bad.png", "judgment": {"status": "approved", "explanation": "x"}}
+            ),
+            encoding="utf-8",
+        )
+        rel2, _n = helper._collect_compose_upload_files(proj2, desk, description_gate)
+        self.assertFalse(any("rejected" in r.lower() for r, _ in rel2), msg=[r for r, _ in rel2])
+
+    def test_non_image_asset_is_refused_and_avif_heic_are_detected(self) -> None:
+        from dataset_desk import description_gate, desk
+
+        helper = _load_module("desk_draft_helper_magic2_test", DESK_DRAFT_HELPER_PY)
+        proj, _cfg = self.make_project("notimg", flagged_count=1, unflagged_count=1)
+        (proj / "outputs" / "wave-1" / "flagged_00.png").write_bytes(b"this is a text file, not a png\n")
+        with self.assertRaises(helper.RefusalError) as ctx:
+            helper._collect_compose_upload_files(proj, desk, description_gate)
+        self.assertEqual(ctx.exception.code, "PROJECT_ASSET_NOT_IMAGE")
+        self.assertEqual(helper.detect_image_magic_bytes(b"\x00\x00\x00\x1cftypavif\x00\x00\x00\x00avifmif1"), "image/avif")
+        self.assertEqual(helper.detect_image_magic_bytes(b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"), "image/heic")
+        self.assertIsNone(helper.detect_image_magic_bytes(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00isom"))
+
+    # ---- fix 4: no image bundle left behind when the rig-side PRIVATE_IMAGE_IN_BUNDLE check fires ----
+
+    def test_private_image_bundle_is_deleted_and_recorded_on_a_rig_trip(self) -> None:
+        import io
+        import subprocess
+
+        helper = _load_module("desk_draft_helper_trip_test", DESK_DRAFT_HELPER_PY)
+        out_dir = self.tmp_path / "out_trip"
+        out_dir.mkdir()
+        png = bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A]) + bytes(16)
+        bundle = out_dir / "desk_draft_bundle.tar.gz"
+        with tarfile.open(bundle, "w:gz") as tf:
+            ti = tarfile.TarInfo(name="desk_out/logs/late_plate.dat")
+            ti.size = len(png)
+            tf.addfile(ti, io.BytesIO(png))
+        want_sha, want_bytes = _sha256_file(bundle), bundle.stat().st_size
+        (out_dir / ".sdlab_dl_tmp_1_2").mkdir()
+        (out_dir / ".sdlab_dl_tmp_1_2" / "part.0000").write_bytes(png)
+
+        ns = mock.MagicMock(out_dir=str(out_dir), bundle_path=str(bundle), salvage_only=True)
+        with self.assertRaises(helper.RefusalError) as ctx:
+            helper.cmd_extract_and_verify_outputs(ns)
+        self.assertEqual(ctx.exception.code, "PRIVATE_IMAGE_IN_BUNDLE")
+        rec = json.loads((out_dir / "private_image_bundle_refusal.json").read_text(encoding="utf-8"))
+        self.assertEqual(rec["code"], "PRIVATE_IMAGE_IN_BUNDLE")
+        self.assertEqual(rec["bundle_sha256"], want_sha)
+        self.assertEqual(rec["bundle_bytes"], want_bytes)
+
+        # The launcher's staging clean (every exit path calls it) then deletes the bundle and partial downloads.
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        funcs = text[text.index("desk_clean_rig_staging() {") : text.index("desk_pre_session_exit() {")]
+        driver = f'OUT_DIR="{out_dir}"\n' + funcs.split("# desk_scrub_kept_paths")[0] + "\ndesk_clean_rig_staging\n"
+        res = subprocess.run(["bash", "-c", driver], capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertFalse(bundle.exists(), msg="image bundle left on the rig")
+        self.assertEqual(list(out_dir.glob(".sdlab_dl_tmp_*")), [])
+        self.assertTrue((out_dir / "private_image_bundle_refusal.json").is_file())
+
+        # Without the refusal record (an ordinary failure) the bundle is kept for salvage.
+        keep_dir = self.tmp_path / "out_keep"
+        keep_dir.mkdir()
+        (keep_dir / "desk_draft_bundle.tar.gz").write_bytes(b"keep")
+        driver2 = f'OUT_DIR="{keep_dir}"\n' + funcs.split("# desk_scrub_kept_paths")[0] + "\ndesk_clean_rig_staging\n"
+        subprocess.run(["bash", "-c", driver2], capture_output=True, text=True, timeout=60, check=False)
+        self.assertTrue((keep_dir / "desk_draft_bundle.tar.gz").exists())
+
+    # ---- fix 6: every non-LFS weight file is verified against its git blob id ----
+
+    def test_weight_download_verifies_four_lfs_and_twelve_git_blob_files(self) -> None:
+        proj, cap_cfg = self.make_project("w6_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("w6_ok")
+        out_dir = self.tmp_path / "out_w6_ok"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir))
+        self.assertEqual(res.returncode, 0, msg=res.stderr[-800:])
+        rec = json.loads((out_dir / "vm_state" / "weight_download.json").read_text(encoding="utf-8"))
+        self.assertEqual(rec["sha_verified_count"], 4)
+        self.assertEqual(rec["blob_verified_count"], 12)
+        self.assertEqual(rec["file_count"], 16)
+
+    def test_tampered_tokenizer_json_is_refused_by_blob_id(self) -> None:
+        proj, cap_cfg = self.make_project("w6t_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("w6_tamper", config={"weight_tamper_tokenizer": True})
+        out_dir = self.tmp_path / "out_w6_tamper"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir))
+        self.assertNotEqual(res.returncode, 0)
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertEqual(win["refusal_code"], "WEIGHT_BLOB_MISMATCH")
+        self.assertIn("tokenizer.json", str(win["why"]))
+
+    def test_missing_pinned_weight_file_refuses(self) -> None:
+        proj, cap_cfg = self.make_project("w6m_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("w6_missing", config={"weight_omit_vocab": True})
+        out_dir = self.tmp_path / "out_w6_missing"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir))
+        self.assertNotEqual(res.returncode, 0)
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertEqual(win["refusal_code"], "WEIGHT_FILE_MISSING")
+        self.assertIn("vocab.json", str(win["why"]))
+
+    def test_missing_pinned_weight_file_unit_checks(self) -> None:
+        from types import SimpleNamespace
+
+        helper = _load_module("desk_draft_helper_blob_test", DESK_DRAFT_HELPER_PY)
+        self.assertEqual(len(helper.PINNED_QWEN3_VL_FILES), 16)
+        self.assertEqual(sum(n.endswith(".safetensors") for n in helper.PINNED_QWEN3_VL_FILES), 4)
+        f = self.tmp_path / "blob.txt"
+        f.write_bytes(b"hello\n")
+        self.assertEqual(helper.git_blob_sha1(f), "ce013625030ba8dba906f756967f9e9ca394464a")
+        self.assertIsNone(helper._extract_expected_sibling_blob_id(SimpleNamespace(rfilename="x")))
+        self.assertEqual(
+            helper._extract_expected_sibling_blob_id(SimpleNamespace(blob_id="CE013625030BA8DBA906F756967F9E9CA394464A")),
+            "ce013625030ba8dba906f756967f9e9ca394464a",
+        )
+
+    # ---- fix 5: an L4 opens Standard only ----
+
+    def test_l4_opens_standard_and_high_mem_refuses_before_any_colab_call(self) -> None:
+        proj, cap_cfg = self.make_project("l4_src", flagged_count=2, unflagged_count=1)
+        for label, extra in (("default", []), ("explicit", ["--shape", "standard"])):
+            env = self.make_env(f"l4_{label}")
+            out_dir = self.tmp_path / f"out_l4_{label}"
+            res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir, *extra))
+            self.assertEqual(res.returncode, 0, msg=f"{label}: {res.stderr[-800:]}")
+            news = [c for c in env.colab_calls() if c["subcmd"] == "new"]
+            self.assertEqual(len(news), 1)
+            self.assertNotIn("--high-mem", news[0]["argv"])
+            self.assertEqual(env.session_state().get("shape_label"), "Standard")
+            self.assertEqual((out_dir / "shape_requested.txt").read_text(encoding="utf-8").strip(), "standard")
+
+        env = self.make_env("l4_hm")
+        out_hm = self.tmp_path / "out_l4_hm"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_hm, "--shape", "high-mem"))
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("SHAPE_HIGH_MEM_UNAVAILABLE", f"{res.stderr}\n{res.stdout}")
+        self.assertEqual(env.colab_calls(), [])
+        self.assertIn("SHAPE_HIGH_MEM_UNAVAILABLE", COLAB_WINDOW_SH.read_text(encoding="utf-8").split("REFUSAL_CODES = (")[1])
 
 
 if __name__ == "__main__":

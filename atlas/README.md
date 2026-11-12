@@ -1,6 +1,6 @@
 # dataset-desk: how it works
 
-Mapped at 2026-11-12 from commit 2633ca3 by Atlas 1.26.0.
+Mapped at 2026-11-12 from commit 3b8b890 by Atlas 1.26.0.
 
 ## What this is
 
@@ -8,9 +8,11 @@ dataset-desk: a review desk for visual datasets — duplicates, outliers, search
 
 6 parts, mostly Python (20 files), shell (3), CSS (2), TypeScript (2), Astro (1) and JavaScript (1). Work enters through 4 doors; the busiest is CI, which reaches 4 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.
 
-## What changed since 2026-11-12 (82a8b03)
+## What changed since 2026-11-12 (2633ca3)
 
-Nothing structural changed since 2026-11-12; 1 file added and 18 changed content.
+- .gitattributes is now read by scripts/colab/desk_draft_helper.py.
+- README.md is now also read by scripts/colab/desk_draft_helper.py.
+- 6 files changed content, across 3 parts.
 
 ## What comes in
 
@@ -76,7 +78,7 @@ Read those in order to follow one run of dataset-desk end to end. This path foll
 
 - 3 imports could not be resolved: `scripts/colab/desk_bundle_now.py` imports a path built at run time; `tests/test_colab_draft_lane.py` imports a path built at run time; `tests/test_training_captions.py` imports a path built at run time.
 - 6 writes and 5 reads use paths built at run time and are not named here.
-- 29 writes and 86 reads go to a path their caller passes, not to this repository.
+- 30 writes and 88 reads go to a path their caller passes, not to this repository.
 - 15 writes and 2 reads go to the directory the command is run in (desk-out/), not to this repository.
 - 7 writes and 10 reads go to a temporary directory, not to this repository.
 - 5 writes and 2 reads go to the directory the command is run in (desk-out/) or a path their caller passes, not to this repository.

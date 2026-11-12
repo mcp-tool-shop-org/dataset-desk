@@ -208,12 +208,29 @@ def _payloads(revision: str, cfg: dict) -> dict[str, bytes]:
     preproc_bytes = b\'{"image_processor_type": "Qwen2VLImageProcessor"}\\n\'
     tok_bytes = b\'{"tokenizer_class": "Qwen2Tokenizer"}\\n\'
     weights_bytes = b"QWEN3-VL-FAKE-SAFETENSORS-HEADER:" + revision.encode("ascii") + (b"\\x00" * 512)
-    return {
+    files = {
+        ".gitattributes": b"*.safetensors filter=lfs diff=lfs merge=lfs -text\\n",
+        "README.md": b"# Qwen3-VL-8B-Instruct (fake)\\n",
+        "chat_template.json": b"{}\\n",
         "config.json": config_bytes,
+        "generation_config.json": b"{}\\n",
+        "merges.txt": b"#version: 0.2\\n",
+        "model.safetensors.index.json": b"{}\\n",
         "preprocessor_config.json": preproc_bytes,
+        "tokenizer.json": b"{}\\n",
         "tokenizer_config.json": tok_bytes,
-        "model-00001-of-00001.safetensors": weights_bytes,
+        "video_preprocessor_config.json": b"{}\\n",
+        "vocab.json": b"{}\\n",
     }
+    for shard in range(1, 5):
+        files[f"model-0000{shard}-of-00004.safetensors"] = weights_bytes + bytes([shard])
+    if cfg.get("weight_omit_vocab"):
+        files.pop("vocab.json")
+    return files
+
+
+def _blob_id(data: bytes) -> str:
+    return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\\0" + data).hexdigest()
 
 
 class HfApi:
@@ -234,7 +251,8 @@ class HfApi:
         siblings = [
             SimpleNamespace(
                 rfilename=name,
-                lfs={"sha256": hashlib.sha256(data).hexdigest()},
+                blob_id=_blob_id(data),
+                lfs={"sha256": hashlib.sha256(data).hexdigest()} if name.endswith(".safetensors") else None,
             )
             for name, data in sorted(files.items())
         ]
@@ -278,6 +296,8 @@ def snapshot_download(
         out_data = data
         if cfg.get("weight_corrupt_sha") and name.endswith(".safetensors"):
             out_data = data + b"CORRUPTED"
+        if cfg.get("weight_tamper_tokenizer") and name == "tokenizer.json":
+            out_data = data + b" "
         (snap_dir / name).write_bytes(out_data)
     _log(
         {
@@ -619,7 +639,10 @@ def _cmd_colab_cli(argv: list[str]) -> int:
 
         if cfg.get("session_shape_override"):
             shape_label = str(cfg["session_shape_override"])
-        elif high_mem or card.upper() in ("L4", "V5E1", "V6E1"):
+        elif card.upper() == "L4":
+            # An L4 opens as Standard even with --high-mem (Publisher fleet ruling 2026-11-09).
+            shape_label = "Standard"
+        elif high_mem or card.upper() in ("V5E1", "V6E1"):
             shape_label = "High-RAM"
         else:
             shape_label = "Standard"
@@ -672,6 +695,10 @@ def _cmd_colab_cli(argv: list[str]) -> int:
         if cfg.get("upload_part_sleep_s") and ".part.0000" in dst_p.name:
             (state_dir / "upload_part_in_flight.txt").write_text("1\n", encoding="utf-8")
             time.sleep(float(cfg["upload_part_sleep_s"]))
+
+        if cfg.get("upload_fail_always") and "project_input" in dst_p.name:
+            print("403 Client Error: Forbidden for url: https://colab.example/upload", file=sys.stderr)
+            return 1
 
         if cfg.get("upload_fail_500_once"):
             marker = state_dir / "upload_failed_once.txt"

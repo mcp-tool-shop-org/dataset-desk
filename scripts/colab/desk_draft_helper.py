@@ -111,7 +111,108 @@ def detect_image_magic_bytes(data: bytes) -> str | None:
         return "image/tiff"
     if len(data) >= 14 and data[:2] == b"BM" and data[6:10] == b"\x00\x00\x00\x00":
         return "image/bmp"
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        # ISO-BMFF image brands: the major brand, then the compatible brands the box lists.
+        box_len = int.from_bytes(data[:4], "big")
+        end = box_len if 16 <= box_len <= len(data) else len(data)
+        brands = {data[8:12]} | {data[i : i + 4] for i in range(16, max(16, end - 3), 4)}
+        if brands & {b"avif", b"avis"}:
+            return "image/avif"
+        if brands & {b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1"}:
+            return "image/heic"
     return None
+
+
+def is_image_file_by_magic(path: pathlib.Path) -> bool:
+    """True when the file's own first bytes are a raster image (the extension is never trusted)."""
+    try:
+        with pathlib.Path(path).open("rb") as fh:
+            return detect_image_magic_bytes(fh.read(64)) is not None
+    except OSError:
+        return False
+
+
+def has_rejected_component(rel_posix: str) -> bool:
+    """True when any component of a project-relative path is `rejected` (case-insensitive)."""
+    parts = [p for p in str(rel_posix).replace("\\", "/").split("/") if p]
+    return any(p.lower() == "rejected" for p in parts)
+
+
+# Kept-file path scrubbing (Publisher, 2026-11-12): nothing under the out dir may name a rig home, a Windows or
+# WSL user directory, a drive root, or the studio config path. Explicit roots (out dir, repo, project, home, the
+# user-config file) become named placeholders first; the generic patterns then catch whatever is left.
+RIG_PATH_PLACEHOLDER = "<rig>"
+_STUDIO_CONFIG_PATTERN = re.compile(r"[^\s\"'<>]*dataset-desk[\\/]+config\.json")
+_RIG_PATH_PATTERNS = (
+    re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:(?:\\\\|\\|/)+Users(?:\\\\|\\|/)+[^\\/\s\"']+"),
+    re.compile(r"/mnt/[A-Za-z]/Users/[^/\s\"']+"),
+    re.compile(r"/home/[^/\s\"']+"),
+    re.compile(r"/Users/[^/\s\"']+"),
+    re.compile(r"(?<![A-Za-z0-9])/mnt/[A-Za-z](?=/)"),
+    re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:(?=\\|/(?!/))"),
+)
+_SCRUB_SUFFIXES = {".log", ".json", ".jsonl", ".txt", ".sh", ".md", ".csv", ".yaml", ".yml", ".toml", ".py"}
+_SCRUB_MAX_BYTES = 64 * 1024 * 1024
+
+
+def scrub_rig_paths(text: str, roots: list[tuple[str, str]] | None = None) -> str:
+    """Replace explicit roots (longest first), then every generic rig-path pattern, in `text`."""
+    out = text
+    variants: list[tuple[str, str]] = []
+    for root, placeholder in roots or []:
+        r = str(root or "").strip()
+        if len(r) < 4:
+            continue
+        for form in {r, r.rstrip("/\\"), r.replace("/", "\\"), r.replace("\\", "/")}:
+            if len(form) >= 4:
+                variants.append((form, placeholder))
+                variants.append((form.replace("\\", "\\\\"), placeholder))
+    for form, placeholder in sorted(set(variants), key=lambda kv: -len(kv[0])):
+        out = out.replace(form, placeholder)
+    out = _STUDIO_CONFIG_PATTERN.sub("<studio-config>", out)
+    for pat in _RIG_PATH_PATTERNS:
+        out = pat.sub(RIG_PATH_PLACEHOLDER, out)
+    return out
+
+
+def cmd_scrub_kept_paths(args: argparse.Namespace) -> int:
+    out_dir = pathlib.Path(args.out_dir)
+    if not out_dir.is_dir():
+        return 0
+    roots: list[tuple[str, str]] = []
+    for spec in args.root or []:
+        if "=" not in spec:
+            continue
+        raw_root, placeholder = spec.rsplit("=", 1)
+        roots.append((raw_root, placeholder))
+        try:
+            resolved = str(pathlib.Path(raw_root).resolve())
+        except OSError:
+            resolved = ""
+        if resolved and resolved != raw_root:
+            roots.append((resolved, placeholder))
+    cfg_env = os.environ.get("DATASET_DESK_USER_CONFIG", "").strip()
+    if cfg_env:
+        roots.append((cfg_env, "<studio-config>"))
+    scrubbed = 0
+    for fpath in sorted(out_dir.rglob("*")):
+        try:
+            if not fpath.is_file() or fpath.is_symlink() or fpath.suffix.lower() not in _SCRUB_SUFFIXES:
+                continue
+            if fpath.stat().st_size > _SCRUB_MAX_BYTES:
+                continue
+            raw = fpath.read_bytes()
+            if b"\x00" in raw:
+                continue
+            text = raw.decode("utf-8", errors="replace")
+            cleaned = scrub_rig_paths(text, roots)
+            if cleaned != text:
+                fpath.write_text(cleaned, encoding="utf-8", newline="\n")
+                scrubbed += 1
+        except OSError:
+            continue
+    print(json.dumps({"scrubbed_files": scrubbed}, sort_keys=True))
+    return 0
 
 
 def sanitize_pool_detection(pd: object) -> object:
@@ -349,11 +450,18 @@ def _collect_compose_upload_files(
         raise RefusalError("PROJECT_EMPTY", f"--project {proj_dir.name!r} contains zero readable images")
 
     selected_rels: set[str] = set()
+    asset_rels: set[str] = set()
     approved_image_count = 0
     raw_recs = gate_mod.load_project_records(str(proj_dir)) if rec_dir.is_dir() else []
 
     if raw_recs:
         approved = [e for e in (gate_mod._extract_record_fields(r) for r in raw_recs) if e["status"] == "approved"]
+        # A `rejected/` path is never an approved training image, whatever the record says (Publisher, 2026-11-12).
+        approved = [
+            e
+            for e in approved
+            if not has_rejected_component(str(e["record_file"])) and not has_rejected_component(str(e["asset_path"]))
+        ]
         if not approved:
             raise RefusalError("NO_APPROVED_RECORDS", f"--project {proj_dir.name!r} contains zero approved records")
         for entry in approved:
@@ -364,8 +472,14 @@ def _collect_compose_upload_files(
             asset_cand = proj_dir / asset_rel
             if not asset_cand.exists() or not asset_cand.is_file():
                 raise RefusalError("PROJECT_FILE_MISSING", f"{rec_rel}: approved asset missing at {asset_rel!r}")
+            if not is_image_file_by_magic(asset_cand):
+                raise RefusalError(
+                    "PROJECT_ASSET_NOT_IMAGE",
+                    f"{rec_rel}: approved asset {asset_rel!r} is not an image (magic bytes); refusing to upload it",
+                )
             selected_rels.add(rec_rel)
             selected_rels.add(asset_rel)
+            asset_rels.add(asset_rel)
             approved_image_count += 1
 
             sidecar_rel = entry.get("sidecar_file")
@@ -384,13 +498,24 @@ def _collect_compose_upload_files(
     else:
         sc_scan = gate_mod.scan_sidecar_project(str(proj_dir))
         approved_sc = [
-            e for e in (gate_mod._extract_record_fields(r) for r in sc_scan.get("records", [])) if e["status"] == "approved"
+            e
+            for e in (gate_mod._extract_record_fields(r) for r in sc_scan.get("records", []))
+            if e["status"] == "approved"
+            and not has_rejected_component(str(e["asset_path"]))
+            and not has_rejected_component(str(e.get("sidecar_file") or ""))
         ]
         if not approved_sc:
             raise RefusalError("NO_APPROVED_RECORDS", f"--project {proj_dir.name!r} contains zero paired sidecar records")
         for entry in approved_sc:
             asset_rel = str(entry["asset_path"]).replace("\\", "/").strip("/")
+            asset_cand_sc = proj_dir / asset_rel
+            if not asset_cand_sc.is_file() or not is_image_file_by_magic(asset_cand_sc):
+                raise RefusalError(
+                    "PROJECT_ASSET_NOT_IMAGE",
+                    f"sidecar record asset {asset_rel!r} is not an image (magic bytes); refusing to upload it",
+                )
             selected_rels.add(asset_rel)
+            asset_rels.add(asset_rel)
             approved_image_count += 1
             sidecar_rel = entry.get("sidecar_file")
             if isinstance(sidecar_rel, str) and sidecar_rel.strip():
@@ -415,10 +540,21 @@ def _collect_compose_upload_files(
         norm_rel = rel_posix.replace("\\", "/")
         if norm_rel.startswith("/") or ".." in pathlib.PurePosixPath(norm_rel).parts:
             raise RefusalError("PRIVATE_IMAGE_ROUTE_FORBIDDEN", f"project path escapes root: {rel_posix!r}")
+        if has_rejected_component(norm_rel):
+            raise RefusalError("PRIVATE_IMAGE_ROUTE_FORBIDDEN", f"project path under rejected/ is never uploaded: {rel_posix!r}")
         cand = proj_dir / norm_rel
         real = _verify_inside_project(proj_dir, cand, label=norm_rel)
         if not real.is_file():
             raise RefusalError("PROJECT_FILE_MISSING", f"expected file missing at {norm_rel!r}")
+        # Only the approved assets are images; every other uploaded file is a record, sidecar, or config.
+        if norm_rel in asset_rels:
+            if not is_image_file_by_magic(real):
+                raise RefusalError("PROJECT_ASSET_NOT_IMAGE", f"upload asset {norm_rel!r} is not an image (magic bytes)")
+        elif is_image_file_by_magic(real):
+            raise RefusalError(
+                "PRIVATE_IMAGE_ROUTE_FORBIDDEN",
+                f"{norm_rel!r} carries image bytes but is not an approved asset; it is not uploaded",
+            )
         rel_files.append((norm_rel, real))
     return rel_files, approved_image_count
 
@@ -570,7 +706,7 @@ def cmd_preflight_project(args: argparse.Namespace) -> int:
             caption_config=str(cap_path),
         )
     except DeskError as exc:
-        raise RefusalError(exc.code, exc.message) from exc
+        raise RefusalError(exc.code, scrub_rig_paths(exc.message)) from exc
     finally:
         if args.isolate_user_config:
             if prev_user_cfg is None:
@@ -1077,6 +1213,48 @@ def _extract_expected_sibling_sha(sib: object) -> str | None:
     return None
 
 
+# The 16 files of the pinned Qwen/Qwen3-VL-8B-Instruct revision: 4 LFS safetensors shards (verified by LFS sha256)
+# and 12 plain git files (verified by git blob id). Any missing file refuses.
+PINNED_QWEN3_VL_FILES = frozenset(
+    {
+        ".gitattributes",
+        "README.md",
+        "chat_template.json",
+        "config.json",
+        "generation_config.json",
+        "merges.txt",
+        "model-00001-of-00004.safetensors",
+        "model-00002-of-00004.safetensors",
+        "model-00003-of-00004.safetensors",
+        "model-00004-of-00004.safetensors",
+        "model.safetensors.index.json",
+        "preprocessor_config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "video_preprocessor_config.json",
+        "vocab.json",
+    }
+)
+
+
+def _extract_expected_sibling_blob_id(sib: object) -> str | None:
+    blob_id = getattr(sib, "blob_id", None)
+    if isinstance(blob_id, str) and re.fullmatch(r"[0-9a-fA-F]{40}", blob_id):
+        return blob_id.lower()
+    return None
+
+
+def git_blob_sha1(path: pathlib.Path) -> str:
+    """git blob id: sha1 of the blob header plus content, streamed."""
+    p = pathlib.Path(path)
+    h = hashlib.sha1()
+    h.update(b"blob " + str(p.stat().st_size).encode("ascii") + b"\x00")
+    with p.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def cmd_download_weights(args: argparse.Namespace) -> int:
     state_dir = pathlib.Path(args.state_dir)
     step = "weight_download"
@@ -1194,6 +1372,7 @@ def cmd_download_weights(args: argparse.Namespace) -> int:
         raise RefusalError("WEIGHT_FILE_MISSING", "model_info returned zero sibling files", step=step)
 
     sha_verified_count = 0
+    blob_verified_count = 0
     for sib in siblings:
         rfilename = getattr(sib, "rfilename", None)
         if not isinstance(rfilename, str) or not rfilename:
@@ -1219,6 +1398,32 @@ def cmd_download_weights(args: argparse.Namespace) -> int:
                     step=step,
                 )
             sha_verified_count += 1
+        else:
+            expected_blob = _extract_expected_sibling_blob_id(sib)
+            if expected_blob is None:
+                raise RefusalError(
+                    "WEIGHT_BLOB_ID_MISSING",
+                    f"weight file {rfilename!r} has neither an LFS sha256 nor a git blob id to verify against",
+                    step=step,
+                )
+            actual_blob = git_blob_sha1(real_f)
+            if actual_blob != expected_blob:
+                raise RefusalError(
+                    "WEIGHT_BLOB_MISMATCH",
+                    f"weight file {rfilename!r} git blob id {actual_blob} != expected {expected_blob}",
+                    step=step,
+                )
+            blob_verified_count += 1
+
+    if args.repo_id == QWEN3_VL_REPO and args.revision == QWEN3_VL_REVISION:
+        present = {getattr(sib, "rfilename", None) for sib in siblings}
+        missing = sorted(PINNED_QWEN3_VL_FILES - present)
+        if missing:
+            raise RefusalError(
+                "WEIGHT_FILE_MISSING",
+                f"pinned revision lists {len(present)} files; missing {len(missing)}: {', '.join(missing)}",
+                step=step,
+            )
 
     try:
         snapshot_rel = snapshot_dir.resolve().relative_to(hf_home.resolve()).as_posix()
@@ -1228,6 +1433,7 @@ def cmd_download_weights(args: argparse.Namespace) -> int:
         "attempts": attempts,
         "download_bound_s": bound_s,
         "elapsed_s": round(total_elapsed, 4),
+        "blob_verified_count": blob_verified_count,
         "file_count": len(siblings),
         "hf_home_dir": hf_home.name,
         "local_disk_verified": True,
@@ -1686,6 +1892,25 @@ def cmd_run_compose_and_report(args: argparse.Namespace) -> int:
     return 0
 
 
+PRIVATE_IMAGE_BUNDLE_RECORD = "private_image_bundle_refusal.json"
+
+
+def _record_private_image_bundle_refusal(
+    out_dir: pathlib.Path, bundle_path: pathlib.Path, member: str, why: str
+) -> None:
+    """Keep a sha + size + refusal record for a bundle that carried an image; the launcher's staging clean
+    then deletes the bundle itself (it is the only copy of a private image left on the rig after a trip)."""
+    rec = {
+        "bundle_bytes": bundle_path.stat().st_size,
+        "bundle_name": bundle_path.name,
+        "bundle_sha256": sha256_file(bundle_path),
+        "code": "PRIVATE_IMAGE_IN_BUNDLE",
+        "member": member,
+        "why": why,
+    }
+    write_json_lf(out_dir / PRIVATE_IMAGE_BUNDLE_RECORD, rec)
+
+
 def cmd_extract_and_verify_outputs(args: argparse.Namespace) -> int:
     out_dir = pathlib.Path(args.out_dir).resolve()
     bundle_path = pathlib.Path(args.bundle_path).resolve()
@@ -1704,11 +1929,15 @@ def cmd_extract_and_verify_outputs(args: argparse.Namespace) -> int:
             with extracted_f.open("rb") as fh:
                 magic_mime = detect_image_magic_bytes(fh.read(64))
             if magic_mime is not None:
+                _record_private_image_bundle_refusal(out_dir, bundle_path, rel_member, f"raster image magic bytes ({magic_mime})")
                 raise RefusalError(
                     "PRIVATE_IMAGE_IN_BUNDLE",
                     f"downloaded bundle member {rel_member!r} contains raster image magic bytes ({magic_mime})",
                 )
             if extracted_f.suffix.lower() in IMAGE_EXTS:
+                _record_private_image_bundle_refusal(
+                    out_dir, bundle_path, rel_member, f"forbidden image extension {extracted_f.suffix.lower()!r}"
+                )
                 raise RefusalError(
                     "PRIVATE_IMAGE_IN_BUNDLE",
                     f"downloaded bundle member {rel_member!r} has forbidden image extension {extracted_f.suffix.lower()!r}",
@@ -2223,6 +2452,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_cln = sub.add_parser("vm-cleanup-workdir")
     p_cln.add_argument("--content-root", default="/content")
     p_cln.set_defaults(func=cmd_vm_cleanup_workdir)
+
+    p_scr = sub.add_parser("scrub-kept-paths")
+    p_scr.add_argument("--out-dir", required=True)
+    p_scr.add_argument("--root", action="append", default=[], help="<abs path>=<placeholder>; repeatable")
+    p_scr.set_defaults(func=cmd_scrub_kept_paths)
 
     p_fin = sub.add_parser("finalize-window-record")
     p_fin.add_argument("--out-dir", required=True)

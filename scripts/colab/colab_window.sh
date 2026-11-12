@@ -2416,11 +2416,24 @@ colab_gpu_rate_gate_arm() {
 # not armed here, passes --high-mem only for high-mem, and checks the session row's Shape after open.
 #
 # google-colab-cli 0.7.4 drops --high-mem for L4, V5E1 and V6E1 (colab_cli/client.py:90-95,
-# HIGH_MEM_ONLY_ACCELERATORS; resolve_assign_shape returns None for them at :109-110): those cards
+# HIGH_MEM_ONLY_ACCELERATORS; resolve_assign_shape returns None for them at :109-110). V5E1 and V6E1
 # exist in a single high-memory shape, so --shape standard is refused for them before any colab call.
+#
+# L4 is the exception (Publisher fleet ruling 2026-11-09, polyglot-mcp main 66eddd9
+# scripts/colab/colab_window.sh:1219-1231 and :1267-1270): an L4 opens as Standard
+# (`Hardware: L4 | Shape: Standard`; `--high-mem` is ignored), so `--card L4 --shape standard` is
+# accepted and `--card L4 --shape high-mem` is refused before any `colab new` call with
+# SHAPE_HIGH_MEM_UNAVAILABLE. This copy differs from the sdlab df9a1b3b re-export by exactly that rule.
 colab_card_is_single_shape() {
   case "${1^^}" in
-    L4 | V5E1 | V6E1) return 0 ;;
+    V5E1 | V6E1) return 0 ;;
+  esac
+  return 1
+}
+
+colab_card_is_standard_only_shape() {
+  case "${1^^}" in
+    L4) return 0 ;;
   esac
   return 1
 }
@@ -2459,6 +2472,10 @@ colab_shape_gate_arm() {
       return 2
       ;;
   esac
+  if [ "${shape}" = "high-mem" ] && colab_card_is_standard_only_shape "${card}"; then
+    colab_refuse_logged "${out_dir}" SHAPE_HIGH_MEM_UNAVAILABLE "${card} has a single Standard shape on Colab (--high-mem is ignored); pass --shape standard"
+    return 2
+  fi
   if [ "${shape}" = "standard" ] && colab_card_is_single_shape "${card}"; then
     colab_refuse_logged "${out_dir}" SHAPE_STANDARD_UNAVAILABLE "${card} has a single high-memory shape (google-colab-cli 0.7.4 colab_cli/client.py:90-95); pass --shape high-mem"
     return 2
@@ -3446,6 +3463,7 @@ REFUSAL_CODES = (
     "SHAPE_INVALID",
     "SHAPE_NOT_FOR_CPU",
     "SHAPE_STANDARD_UNAVAILABLE",
+    "SHAPE_HIGH_MEM_UNAVAILABLE",
     "SHAPE_MISMATCH",
     "MAX_RATE_REQUIRED",
     "TRAIN_MAX_RATE_REQUIRED",

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Colab lane, before the first real L4 window (private training images go to the VM):**
+  - Cleanup kills only its own descendants: tracked PIDs are signalled only if alive, no older than the launcher, and
+    their parent chain reaches the launcher (a recycled PID is never touched).
+  - No rig paths in kept files: every text file under the out dir is scrubbed at exit (home, WSL/Windows user dirs,
+    drive roots, the studio config path become `<rig>`, `<out>`, `<project>`, `<repo>`, `<studio-config>`).
+  - `rejected/` (any case) never uploads in any mode; every uploaded asset must be an image by magic bytes (AVIF and
+    HEIC now detected); a non-image asset refuses `PROJECT_ASSET_NOT_IMAGE`.
+  - A bundle that trips `PRIVATE_IMAGE_IN_BUNDLE` on the rig is deleted by the staging clean; its sha, size and the
+    refusal stay in `private_image_bundle_refusal.json`.
+  - L4 is Standard only (Publisher fleet ruling 2026-11-09, polyglot-mcp 66eddd9): default shape `standard`;
+    `--shape high-mem` refuses `SHAPE_HIGH_MEM_UNAVAILABLE` before any colab call; V5E1/V6E1 stay single high-mem.
+    The vendored `colab_window.sh` now differs from the sdlab df9a1b3b export by exactly that rule.
+  - Weight download verifies all 16 files of the pinned revision: 4 LFS shards by sha256 and the 12 plain git files by
+    git blob id (`WEIGHT_BLOB_MISMATCH`, `WEIGHT_BLOB_ID_MISSING`, `WEIGHT_FILE_MISSING`); the record carries
+    `sha_verified_count` and `blob_verified_count`.
+  - Coverage unchanged (the lane scripts sit outside the measured `dataset_desk` package; floor 90 stays).
+
 ### Added
 - **Colab caption-drafting lane (`scripts/colab/`):**
   - Vendors `style-dataset-lab` window library (`colab_window.sh`, `launch_guards.py`, `remote_runner.py`) at commit
