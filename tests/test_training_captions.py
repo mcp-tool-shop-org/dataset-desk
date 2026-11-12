@@ -1457,6 +1457,135 @@ class Addendum2PoolDetectionStatusTests(unittest.TestCase):
                                     self.assertEqual(hex64_re.findall(ln), [], full_path)
         self.assertGreaterEqual(inspected_files, 14)
 
+        # Exercise structured manifest shapes, env/user_config pool_dirs, ComfyUI KSampler trace, and config guards
+        rich_mf = os.path.join(self.tmp, "rich-manifest.json")
+        with open(rich_mf, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "version": 1,
+                    "locked_pool_dirs": {"rustline": "rustline"},
+                    "pools": {
+                        "salt-road": {"hashes": [mf_sha_1]},
+                        "tallow-fen": {"sha256": [mf_sha_2]},
+                        "hesperia": {"items": [{"sha256": mf_sha_3}]},
+                    },
+                },
+                f,
+            )
+        pd_rich, hashes_rich = desk.resolve_pool_detection(pool_manifest=rich_mf, emit_warning=False)
+        self.assertEqual(pd_rich["counts"], {"hesperia": 1, "rustline": 2, "salt-road": 1, "tallow-fen": 1})
+        self.assertEqual(hex64_re.findall(json.dumps(pd_rich)), [])
+        self.assertIsNotNone(hashes_rich)
+        self.assertIsNotNone(desk._load_locked_pool_hashes(pool_manifest=rich_mf))
+        self.assertIsNone(desk.write_pool_detection_status(None, pd_rich))
+
+        empty_mf = os.path.join(self.tmp, "empty-manifest.json")
+        with open(empty_mf, "w", encoding="utf-8") as f:
+            json.dump({}, f)
+        pd_empty, _ = desk.resolve_pool_detection(pool_manifest=empty_mf, emit_warning=False)
+        self.assertEqual(pd_empty["status"], "on")
+        self.assertEqual(pd_empty["counts"], {"hesperia": 0, "rustline": 0, "salt-road": 0, "tallow-fen": 0})
+
+        os.environ["DATASET_DESK_POOL_DIRS"] = f"rustline={locked_rust}"
+        ucfg_dirs = os.path.join(self.tmp, "ucfg-dirs.json")
+        with open(ucfg_dirs, "w", encoding="utf-8") as f:
+            json.dump({"locked_pool_dirs": ["rustline"]}, f)
+        os.environ["DATASET_DESK_USER_CONFIG"] = ucfg_dirs
+        pd_dirs, _ = desk.resolve_pool_detection(emit_warning=False)
+        self.assertEqual(pd_dirs["counts"]["rustline"], 2)
+        os.environ.pop("DATASET_DESK_POOL_DIRS", None)
+        os.environ["DATASET_DESK_USER_CONFIG"] = ""
+
+        bad_mf = os.path.join(self.tmp, "bad-manifest.json")
+        for bad_payload in (
+            ["not-an-object"],
+            {"unknown-pool": [mf_sha_1]},
+            {"salt-road": {"other": []}},
+            {"salt-road": "not-a-list"},
+            {"salt-road": ["not-64-hex"]},
+        ):
+            with open(bad_mf, "w", encoding="utf-8") as f:
+                json.dump(bad_payload, f)
+            with self.assertRaises(DeskError):
+                desk.resolve_pool_detection(pool_manifest=bad_mf, emit_warning=False)
+        with open(bad_mf, "w", encoding="utf-8") as f:
+            f.write("{broken json")
+        with self.assertRaises(DeskError):
+            desk.resolve_pool_detection(pool_manifest=bad_mf, emit_warning=False)
+        with self.assertRaises(DeskError):
+            desk.resolve_pool_detection(pool_manifest=os.path.join(self.tmp, "no-such.json"), emit_warning=False)
+        for bad_dir_arg in (
+            [f"badpool={locked_rust}"],
+            [os.path.join(self.tmp, "missing-pool-dir")],
+            [proj],
+            [123],
+            {"salt-road": 123},
+            123,
+        ):
+            with self.assertRaises(DeskError):
+                desk.resolve_pool_detection(locked_pool_dirs=bad_dir_arg, emit_warning=False)
+
+        conflict_dir = os.path.join(self.tmp, "salt-road")
+        os.makedirs(conflict_dir, exist_ok=True)
+        with open(os.path.join(conflict_dir, "project.json"), "w", encoding="utf-8") as f:
+            json.dump({"multimodal_pool": "rustline"}, f)
+        with self.assertRaises(DeskError):
+            desk.check_multimodal_pool(conflict_dir, "none")
+
+        # ComfyUI KSampler -> ConditioningCombine -> CLIPTextEncode trace + wave generation.json + orphan sidecar
+        ks_proj = os.path.join(self.tmp, "ks-sidecar")
+        os.makedirs(os.path.join(ks_proj, "outputs", "w1"), exist_ok=True)
+        _write_png(os.path.join(ks_proj, "outputs", "contact.png"), (10, 20, 30), seed=93)
+        ks_img_path = os.path.join(ks_proj, "outputs", "w1", "ks_01.png")
+        ks_pnginfo = PngImagePlugin.PngInfo()
+        ks_graph = {
+            "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "traced sampler conditioning prompt words here"}},
+            "2": {"class_type": "ConditioningCombine", "inputs": {"conditioning_1": ["1", 0]}},
+            "3": {"class_type": "KSampler", "inputs": {"positive": ["2", 0]}},
+        }
+        ks_pnginfo.add_text("prompt", json.dumps(ks_graph))
+        Image.new("RGB", (16, 16), (40, 60, 80)).save(ks_img_path, pnginfo=ks_pnginfo)
+        with open(os.path.join(ks_proj, "outputs", "w1", "ks_01.txt"), "w", encoding="utf-8") as f:
+            f.write("traced sampler conditioning prompt words here")
+        _write_png(os.path.join(ks_proj, "outputs", "w1", "ks_02.png"), (80, 60, 40), seed=94)
+        with open(os.path.join(ks_proj, "outputs", "w1", "ks_02.txt"), "w", encoding="utf-8") as f:
+            f.write("wave generation prompt words echoed verbatim here")
+        with open(os.path.join(ks_proj, "outputs", "w1", "orphan.txt"), "w", encoding="utf-8") as f:
+            f.write("orphan sidecar note")
+        with open(os.path.join(ks_proj, "outputs", "w1", "generation.json"), "w", encoding="utf-8") as f:
+            json.dump({"items": [{"file": "ks_02.png", "prompt": "wave generation prompt words echoed verbatim here"}]}, f)
+        with open(os.path.join(ks_proj, "caption-rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"prefix": "copperplate study,", "backdrop": "plain pale ground"}, f)
+        ks_out = os.path.join(self.tmp, "out-ks")
+        ks_res = description_gate.import_sidecars(
+            ks_proj, ks_out, drafter=backends.make_drafter("fake"), pool_detection=pd_rich
+        )
+        self.assertEqual(ks_res["flagged_count"], 2)
+        self.assertEqual(ks_res["orphan_sidecars"], ["outputs/w1/orphan.txt"])
+        ks_comp_out = os.path.join(self.tmp, "out-ks-comp")
+        ks_comp = description_gate.compose_captions(
+            ks_proj, ks_comp_out, drafter=backends.make_drafter("fake"), sidecars=True, pool_detection=pd_rich
+        )
+        self.assertEqual(len(ks_comp["items"]), 2)
+
+        for bad_rules in (
+            "not-a-dict",
+            {"multimodal_pool": 123, "prefix": "x,"},
+            {"multimodal_pool": "unknown", "prefix": "x,"},
+            {"prefix": "x,", "drafter": 123},
+            {"prefix": "x,", "drafter_prompt": 123},
+            {"prefix": "x,", "class_field": 123},
+            {"prefix": "x,", "class_pattern": 123},
+            {"prefix": "x,", "backdrop": 123},
+            {"prefix": "x,", "backdrop": {"text": 123}},
+            {"prefix": "x,", "backdrop": {"field": 123}},
+            {"prefix": "x,", "banned_words": [123]},
+            {"prefix": "x,", "classes": [1]},
+            {"prefix": "x,", "classes": {"c": []}},
+        ):
+            with self.assertRaises(DeskError):
+                description_gate._build_caption_rules(bad_rules)  # type: ignore[arg-type]
+
 
 if __name__ == "__main__":
     unittest.main()
