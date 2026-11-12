@@ -25,17 +25,17 @@
         "coChangesOnly": [],
         "collapsed": false,
         "confidence": "low",
-        "importsAndCoChanges": [
+        "importsAndCoChanges": [],
+        "importsOnly": [
           "tests"
-        ],
-        "importsOnly": []
+        ]
       },
-      "cohesion": 0.446809,
+      "cohesion": null,
       "cohesionDropped": false,
       "confidence": "low",
       "highWater": null,
       "name": "dataset_desk",
-      "qualifyingSourceCommits": 15,
+      "qualifyingSourceCommits": 9,
       "rebaseline": null
     },
     {
@@ -72,20 +72,18 @@
     },
     {
       "breakage": {
-        "coChangesOnly": [
-          "dataset_desk"
-        ],
+        "coChangesOnly": [],
         "collapsed": false,
         "confidence": "low",
         "importsAndCoChanges": [],
         "importsOnly": []
       },
-      "cohesion": 0.6,
+      "cohesion": null,
       "cohesionDropped": false,
       "confidence": "low",
       "highWater": null,
       "name": "tests",
-      "qualifyingSourceCommits": 13,
+      "qualifyingSourceCommits": 7,
       "rebaseline": null
     }
   ],
@@ -119,7 +117,7 @@
       },
       {
         "commits": 12,
-        "lines": 351,
+        "lines": 375,
         "path": "CHANGELOG.md"
       },
       {
@@ -153,8 +151,8 @@
         "path": "README.ja.md"
       },
       {
-        "commits": 14,
-        "lines": 286,
+        "commits": 9,
+        "lines": 268,
         "path": "README.md"
       },
       {
@@ -183,8 +181,8 @@
         "path": "SHIP_GATE.md"
       },
       {
-        "commits": 10,
-        "lines": 165,
+        "commits": 9,
+        "lines": 167,
         "path": "atlas/README.md"
       },
       {
@@ -193,18 +191,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 10,
-        "lines": 427,
+        "commits": 9,
+        "lines": 469,
         "path": "atlas/page.json"
       },
       {
-        "commits": 10,
-        "lines": 1271,
+        "commits": 9,
+        "lines": 1322,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 10,
-        "lines": 8917,
+        "commits": 9,
+        "lines": 9714,
         "path": "atlas/structure.json"
       },
       {
@@ -228,17 +226,17 @@
         "path": "dataset_desk/backends.py"
       },
       {
-        "commits": 11,
-        "lines": 3354,
+        "commits": 6,
+        "lines": 2946,
         "path": "dataset_desk/description_gate.py"
       },
       {
-        "commits": 17,
-        "lines": 6207,
+        "commits": 13,
+        "lines": 5843,
         "path": "dataset_desk/desk.py"
       },
       {
-        "commits": 7,
+        "commits": 6,
         "lines": 71,
         "path": "dataset_desk/errors.py"
       },
@@ -378,8 +376,8 @@
         "path": "tests/test_scale.py"
       },
       {
-        "commits": 7,
-        "lines": 2570,
+        "commits": 2,
+        "lines": 2746,
         "path": "tests/test_training_captions.py"
       },
       {
@@ -398,75 +396,11 @@
     "level": "low",
     "reason": "fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions"
   },
-  "generatedAt": "2026-11-12T11:03:16.759Z",
+  "generatedAt": "2026-11-12T11:29:34.606Z",
   "generatedFrom": {
-    "commit": "90cea26841a83a1941874087f6473c2d0287a4b5"
+    "commit": "9101583df389d0cb8b60ce864d48602129ef7af8"
   },
-  "pairs": [
-    {
-      "a": "atlas/README.md",
-      "b": "atlas/page.json",
-      "either": 6,
-      "shared": 6,
-      "strength": 1
-    },
-    {
-      "a": "atlas/README.md",
-      "b": "atlas/statistics.json",
-      "either": 6,
-      "shared": 6,
-      "strength": 1
-    },
-    {
-      "a": "atlas/README.md",
-      "b": "atlas/structure.json",
-      "either": 6,
-      "shared": 6,
-      "strength": 1
-    },
-    {
-      "a": "atlas/page.json",
-      "b": "atlas/statistics.json",
-      "either": 6,
-      "shared": 6,
-      "strength": 1
-    },
-    {
-      "a": "atlas/page.json",
-      "b": "atlas/structure.json",
-      "either": 6,
-      "shared": 6,
-      "strength": 1
-    },
-    {
-      "a": "atlas/statistics.json",
-      "b": "atlas/structure.json",
-      "either": 6,
-      "shared": 6,
-      "strength": 1
-    },
-    {
-      "a": "dataset_desk/description_gate.py",
-      "b": "dataset_desk/desk.py",
-      "either": 13,
-      "shared": 7,
-      "strength": 0.538462
-    },
-    {
-      "a": "dataset_desk/description_gate.py",
-      "b": "tests/test_training_captions.py",
-      "either": 9,
-      "shared": 6,
-      "strength": 0.666667
-    },
-    {
-      "a": "tests/test_backends.py",
-      "b": "tests/test_desk.py",
-      "either": 5,
-      "shared": 5,
-      "strength": 1
-    }
-  ],
+  "pairs": [],
   "parameters": {
     "appliedChangesetLimit": 15,
     "changeset": 50,
@@ -477,16 +411,16 @@
     "floor": "fallen",
     "floorHeld": false,
     "floorTrigger": "both",
-    "headDate": "2026-11-12T02:28:04-05:00",
+    "headDate": "2026-11-12T06:29:25-05:00",
     "inScopeFiles": 60,
     "pinnedStart": null,
     "priorFloor": "fallen",
-    "qualifyingCommits": 23,
+    "qualifyingCommits": 14,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 3,
-    "since": "2026-05-16T07:28:04.000Z",
+    "since": "2026-05-16T11:29:25.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",
@@ -502,7 +436,7 @@
     ],
     "sourceFileReach": 20,
     "sourceFileRise": 25,
-    "sourceFilesReachingStrongFloor": 1,
+    "sourceFilesReachingStrongFloor": 0,
     "strength": 0.5,
     "windowDays": 180
   },

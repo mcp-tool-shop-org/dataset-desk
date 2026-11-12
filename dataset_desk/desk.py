@@ -83,6 +83,7 @@ POOL_DETECTION_OFF_WARNING = (
     "--locked-pool-dir configured; set DATASET_DESK_POOL_MANIFEST, user config pool_manifest, or --locked-pool-dir)"
 )
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+PRUNED_WALK_DIRS = frozenset({".git", "__pycache__"})
 
 
 @dataclass
@@ -90,6 +91,22 @@ class _PoolCheckState:
     pool_detection: dict
     pool_hashes: dict[str, set[str]] | None
     pool_stems: dict[str, set[str]] | None = None
+    stem_warning_emitted: bool = False
+
+
+def prune_project_walk_dirs(root: str, dirs: list[str], project_root: str) -> None:
+    """Shared directory-pruning rule for project image/sidecar walks and sha256 pool hashing.
+
+    Prunes `.git` and `__pycache__` at every depth, and prunes only the top-level `<project>/records` metadata folder
+    (`root == project_root`), keeping subdirectories named `records` under `outputs/` (such as `outputs/records/` or
+    `outputs/<wave>/records/`) in both the read set and the sha256 hash set.
+    """
+    is_proj_root = os.path.abspath(root) == os.path.abspath(project_root)
+    dirs[:] = [
+        d
+        for d in dirs
+        if d not in PRUNED_WALK_DIRS and not (is_proj_root and d == "records")
+    ]
 
 
 def _walk_followlinks(
@@ -145,12 +162,16 @@ def enumerate_project_images(
         has_out_subdirs = False
         if os.path.isdir(out_dir):
             try:
-                has_out_subdirs = any(os.path.isdir(os.path.join(out_dir, d)) for d in os.listdir(out_dir))
+                has_out_subdirs = any(
+                    os.path.isdir(os.path.join(out_dir, d))
+                    for d in os.listdir(out_dir)
+                    if d not in PRUNED_WALK_DIRS
+                )
             except OSError:
                 has_out_subdirs = False
         skip_top_outputs = (not include_top_outputs) and has_out_subdirs
         for root, dirs, files in _walk_followlinks(abs_proj):
-            dirs[:] = [d for d in dirs if d not in (".git", "records", "__pycache__")]
+            prune_project_walk_dirs(root, dirs, abs_proj)
             if skip_top_outputs and os.path.abspath(root) == os.path.abspath(out_dir):
                 continue
             for f in files:
@@ -171,11 +192,12 @@ def enumerate_project_images(
             out_names = sorted(os.listdir(out_dir)) if os.path.isdir(out_dir) else []
         except OSError:
             out_names = []
-        for folder in out_names:
+        out_dirs = [d for d in out_names if os.path.isdir(os.path.join(out_dir, d))]
+        prune_project_walk_dirs(out_dir, out_dirs, abs_proj)
+        for folder in out_dirs:
             fdir = os.path.join(out_dir, folder)
-            if not os.path.isdir(fdir):
-                continue
-            for root, _dirs, files in _walk_followlinks(fdir):
+            for root, dirs, files in _walk_followlinks(fdir):
+                prune_project_walk_dirs(root, dirs, abs_proj)
                 for f in files:
                     if os.path.splitext(f)[1].lower() not in IMAGE_EXT:
                         continue
@@ -201,7 +223,7 @@ def enumerate_project_images(
                     continue
                 if isinstance(rdoc, dict) and isinstance(rdoc.get("asset_path"), str):
                     ap = rdoc["asset_path"].replace("\\", "/").strip()
-                    if ap and ap not in seen_rel and os.path.splitext(ap)[1].lower() in IMAGE_EXT:
+                    if ap and ap not in seen_rel:
                         full_ap = os.path.join(abs_proj, ap)
                         if os.path.isfile(full_ap):
                             seen_rel.add(ap)
@@ -325,10 +347,13 @@ def _normalize_pool_dir_specs(
     for item in raw_list:
         if "=" in item:
             p_key, p_dir = item.split("=", 1)
+            p_key = p_key.strip()
             p_dir = p_dir.strip()
+            if not p_key or not p_dir:
+                raise DeskError("INPUT_EMPTY_POOL_SOURCE", f"empty pool directory entry {item!r}")
             if base_dir and not os.path.isabs(p_dir):
                 p_dir = os.path.normpath(os.path.join(base_dir, p_dir))
-            resolved.append(f"{p_key.strip()}={p_dir}")
+            resolved.append(f"{p_key}={p_dir}")
         else:
             p_dir = item
             if base_dir and not os.path.isabs(p_dir):
@@ -413,8 +438,8 @@ def _parse_pool_manifest_doc(
         pools_raw = doc
     raw_dirs = doc.get("locked_pool_dirs") if "locked_pool_dirs" in doc else doc.get("pool_dirs")
     has_dir_key = ("locked_pool_dirs" in doc) or ("pool_dirs" in doc)
-    extra_dirs = _normalize_pool_dir_specs(raw_dirs, base_dir=base_dir)
-    if has_dir_key and raw_dirs is not None and not extra_dirs:
+    extra_dirs = _normalize_pool_dir_specs(raw_dirs, base_dir=base_dir) if raw_dirs is not None else []
+    if has_dir_key and not extra_dirs:
         raise DeskError(
             "INPUT_EMPTY_POOL_SOURCE",
             f"pool manifest {source_label!r} configured an empty 'locked_pool_dirs' source",
@@ -477,18 +502,37 @@ def _load_user_pool_config() -> tuple[str | None, str | None, list[str]]:
     if not isinstance(doc, dict):
         raise DeskError("INPUT_BAD_ARGUMENT", f"user config {cfg_path!r} must be a JSON object")
     cfg_dir = os.path.dirname(cfg_path)
+    has_pm_key = "pool_manifest" in doc
     pm_raw = doc.get("pool_manifest")
     manifest_path: str | None = None
-    if pm_raw is not None:
+    if has_pm_key:
+        if pm_raw is None:
+            raise DeskError(
+                "INPUT_EMPTY_POOL_SOURCE",
+                f"user config {cfg_path!r} configured an empty 'pool_manifest' source",
+            )
         if not isinstance(pm_raw, str):
             raise DeskError("INPUT_BAD_ARGUMENT", f"user config {cfg_path!r} 'pool_manifest' must be a string")
-        if pm_raw.strip():
-            pm_exp = os.path.expanduser(pm_raw.strip())
-            manifest_path = pm_exp if os.path.isabs(pm_exp) else os.path.normpath(os.path.join(cfg_dir, pm_exp))
-    dir_specs = _normalize_pool_dir_specs(
-        doc.get("locked_pool_dirs") if "locked_pool_dirs" in doc else doc.get("pool_dirs"),
-        base_dir=cfg_dir,
-    )
+        if not pm_raw.strip():
+            raise DeskError(
+                "INPUT_EMPTY_POOL_SOURCE",
+                f"user config {cfg_path!r} configured an empty 'pool_manifest' source",
+            )
+        pm_exp = os.path.expanduser(pm_raw.strip())
+        manifest_path = pm_exp if os.path.isabs(pm_exp) else os.path.normpath(os.path.join(cfg_dir, pm_exp))
+    has_dir_key = ("locked_pool_dirs" in doc) or ("pool_dirs" in doc)
+    raw_dirs = doc.get("locked_pool_dirs") if "locked_pool_dirs" in doc else doc.get("pool_dirs")
+    dir_specs = _normalize_pool_dir_specs(raw_dirs, base_dir=cfg_dir) if raw_dirs is not None else []
+    if has_dir_key and not dir_specs:
+        raise DeskError(
+            "INPUT_EMPTY_POOL_SOURCE",
+            f"user config {cfg_path!r} configured an empty 'locked_pool_dirs' source",
+        )
+    if not manifest_path and not dir_specs:
+        raise DeskError(
+            "INPUT_EMPTY_POOL_SOURCE",
+            f"user config {cfg_path!r} configured 0 pool manifests and 0 pool directories",
+        )
     return cfg_path, manifest_path, dir_specs
 
 
@@ -499,8 +543,19 @@ def _resolve_pool_detection_with_stems(
     emit_warning: bool = True,
 ) -> tuple[dict, dict[str, set[str]] | None, dict[str, set[str]] | None]:
     user_cfg_path, user_manifest, user_dirs = _load_user_pool_config()
-    arg_manifest = pool_manifest.strip() if isinstance(pool_manifest, str) and pool_manifest.strip() else None
-    env_manifest = os.environ.get(POOL_MANIFEST_ENV, "").strip() or None
+    arg_manifest: str | None = None
+    if pool_manifest is not None:
+        if not isinstance(pool_manifest, str):
+            raise DeskError("INPUT_BAD_ARGUMENT", "--pool-manifest must be a string")
+        if not pool_manifest.strip():
+            raise DeskError("INPUT_EMPTY_POOL_SOURCE", "--pool-manifest configured an empty manifest path")
+        arg_manifest = pool_manifest.strip()
+    env_manifest: str | None = None
+    if POOL_MANIFEST_ENV in os.environ:
+        raw_env_manifest = os.environ[POOL_MANIFEST_ENV].strip()
+        if not raw_env_manifest:
+            raise DeskError("INPUT_EMPTY_POOL_SOURCE", f"{POOL_MANIFEST_ENV} configured an empty manifest path")
+        env_manifest = raw_env_manifest
 
     eff_manifest: str | None = None
     manifest_via: str | None = None
@@ -523,9 +578,11 @@ def _resolve_pool_detection_with_stems(
             raise DeskError("INPUT_EMPTY_POOL_SOURCE", "--locked-pool-dir configured 0 pool directories")
         for spec in norm_arg_dirs:
             dir_entries.append((spec, "--locked-pool-dir", None))
-    env_dirs = os.environ.get(POOL_DIRS_ENV, "").strip()
-    if env_dirs:
-        for spec in _normalize_pool_dir_specs(env_dirs):
+    if POOL_DIRS_ENV in os.environ:
+        norm_env_dirs = _normalize_pool_dir_specs(os.environ[POOL_DIRS_ENV])
+        if not norm_env_dirs:
+            raise DeskError("INPUT_EMPTY_POOL_SOURCE", f"{POOL_DIRS_ENV} configured 0 pool directories")
+        for spec in norm_env_dirs:
             dir_entries.append((spec, POOL_DIRS_ENV, None))
     for spec in user_dirs:
         dir_entries.append((spec, "user_config", user_cfg_path))
@@ -618,10 +675,20 @@ def _resolve_pool_detection_with_stems(
             "pool_detection cannot turn on with zero hashes in a configured pool",
         )
 
+    sorted_cfg = sorted(configured_pools)
+    missing_stem_pools = [p for p in sorted_cfg if not pool_stems[p]]
+    if len(missing_stem_pools) == len(sorted_cfg):
+        stem_check_status = "no stems configured"
+    elif missing_stem_pools:
+        stem_check_status = f"no stems configured for {', '.join(missing_stem_pools)}"
+    else:
+        stem_check_status = "on"
+
     sorted_pools = sorted(MULTIMODAL_POOL)
     on_doc = {
         "status": "on",
-        "configured_pools": sorted(configured_pools),
+        "configured_pools": sorted_cfg,
+        "stem_check": stem_check_status,
         "pools": {
             p: {
                 "count": len(pools[p]),
@@ -797,6 +864,23 @@ def _check_txt_stems_against_pools(
         )
 
 
+def _record_text_stem_check_status(state: _PoolCheckState, *, emit_warning: bool = True) -> None:
+    pd = state.pool_detection
+    if pd.get("status") == "on":
+        stem_status = pd.get("stem_check")
+        if stem_status and stem_status != "on":
+            warn_msg = (
+                f"warning: .txt caption sidecar stem check skipped ({stem_status}: "
+                "hashes-only manifest provides no image stems or paths)"
+            )
+            pd["warning"] = warn_msg
+            if emit_warning and not state.stem_warning_emitted:
+                print(warn_msg, file=sys.stderr)
+                state.stem_warning_emitted = True
+    elif pd.get("status") == "off":
+        pd.setdefault("stem_check", "off")
+
+
 def _check_text_source_pool_state(
     source_root: str | None,
     backend: str,
@@ -810,13 +894,16 @@ def _check_text_source_pool_state(
 ) -> _PoolCheckState:
     if source_root is None:
         if _pool_state is not None:
+            _record_text_stem_check_status(_pool_state, emit_warning=not allow_multimodal_pool)
             return _pool_state
         pd_doc, pd_hashes, pd_stems = _resolve_pool_detection_with_stems(
             pool_manifest=pool_manifest,
             locked_pool_dirs=locked_pool_dirs,
             emit_warning=True,
         )
-        return _PoolCheckState(pool_detection=pd_doc, pool_hashes=pd_hashes, pool_stems=pd_stems)
+        state = _PoolCheckState(pool_detection=pd_doc, pool_hashes=pd_hashes, pool_stems=pd_stems)
+        _record_text_stem_check_status(state, emit_warning=not allow_multimodal_pool)
+        return state
 
     state = _check_multimodal_pool_state(
         source_root,
@@ -829,6 +916,7 @@ def _check_text_source_pool_state(
         _include_top_outputs=True,
         _pool_state=_pool_state,
     )
+    _record_text_stem_check_status(state, emit_warning=not allow_multimodal_pool)
     if allow_multimodal_pool:
         return state
 
