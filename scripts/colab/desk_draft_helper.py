@@ -236,10 +236,11 @@ def _json_text_ok(text: str, jsonl: bool) -> bool:
 
 
 def scrub_text_for_file(name: str, text: str, roots: list[tuple[str, str]] | None = None) -> tuple[str, str]:
-    """Scrub `text` of the file `name`. Returns (cleaned, status); status is ok, json_fallback or json_error.
+    """Scrub `text` of the file `name`. Returns (cleaned, status).
 
-    A scrub must never turn valid JSON into invalid JSON. If the regex scrub breaks a parsable .json/.jsonl, redo it
-    on the decoded string values; if that fails too, return the ORIGINAL text with status json_error."""
+    status: ok; json_fallback (the regex scrub broke parsable JSON, so it was redone on the decoded values);
+    json_error_scrubbed (the original is not valid JSON; the regex-scrubbed text is returned); json_error (the
+    original parsed and neither scrub could keep it valid; the ORIGINAL text is returned)."""
     cleaned = scrub_rig_paths(text, roots)
     suffix = pathlib.PurePosixPath(name).suffix.lower()
     if suffix not in (".json", ".jsonl") or cleaned == text:
@@ -248,7 +249,9 @@ def scrub_text_for_file(name: str, text: str, roots: list[tuple[str, str]] | Non
     if _json_text_ok(cleaned, jsonl):
         return cleaned, "ok"
     if not _json_text_ok(text, jsonl):
-        return text, "json_error"
+        # The original does not parse (a JSONL cut off by a killed writer): there is no JSON to protect, so the
+        # regex-scrubbed text is written and the file is still reported.
+        return cleaned, "json_error_scrubbed"
     try:
         if jsonl:
             lines = [json.dumps(_scrub_json_values(json.loads(ln), roots), ensure_ascii=False) for ln in text.splitlines() if ln.strip()]
@@ -261,13 +264,21 @@ def scrub_text_for_file(name: str, text: str, roots: list[tuple[str, str]] | Non
 
 
 def _atomic_write_text(path: pathlib.Path, text: str) -> None:
-    """Write via a temp file in the same directory and rename, so a kill cannot leave a truncated file."""
+    """Write via an exclusively created temp file in the same directory, copy the original's mode, and rename, so a
+    kill cannot leave a truncated file."""
     tmp = path.with_name(f".{path.name}.scrub_tmp_{os.getpid()}")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
     try:
-        with tmp.open("w", encoding="utf-8", newline="\n") as fh:
-            fh.write(text)
+        try:
+            fd = os.open(tmp, flags, 0o600)
+        except FileExistsError:
+            tmp.unlink()
+            fd = os.open(tmp, flags, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(text.encode("utf-8"))
             fh.flush()
             os.fsync(fh.fileno())
+        shutil.copymode(path, tmp)
         os.replace(tmp, path)
     finally:
         if tmp.exists():
@@ -303,8 +314,14 @@ def _scrub_dir(out_dir: pathlib.Path, roots: list[tuple[str, str]]) -> dict:
             if status == "json_error":
                 errors.append(f"{rel} (scrub would break the JSON; original kept)")
                 continue
+            if status == "json_error_scrubbed":
+                errors.append(f"{rel} (not valid JSON; regex-scrubbed)")
             if cleaned != text:
-                _atomic_write_text(fpath, cleaned)
+                try:
+                    _atomic_write_text(fpath, cleaned)
+                except OSError as exc:
+                    skipped.append(f"{rel} (replace_failed: {exc.__class__.__name__})")
+                    continue
                 scrubbed += 1
         except OSError as exc:
             skipped.append(f"{fpath.name} (unreadable: {exc.__class__.__name__})")
@@ -895,10 +912,13 @@ def cmd_preflight_project(args: argparse.Namespace) -> int:
                 except UnicodeDecodeError:
                     as_text = None
                 if as_text is None:
-                    payload = raw_bytes
+                    raise RefusalError(
+                        "UPLOAD_NON_UTF8_TEXT",
+                        f"{rel_posix!r} is not an image and not valid UTF-8, so it cannot be scrubbed of rig paths",
+                    )
                 else:
                     cleaned_text, scrub_status = scrub_text_for_file(rel_posix, as_text)
-                    if scrub_status == "json_error":
+                    if scrub_status in ("json_error", "json_error_scrubbed"):
                         raise RefusalError(
                             "UPLOAD_SCRUB_INVALID_JSON",
                             f"{rel_posix!r} is not valid JSON and a rig-path scrub cannot be verified; fix or remove it",

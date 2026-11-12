@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     re-parsed, redone on decoded values if needed, else the original is kept or the upload refused
     `UPLOAD_SCRUB_INVALID_JSON`); scrub writes are atomic and skip non-UTF-8 files; the watcher subshell scrubs only on
     escalation; hard-linked image uploads refuse `PROJECT_ASSET_HARDLINKED`; `path_is_rejected` fails closed.
+  - Review round 4: a JSON/JSONL file that does not parse is still regex-scrubbed (reported in `scrub_errors`); the
+    escalated cleanup branches no longer scrub while the watcher writes; the token scrub in `launch_guards.py` stops at
+    a backslash (JSON stays valid), writes atomically with the original mode and skips non-UTF-8 files; uploads refuse
+    non-UTF-8 text (`UPLOAD_NON_UTF8_TEXT`).
   - Coverage unchanged (the lane scripts sit outside the measured `dataset_desk` package; floor 90 stays).
 
 ### Added

@@ -7,7 +7,7 @@
 #        fleet ruling 2026-11-09. sdlab df9a1b3b predates it, so this copy differs from that export by that rule.)
 #       (+ parallel-window rate fix: polyglot-mcp main bd6414fd, PR #80, ported function by function; and a
 #        desk-local watcher ancestry guard. launch_guards.py carries the same port.)
-#   - scripts/colab/launch_guards.py sha256 2998b4f8e3aea3aea2ecc9f779c743b4b44824b30e7ff55fb1da782d7a416c69
+#   - scripts/colab/launch_guards.py sha256 f01bf7267b774cdeefc7f6e59f864033647427158dbb4cfe5aa1fb23f56b3a54
 #   - scripts/colab/remote_runner.py sha256 393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb
 #
 # Modes:
@@ -29,12 +29,12 @@ PINNED_QWEN3_VL_REPO="Qwen/Qwen3-VL-8B-Instruct"
 PINNED_QWEN3_VL_REVISION="0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
 
 PINNED_COLAB_WINDOW_SHA="415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725b987132e7"
-PINNED_LAUNCH_GUARDS_SHA="2998b4f8e3aea3aea2ecc9f779c743b4b44824b30e7ff55fb1da782d7a416c69"
+PINNED_LAUNCH_GUARDS_SHA="f01bf7267b774cdeefc7f6e59f864033647427158dbb4cfe5aa1fb23f56b3a54"
 PINNED_REMOTE_RUNNER_SHA="393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 PINNED_DESK_BUNDLE_NOW_SHA="b1e83c20f046716433d927fa442e43fe3e6c821c90adc84cd87cfccae9aed1ac"
-PINNED_DESK_DRAFT_HELPER_SHA="784471c37c9a1e93f27330ec5abe60b9ede8c328be4ac176f24f1eb1a734d311"
+PINNED_DESK_DRAFT_HELPER_SHA="d794190f9909bbc8d492ec6f66a32e56cf1cab4dc8108dcfceb5faecd779796c"
 PINNED_DESK_LOCK_SHA="7d718664b0289b53532ff50541e63942166c1921a2f52cb0e48900958bf90510"
-PINNED_SELF_SHA="e961f4c2352d83589e4ee27a34b11728d79f83a7a433cea63ba94e939c959fbf"
+PINNED_SELF_SHA="84ee8a08b191078bb9173f356dbaf044210f604cda52a601363189bbb841d209"
 
 if pwd -W >/dev/null 2>&1; then
   export MSYS2_ARG_CONV_EXCL="/content"
@@ -1153,8 +1153,9 @@ cleanup_on_exit() {
   fi
 
   if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
+    # No scrub here: the escalated watcher is still writing stop.log, window.json and outcome. Its own subshell
+    # scrubs after its last write, and the next launch sweeps this folder.
     desk_clean_rig_staging
-    desk_scrub_kept_paths
     sleep 3600
     exit 137
   fi
@@ -1164,8 +1165,9 @@ cleanup_on_exit() {
     colab_stop_and_log_closing "${PY_BIN}" "${SESSION}" "${OUT_DIR}"
   fi
   if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
+    # No scrub here: the escalated watcher is still writing stop.log, window.json and outcome. Its own subshell
+    # scrubs after its last write, and the next launch sweeps this folder.
     desk_clean_rig_staging
-    desk_scrub_kept_paths
     sleep 3600
     exit 137
   fi

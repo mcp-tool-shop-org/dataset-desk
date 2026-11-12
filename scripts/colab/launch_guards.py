@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import sys
@@ -29,8 +30,8 @@ WORKER_PROC_RE = re.compile(
 OOM_KILL_RE = re.compile(r"\boom_kill\s+([1-9]\d*)\b|\bOut of memory: Killed process\b", re.I)
 
 TOKEN_SCRUB_PATTERNS = [
-    (re.compile(r"(colab-runtime-proxy-token=)[^\s&\"']+"), r"\1[REDACTED]"),
-    (re.compile(r"(access_token=)[^\s&\"']+"), r"\1[REDACTED]"),
+    (re.compile(r"(colab-runtime-proxy-token=)[^\s&\\\"']+"), r"\1[REDACTED]"),
+    (re.compile(r"(access_token=)[^\s&\\\"']+"), r"\1[REDACTED]"),
     (re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]+"), r"\1[REDACTED]"),
     (re.compile(r"\bhf_[A-Za-z0-9]{16,}\b"), "hf_[REDACTED]"),
 ]
@@ -89,14 +90,40 @@ def scrub_colab_tokens(text: str) -> str:
     return out
 
 
-def scrub_file_in_place(path: Path) -> None:
+def scrub_file_in_place(path: Path) -> bool:
+    """Scrub tokens in place, atomically (temp file + replace, keeping the file mode). A file that is not valid
+    UTF-8 is skipped, never rewritten with replacement characters; returns False for that skip."""
     p = Path(path)
     if not p.exists() or not p.is_file():
-        return
-    raw = p.read_text(encoding="utf-8", errors="replace")
+        return True
+    try:
+        raw = p.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        print(f"TOKEN_SCRUB_SKIPPED_NON_UTF8 {p.name}", file=sys.stderr)
+        return False
     scrubbed = scrub_colab_tokens(raw)
     if scrubbed != raw:
-        p.write_text(scrubbed, encoding="utf-8", newline="\n")
+        tmp = p.with_name(f".{p.name}.tokscrub_tmp_{os.getpid()}")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        try:
+            try:
+                fd = os.open(tmp, flags, 0o600)
+            except FileExistsError:
+                tmp.unlink()
+                fd = os.open(tmp, flags, 0o600)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(scrubbed.encode("utf-8"))
+                fh.flush()
+                os.fsync(fh.fileno())
+            shutil.copymode(p, tmp)
+            os.replace(tmp, p)
+        finally:
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+    return True
 
 
 def evaluate_wall_guard(

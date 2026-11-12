@@ -38,7 +38,7 @@ DESK_LOCK_FILE = COLAB_DIR / "locks" / "desk_draft.lock"
 
 EXPECTED_SDLAB_COMMIT = "df9a1b3be2f8729a57776253e9b0cb32b7f5299c"
 EXPECTED_COLAB_WINDOW_SHA = "415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725b987132e7"
-EXPECTED_LAUNCH_GUARDS_SHA = "2998b4f8e3aea3aea2ecc9f779c743b4b44824b30e7ff55fb1da782d7a416c69"
+EXPECTED_LAUNCH_GUARDS_SHA = "f01bf7267b774cdeefc7f6e59f864033647427158dbb4cfe5aa1fb23f56b3a54"
 EXPECTED_REMOTE_RUNNER_SHA = "393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 
 
@@ -2344,7 +2344,7 @@ class PreL4HardeningTests(ColabTempTestCase):
         self.assertEqual(status_jl, "ok")
         self.assertEqual(len([json.loads(ln) for ln in cleaned_jl.splitlines()]), 3)
         # A scrub that would break parsable JSON falls back to the decoded values; unparsable JSON keeps its original.
-        self.assertEqual(helper.scrub_text_for_file("bad.json", '{"a": "/home/bob", ')[1], "json_error")
+        self.assertEqual(helper.scrub_text_for_file("bad.json", '{"a": "/home/bob", ')[1], "json_error_scrubbed")
         out_dir = self.tmp_path / "json_scrub"
         out_dir.mkdir()
         (out_dir / "window.json").write_text(text, encoding="utf-8")
@@ -2352,8 +2352,8 @@ class PreL4HardeningTests(ColabTempTestCase):
         (out_dir / "latin.txt").write_bytes("caf\xe9 /home/bob".encode("latin-1"))
         rep = helper._scrub_dir(out_dir, [])
         json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
-        self.assertIn("/home/bob", (out_dir / "bad.json").read_text(encoding="utf-8"))
-        self.assertEqual(rep["scrub_errors"], ["bad.json (scrub would break the JSON; original kept)"])
+        self.assertNotIn("/home/bob", (out_dir / "bad.json").read_text(encoding="utf-8"))
+        self.assertEqual(rep["scrub_errors"], ["bad.json (not valid JSON; regex-scrubbed)"])
         self.assertEqual((out_dir / "latin.txt").read_bytes(), "caf\xe9 /home/bob".encode("latin-1"))
         self.assertIn("latin.txt (not utf-8)", rep["skipped"])
         self.assertEqual([f.name for f in out_dir.iterdir() if ".scrub_tmp_" in f.name], [])
@@ -2416,6 +2416,85 @@ class PreL4HardeningTests(ColabTempTestCase):
         self.assertEqual(res.returncode, 0, msg=res.stderr[-800:])
         self.assertIn("No active sessions.", (out_dir / "colab.log").read_text(encoding="utf-8"))
         self.assertIn("STOP_COMPLETED", (out_dir / "stop.log").read_text(encoding="utf-8") + (out_dir / "guards.log").read_text(encoding="utf-8"))
+
+    # ---- review round 4 ----
+
+    def test_cut_off_jsonl_is_still_scrubbed_and_reported(self) -> None:
+        helper = _load_module("desk_draft_helper_cutoff_test", DESK_DRAFT_HELPER_PY)
+        out_dir = self.tmp_path / "cutoff"
+        out_dir.mkdir()
+        body = '{"a": "/home/bob/x"}\n{"b": "/home/bob/y"}\n{"c": "/home/bo'
+        (out_dir / "events.jsonl").write_text(body, encoding="utf-8")
+        rep = helper._scrub_dir(out_dir, [])
+        self.assertNotIn("bob", (out_dir / "events.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual(rep["scrub_errors"], ["events.jsonl (not valid JSON; regex-scrubbed)"])
+
+    def test_token_scrub_keeps_json_valid_is_atomic_and_skips_non_utf8(self) -> None:
+        guards = _load_module("launch_guards_tok_test", LAUNCH_GUARDS_PY)
+        doc = {"cmd": 'curl "https://x/?colab-runtime-proxy-token=SECRET123&a=1"', "b": 'x access_token=ABC"'}
+        f = self.tmp_path / "cmd.json"
+        f.write_text(json.dumps(doc), encoding="utf-8")
+        os.chmod(f, 0o640)
+        self.assertTrue(guards.scrub_file_in_place(f))
+        parsed = json.loads(f.read_text(encoding="utf-8"))
+        self.assertNotIn("SECRET123", json.dumps(parsed))
+        self.assertNotIn("ABC", json.dumps(parsed))
+        self.assertEqual(f.stat().st_mode & 0o777, 0o640)
+        self.assertEqual([x.name for x in self.tmp_path.iterdir() if "tokscrub_tmp" in x.name], [])
+        bad = self.tmp_path / "latin.log"
+        bad.write_bytes("caf\xe9 access_token=ZZZ".encode("latin-1"))
+        self.assertFalse(guards.scrub_file_in_place(bad))
+        self.assertEqual(bad.read_bytes(), "caf\xe9 access_token=ZZZ".encode("latin-1"))
+
+    def test_atomic_scrub_write_keeps_the_original_mode(self) -> None:
+        helper = _load_module("desk_draft_helper_mode_test", DESK_DRAFT_HELPER_PY)
+        out_dir = self.tmp_path / "mode"
+        out_dir.mkdir()
+        f = out_dir / "a.log"
+        f.write_text("see /home/bob/x\n", encoding="utf-8")
+        os.chmod(f, 0o640)
+        helper._scrub_dir(out_dir, [])
+        self.assertNotIn("bob", f.read_text(encoding="utf-8"))
+        self.assertEqual(f.stat().st_mode & 0o777, 0o640)
+
+    def test_upload_refuses_non_utf8_text(self) -> None:
+        helper = _load_module("desk_draft_helper_utf8_test", DESK_DRAFT_HELPER_PY)
+        proj, cap_cfg = self.make_project("utf8_src", flagged_count=1, unflagged_count=1)
+        (proj / "outputs" / "wave-1" / "generation.json").write_bytes("caf\xe9".encode("latin-1"))
+        out_dir = self.tmp_path / "utf8_out"
+        out_dir.mkdir()
+        ns = types.SimpleNamespace(
+            repo_root=str(REPO_ROOT), project=str(proj), caption_config=str(cap_cfg), out_dir=str(out_dir), isolate_user_config=True
+        )
+        with self.assertRaises(helper.RefusalError) as ctx:
+            helper.cmd_preflight_project(ns)
+        self.assertEqual(ctx.exception.code, "UPLOAD_NON_UTF8_TEXT")
+
+    @unittest.skipUnless(os.name == "posix", "needs bash")
+    def test_escalated_cleanup_branches_never_scrub_while_the_watcher_is_writing(self) -> None:
+        import subprocess
+
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        blocks = re.findall(r'  if \[ -f "\$\{OUT_DIR\}/watcher_escalated\.txt" \]; then\n(.*?)\n  fi\n', text, re.S)
+        blocks = [b for b in blocks if "sleep 3600" in b]
+        self.assertEqual(len(blocks), 2)
+        for i, block in enumerate(blocks):
+            out_dir = self.tmp_path / f"esc_{i}"
+            out_dir.mkdir()
+            (out_dir / "stop.log").write_text("STOP_COMPLETED session=x\n", encoding="utf-8")
+            driver = (
+                f'OUT_DIR="{out_dir}"\n'
+                'desk_clean_rig_staging() { :; }\n'
+                'desk_scrub_kept_paths() { echo scrubbed > "${OUT_DIR}/scrub_called"; }\n'
+                'sleep() { :; }\n'
+                # the watcher's late append lands after the launcher's escalated branch has run
+                f'( {block.replace("exit 137", "true")} )\n'
+                'echo "late watcher write" >> "${OUT_DIR}/stop.log"\n'
+            )
+            res = subprocess.run(["bash", "-c", driver], capture_output=True, text=True, timeout=30, check=False)
+            self.assertEqual(res.returncode, 0, msg=res.stderr)
+            self.assertFalse((out_dir / "scrub_called").exists(), msg=f"branch {i} scrubs while the watcher writes")
+            self.assertIn("late watcher write", (out_dir / "stop.log").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
