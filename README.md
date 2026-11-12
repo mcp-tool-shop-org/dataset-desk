@@ -195,6 +195,16 @@ A project with no `records/` works too, as long as the images sit in folders und
 
 Report a vulnerability as described in [SECURITY.md](SECURITY.md).
 
+### Colab caption-drafting lane: kept files
+
+Every run of `scripts/colab/launch_desk_draft.sh` writes `.scrub_pending` into its out dir first and removes it only
+after `scrub-kept-paths` finishes with no `scrub_errors` (rig paths and tokens scrubbed from every kept text file).
+A folder that still carries the marker is not safe to share: a run killed before its scrub, or an escalated run whose
+wall watcher died after escalating (rig shutdown, WSL restart, OOM), stays marked until the next launch's sweep
+rescues it or you run `desk_draft_helper.py scrub-kept-paths --out-dir <dir>`. Any promote, export or publish step that
+reads a run folder must call `desk_draft_helper.py check-out-dir-scrubbed --out-dir <dir>`, which refuses
+`OUT_DIR_SCRUB_PENDING`. Review `scrub_report.json` for files the scrub could not make safe.
+
 ## Status
 
 **v0.3.0, a public prototype.** The code is tested offline with small stand-ins for the model libraries.

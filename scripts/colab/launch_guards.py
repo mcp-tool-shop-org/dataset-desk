@@ -30,8 +30,9 @@ WORKER_PROC_RE = re.compile(
 OOM_KILL_RE = re.compile(r"\boom_kill\s+([1-9]\d*)\b|\bOut of memory: Killed process\b", re.I)
 
 TOKEN_SCRUB_PATTERNS = [
-    (re.compile(r"(colab-runtime-proxy-token=)[^\s&\\\"']+"), r"\1[REDACTED]"),
-    (re.compile(r"(access_token=)[^\s&\\\"']+"), r"\1[REDACTED]"),
+    (re.compile(r"(colab-runtime-proxy-token=)(?:\\/|[^\s&\\\"'])+"), r"\1[REDACTED]"),
+    (re.compile(r"(access_token=)(?:\\/|[^\s&\\\"'])+"), r"\1[REDACTED]"),
+    (re.compile(r"((?:\\)?\"access_token(?:\\)?\"\s*:\s*(?:\\)?\")(?:\\/|[^\"\\])+"), r"\1[REDACTED]"),
     (re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]+"), r"\1[REDACTED]"),
     (re.compile(r"\bhf_[A-Za-z0-9]{16,}\b"), "hf_[REDACTED]"),
 ]
@@ -1306,8 +1307,17 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     if args.scrub_file:
+        failed: list[str] = []
         for fpath in args.scrub_file:
-            scrub_file_in_place(Path(fpath))
+            # One bad file must not stop the others; every failure is named and the exit is non-zero.
+            try:
+                if not scrub_file_in_place(Path(fpath)):
+                    failed.append(f"{Path(fpath).name} (not utf-8)")
+            except OSError as exc:
+                failed.append(f"{Path(fpath).name} ({exc.__class__.__name__})")
+        if failed:
+            print(f"TOKEN_SCRUB_FAILED: {', '.join(failed)}", file=sys.stderr)
+            return 1
         return 0
 
     if args.check_ram and args.ram_vitals_file is not None:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -192,9 +193,26 @@ _RIG_PATH_PATTERNS = (
 _SCRUB_MAX_BYTES = 64 * 1024 * 1024
 
 
+_GUARDS_MODULE: object = None
+
+
+def _token_scrub(text: str) -> str:
+    """Apply launch_guards.scrub_colab_tokens (sits next to this file on the rig and on the VM)."""
+    global _GUARDS_MODULE
+    if _GUARDS_MODULE is None:
+        try:
+            spec = importlib.util.spec_from_file_location("desk_launch_guards", pathlib.Path(__file__).with_name("launch_guards.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _GUARDS_MODULE = mod
+        except Exception:
+            _GUARDS_MODULE = False
+    return _GUARDS_MODULE.scrub_colab_tokens(text) if _GUARDS_MODULE else text
+
+
 def scrub_rig_paths(text: str, roots: list[tuple[str, str]] | None = None) -> str:
-    """Replace explicit roots (longest first), then every generic rig-path pattern, in `text`."""
-    out = text
+    """Replace Colab/HF tokens, then explicit roots (longest first), then every generic rig-path pattern, in `text`."""
+    out = _token_scrub(text)
     variants: list[tuple[str, str]] = []
     for root, placeholder in roots or []:
         r = str(root or "").strip()
@@ -251,6 +269,18 @@ def scrub_text_for_file(name: str, text: str, roots: list[tuple[str, str]] | Non
     if not _json_text_ok(text, jsonl):
         # The original does not parse (a JSONL cut off by a killed writer): there is no JSON to protect, so the
         # regex-scrubbed text is written and the file is still reported.
+        if jsonl:
+            # Per line: a line that parses is scrubbed on its decoded values (a `\\/` writer stays valid); a line
+            # that does not (a cut-off tail) is regex-scrubbed.
+            out_lines = []
+            for ln in text.splitlines():
+                if not ln.strip():
+                    continue
+                try:
+                    out_lines.append(json.dumps(_scrub_json_values(json.loads(ln), roots), ensure_ascii=False))
+                except ValueError:
+                    out_lines.append(scrub_rig_paths(ln, roots))
+            return "\n".join(out_lines) + "\n", "json_error_scrubbed"
         return cleaned, "json_error_scrubbed"
     try:
         if jsonl:
@@ -328,6 +358,30 @@ def _scrub_dir(out_dir: pathlib.Path, roots: list[tuple[str, str]]) -> dict:
     return {"scrubbed_files": scrubbed, "skipped": skipped, "scrub_errors": errors}
 
 
+SCRUB_PENDING_MARKER = ".scrub_pending"
+
+
+def _scrub_complete(report: dict) -> bool:
+    """A scrub is complete only with no scrub_errors and nothing that could not be rewritten or read as text."""
+    if report["scrub_errors"]:
+        return False
+    return not any(("replace_failed" in x) or ("not utf-8" in x) or ("over " in x) or ("unreadable" in x) for x in report["skipped"])
+
+
+def cmd_check_out_dir_scrubbed(args: argparse.Namespace) -> int:
+    """Refuse (OUT_DIR_SCRUB_PENDING) a run folder that still carries .scrub_pending: any promote, export or publish
+    step that reads a desk-lane out dir must call this first."""
+    out_dir = pathlib.Path(args.out_dir)
+    if (out_dir / SCRUB_PENDING_MARKER).exists():
+        raise RefusalError(
+            "OUT_DIR_SCRUB_PENDING",
+            f"{out_dir.name!r} still carries {SCRUB_PENDING_MARKER}: its kept files may hold unscrubbed rig paths; "
+            "run scrub-kept-paths or the next launch's sweep, and review scrub_report.json",
+        )
+    print(json.dumps({"scrubbed": True}, sort_keys=True))
+    return 0
+
+
 def cmd_scrub_kept_paths(args: argparse.Namespace) -> int:
     out_dir = pathlib.Path(args.out_dir)
     if not out_dir.is_dir():
@@ -355,12 +409,20 @@ def cmd_scrub_kept_paths(args: argparse.Namespace) -> int:
         )
     except OSError:
         pass
+    if _scrub_complete(report):
+        try:
+            (out_dir / SCRUB_PENDING_MARKER).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
     print(json.dumps(report, sort_keys=True))
     return 0
 
 
 def cmd_sweep_unscrubbed(args: argparse.Namespace) -> int:
-    """Scrub earlier desk-lane run folders (they hold window.json and remote_desk_draft.sh) next to this one."""
+    """Scrub earlier desk-lane run folders next to this one: any folder with .scrub_pending (a run killed before its
+    scrub, or an escalated run whose watcher died) or remote_desk_draft.sh. Paths and tokens are both scrubbed."""
     parent = pathlib.Path(args.parent)
     exclude = pathlib.Path(args.exclude).resolve() if args.exclude else None
     if not parent.is_dir():
@@ -374,9 +436,11 @@ def cmd_sweep_unscrubbed(args: argparse.Namespace) -> int:
         try:
             if not child.is_dir() or child.is_symlink() or (exclude is not None and child.resolve() == exclude):
                 continue
-            if not ((child / "window.json").is_file() and (child / "remote_desk_draft.sh").is_file()):
+            if not ((child / SCRUB_PENDING_MARKER).exists() or (child / "remote_desk_draft.sh").is_file()):
                 continue
-            _scrub_dir(child, [])
+            report = _scrub_dir(child, [])
+            if (child / SCRUB_PENDING_MARKER).exists() and _scrub_complete(report):
+                (child / SCRUB_PENDING_MARKER).unlink()
             swept += 1
         except OSError:
             continue
@@ -2672,6 +2736,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_cln = sub.add_parser("vm-cleanup-workdir")
     p_cln.add_argument("--content-root", default="/content")
     p_cln.set_defaults(func=cmd_vm_cleanup_workdir)
+
+    p_chk = sub.add_parser("check-out-dir-scrubbed")
+    p_chk.add_argument("--out-dir", required=True)
+    p_chk.set_defaults(func=cmd_check_out_dir_scrubbed)
 
     p_sw = sub.add_parser("sweep-unscrubbed")
     p_sw.add_argument("--parent", required=True)

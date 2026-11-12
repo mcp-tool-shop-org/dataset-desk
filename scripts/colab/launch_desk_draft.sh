@@ -7,7 +7,7 @@
 #        fleet ruling 2026-11-09. sdlab df9a1b3b predates it, so this copy differs from that export by that rule.)
 #       (+ parallel-window rate fix: polyglot-mcp main bd6414fd, PR #80, ported function by function; and a
 #        desk-local watcher ancestry guard. launch_guards.py carries the same port.)
-#   - scripts/colab/launch_guards.py sha256 f01bf7267b774cdeefc7f6e59f864033647427158dbb4cfe5aa1fb23f56b3a54
+#   - scripts/colab/launch_guards.py sha256 07e1e5fd8c7e4a2f4b1d00f200040f123ba1296fe82ea33e4ff4fa9b0ccbbb39
 #   - scripts/colab/remote_runner.py sha256 393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb
 #
 # Modes:
@@ -29,12 +29,12 @@ PINNED_QWEN3_VL_REPO="Qwen/Qwen3-VL-8B-Instruct"
 PINNED_QWEN3_VL_REVISION="0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
 
 PINNED_COLAB_WINDOW_SHA="415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725b987132e7"
-PINNED_LAUNCH_GUARDS_SHA="f01bf7267b774cdeefc7f6e59f864033647427158dbb4cfe5aa1fb23f56b3a54"
+PINNED_LAUNCH_GUARDS_SHA="07e1e5fd8c7e4a2f4b1d00f200040f123ba1296fe82ea33e4ff4fa9b0ccbbb39"
 PINNED_REMOTE_RUNNER_SHA="393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 PINNED_DESK_BUNDLE_NOW_SHA="b1e83c20f046716433d927fa442e43fe3e6c821c90adc84cd87cfccae9aed1ac"
-PINNED_DESK_DRAFT_HELPER_SHA="d794190f9909bbc8d492ec6f66a32e56cf1cab4dc8108dcfceb5faecd779796c"
+PINNED_DESK_DRAFT_HELPER_SHA="991239ca0b65fbf6ed10fc1c55f700a874c0cd094f029886e48314b28d250c80"
 PINNED_DESK_LOCK_SHA="7d718664b0289b53532ff50541e63942166c1921a2f52cb0e48900958bf90510"
-PINNED_SELF_SHA="84ee8a08b191078bb9173f356dbaf044210f604cda52a601363189bbb841d209"
+PINNED_SELF_SHA="39913730ffbcaf08a5031af4b5547e76d0b74bef4ae96bb0331726f1f24389c2"
 
 if pwd -W >/dev/null 2>&1; then
   export MSYS2_ARG_CONV_EXCL="/content"
@@ -473,6 +473,9 @@ PIN_OVERRIDE_VARS=(
 )
 
 mkdir -p "${OUT_DIR}"
+# Fail closed: this folder is unscrubbed until `scrub-kept-paths` completes cleanly and removes the marker. A run
+# killed before that (rig shutdown, OOM, a dead escalated watcher) stays marked; the next launch's sweep retries it.
+: > "${OUT_DIR}/.scrub_pending"
 export COLAB_ACTIVE_OUT_DIR="${OUT_DIR}"
 TOKEN_DIR=""
 

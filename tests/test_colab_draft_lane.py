@@ -38,7 +38,7 @@ DESK_LOCK_FILE = COLAB_DIR / "locks" / "desk_draft.lock"
 
 EXPECTED_SDLAB_COMMIT = "df9a1b3be2f8729a57776253e9b0cb32b7f5299c"
 EXPECTED_COLAB_WINDOW_SHA = "415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725b987132e7"
-EXPECTED_LAUNCH_GUARDS_SHA = "f01bf7267b774cdeefc7f6e59f864033647427158dbb4cfe5aa1fb23f56b3a54"
+EXPECTED_LAUNCH_GUARDS_SHA = "07e1e5fd8c7e4a2f4b1d00f200040f123ba1296fe82ea33e4ff4fa9b0ccbbb39"
 EXPECTED_REMOTE_RUNNER_SHA = "393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 
 
@@ -2429,6 +2429,7 @@ class PreL4HardeningTests(ColabTempTestCase):
         self.assertNotIn("bob", (out_dir / "events.jsonl").read_text(encoding="utf-8"))
         self.assertEqual(rep["scrub_errors"], ["events.jsonl (not valid JSON; regex-scrubbed)"])
 
+    @unittest.skipUnless(os.name == "posix", "POSIX file modes")
     def test_token_scrub_keeps_json_valid_is_atomic_and_skips_non_utf8(self) -> None:
         guards = _load_module("launch_guards_tok_test", LAUNCH_GUARDS_PY)
         doc = {"cmd": 'curl "https://x/?colab-runtime-proxy-token=SECRET123&a=1"', "b": 'x access_token=ABC"'}
@@ -2446,6 +2447,7 @@ class PreL4HardeningTests(ColabTempTestCase):
         self.assertFalse(guards.scrub_file_in_place(bad))
         self.assertEqual(bad.read_bytes(), "caf\xe9 access_token=ZZZ".encode("latin-1"))
 
+    @unittest.skipUnless(os.name == "posix", "POSIX file modes")
     def test_atomic_scrub_write_keeps_the_original_mode(self) -> None:
         helper = _load_module("desk_draft_helper_mode_test", DESK_DRAFT_HELPER_PY)
         out_dir = self.tmp_path / "mode"
@@ -2495,6 +2497,90 @@ class PreL4HardeningTests(ColabTempTestCase):
             self.assertEqual(res.returncode, 0, msg=res.stderr)
             self.assertFalse((out_dir / "scrub_called").exists(), msg=f"branch {i} scrubs while the watcher writes")
             self.assertIn("late watcher write", (out_dir / "stop.log").read_text(encoding="utf-8"))
+
+    # ---- review round 5: fail-closed marker, per-line JSONL, per-file token scrub ----
+
+    def test_scrub_pending_folder_is_swept_refused_by_the_guard_and_kept_on_error(self) -> None:
+        import subprocess
+
+        helper = _load_module("desk_draft_helper_pending_test", DESK_DRAFT_HELPER_PY)
+        parent = self.tmp_path / "pending_parent"
+        parent.mkdir()
+        dead = parent / "run_dead"  # an escalated run whose watcher died: no window.json, marker still there
+        dead.mkdir()
+        (dead / ".scrub_pending").write_text("", encoding="utf-8")
+        (dead / "guards.log").write_text("WALL_WATCHER_ESCALATED /home/bob/p access_token=SECRET\n", encoding="utf-8")
+        mine = parent / "run_mine"
+        mine.mkdir()
+        with self.assertRaises(helper.RefusalError) as ctx:
+            helper.cmd_check_out_dir_scrubbed(types.SimpleNamespace(out_dir=str(dead)))
+        self.assertEqual(ctx.exception.code, "OUT_DIR_SCRUB_PENDING")
+        self.assertEqual(helper.cmd_sweep_unscrubbed(types.SimpleNamespace(parent=str(parent), exclude=str(mine))), 0)
+        log = (dead / "guards.log").read_text(encoding="utf-8")
+        self.assertNotIn("bob", log)
+        self.assertNotIn("SECRET", log)
+        self.assertFalse((dead / ".scrub_pending").exists())
+        self.assertEqual(helper.cmd_check_out_dir_scrubbed(types.SimpleNamespace(out_dir=str(dead))), 0)
+
+        # A scrub that reports an error keeps the marker.
+        bad = self.tmp_path / "pending_bad"
+        bad.mkdir()
+        (bad / ".scrub_pending").write_text("", encoding="utf-8")
+        (bad / "ok.log").write_text("/home/bob/x\n", encoding="utf-8")
+        (bad / "broken.json").write_text('{"a": 1}', encoding="utf-8")
+        with mock.patch.object(helper, "scrub_text_for_file", side_effect=lambda n, t, r=None: (t, "json_error") if n == "broken.json" else (helper.scrub_rig_paths(t, r), "ok")):
+            helper.cmd_scrub_kept_paths(types.SimpleNamespace(out_dir=str(bad), root=[]))
+        self.assertTrue((bad / ".scrub_pending").exists())
+        # A clean scrub removes it.
+        good = self.tmp_path / "pending_good"
+        good.mkdir()
+        (good / ".scrub_pending").write_text("", encoding="utf-8")
+        (good / "ok.log").write_text("/home/bob/x\n", encoding="utf-8")
+        helper.cmd_scrub_kept_paths(types.SimpleNamespace(out_dir=str(good), root=[]))
+        self.assertFalse((good / ".scrub_pending").exists())
+        # The launcher writes the marker right after creating the out dir, and a clean run removes it again.
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        self.assertIn(': > "${OUT_DIR}/.scrub_pending"', text[text.index('mkdir -p "${OUT_DIR}"') :][:900])
+        proj, cap_cfg = self.make_project("pend_src", flagged_count=1, unflagged_count=1)
+        env = self.make_env("pend_env")
+        out_dir = self.tmp_path / "out_pend"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir, "--dry"))
+        self.assertEqual(res.returncode, 0, msg=res.stderr[-600:])
+        self.assertFalse((out_dir / ".scrub_pending").exists())
+        del subprocess
+
+    def test_jsonl_lines_that_parse_stay_valid_and_the_cut_off_tail_is_regex_scrubbed(self) -> None:
+        helper = _load_module("desk_draft_helper_perline_test", DESK_DRAFT_HELPER_PY)
+        body = '{"a": "x\\/home/bob/y"}\n{"b": "/home/bob/z"}\n{"c": "/home/bo'
+        cleaned, status = helper.scrub_text_for_file("e.jsonl", body)
+        self.assertEqual(status, "json_error_scrubbed")
+        lines = cleaned.splitlines()
+        self.assertEqual(len(lines), 3)
+        json.loads(lines[0])
+        json.loads(lines[1])
+        self.assertNotIn("bob", cleaned)
+
+    def test_one_bad_file_does_not_stop_the_token_scrub_and_failures_are_named(self) -> None:
+        import subprocess
+
+        d = self.tmp_path / "tok_batch"
+        d.mkdir()
+        good = d / "good.log"
+        good.write_text("x access_token=SECRET1\n", encoding="utf-8")
+        bad = d / "bad.log"
+        bad.write_bytes("caf\xe9 access_token=SECRET2".encode("latin-1"))
+        good2 = d / "good2.json"
+        good2.write_text('{"access_token": "SECRET3"}', encoding="utf-8")
+        res = subprocess.run(
+            [sys.executable, str(LAUNCH_GUARDS_PY), "--scrub-file", str(bad), "--scrub-file", str(good), "--scrub-file", str(good2)],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        self.assertEqual(res.returncode, 1, msg=res.stderr)
+        self.assertIn("TOKEN_SCRUB_FAILED", res.stderr)
+        self.assertIn("bad.log", res.stderr)
+        self.assertNotIn("SECRET1", good.read_text(encoding="utf-8"))
+        self.assertNotIn("SECRET3", good2.read_text(encoding="utf-8"))
+        json.loads(good2.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

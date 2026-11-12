@@ -21,30 +21,38 @@
   "changes": {
     "fileCounts": {
       "added": 0,
-      "changed": 5,
+      "changed": 6,
       "moved": 0,
       "parts": 3,
       "removed": 0
     },
     "items": [
       {
+        "kind": "landing",
+        "sentence": "scripts/colab/launch_guards.py is now also read by scripts/colab/desk_draft_helper.py.",
+        "subjects": [
+          "scripts/colab/launch_guards.py",
+          "scripts/colab/desk_draft_helper.py"
+        ]
+      },
+      {
         "kind": "counts",
-        "sentence": "Nothing structural changed since 2026-11-12; 5 files changed content.",
+        "sentence": "6 files changed content, across 3 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "97d36abcd476fd1f578d9647d67d4f27e0af28ec",
-      "generatedAt": "2026-11-12T19:31:01.208Z"
+      "commit": "6625b5a954649c7c900f29509d375ff61c1524ab",
+      "generatedAt": "2026-11-12T20:00:59.612Z"
     },
-    "unchanged": true
+    "unchanged": false
   },
   "changesTogether": [],
   "changesTogetherNote": [
     "Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "6625b5a954649c7c900f29509d375ff61c1524ab",
+  "commit": "cdf95514d5b6e8391999959ce16c10bb564bfc4c",
   "defaultBranch": "main",
   "derived": "6 parts, mostly Python (20 files), shell (3), CSS (2), TypeScript (2), Astro (1) and JavaScript (1). Work enters through 4 doors; the busiest is CI, which reaches 4 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.",
   "doors": [
@@ -192,7 +200,7 @@
   "edges": [],
   "engine": "1.26.0",
   "generated": [],
-  "generatedAt": "2026-11-12T20:00:59.612Z",
+  "generatedAt": "2026-11-12T20:33:37.110Z",
   "limits": [
     "3 imports could not be resolved: `scripts/colab/desk_bundle_now.py` imports a path built at run time; `tests/test_colab_draft_lane.py` imports a path built at run time; `tests/test_training_captions.py` imports a path built at run time.",
     "6 writes and 7 reads use paths built at run time and are not named here.",

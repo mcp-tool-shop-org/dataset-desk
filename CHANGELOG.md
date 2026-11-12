@@ -44,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     escalated cleanup branches no longer scrub while the watcher writes; the token scrub in `launch_guards.py` stops at
     a backslash (JSON stays valid), writes atomically with the original mode and skips non-UTF-8 files; uploads refuse
     non-UTF-8 text (`UPLOAD_NON_UTF8_TEXT`).
+  - Review round 5: fail-closed `.scrub_pending` marker (written first, removed only after a clean scrub; the launch sweep
+    selects on it and also scrubs tokens; `check-out-dir-scrubbed` refuses `OUT_DIR_SCRUB_PENDING`); JSONL scrubbed per
+    line; the token scrub carries on past a bad file and exits non-zero with `TOKEN_SCRUB_FAILED`, handles `\/` and the
+    JSON `"access_token": "..."` form.
   - Coverage unchanged (the lane scripts sit outside the measured `dataset_desk` package; floor 90 stays).
 
 ### Added
