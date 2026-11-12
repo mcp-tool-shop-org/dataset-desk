@@ -1,6 +1,6 @@
 # dataset-desk: how it works
 
-Mapped at 2026-11-12 from commit e8a4099 by Atlas 1.26.0.
+Mapped at 2026-11-12 from commit 90cea26 by Atlas 1.26.0.
 
 ## What this is
 
@@ -8,9 +8,10 @@ dataset-desk: a review desk for visual datasets — duplicates, outliers, search
 
 5 parts, mostly Python (14 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 4 doors; the busiest is CI, which reaches 3 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.
 
-## What changed since 2026-11-12 (b1f8432)
+## What changed since 2026-11-12 (e8a4099)
 
-Nothing structural changed since 2026-11-12; 1 file changed content.
+- tests/ is now read by tests/test_training_captions.py.
+- 15 files changed content, across 3 parts.
 
 ## What comes in
 
@@ -42,7 +43,11 @@ CI writes nothing this map can see.
 
 ## What tends to change together
 
-No two source files changed together often enough to name.
+- **tests/test_backends.py** and **tests/test_desk.py** changed together in 5 of 5 commits, inside the tests part.
+- **dataset_desk/description_gate.py** and **tests/test_training_captions.py** changed together in 6 of 9 commits, and the tests part imports the dataset_desk part.
+- **dataset_desk/description_gate.py** and **dataset_desk/desk.py** changed together in 7 of 13 commits, inside the dataset_desk part.
+
+Confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions.
 
 Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits.
 
@@ -74,9 +79,10 @@ Read those in order to follow one run of dataset-desk end to end. This path foll
 
 ## What this map cannot see
 
-- 5 reads use paths built at run time and are not named here.
-- 17 writes and 33 reads go to a path their caller passes, not to this repository.
-- 11 writes and 2 reads go to the directory the command is run in (desk-out/), not to this repository.
+- 1 import could not be resolved: `tests/test_training_captions.py` imports a path built at run time.
+- 4 reads use paths built at run time and are not named here.
+- 17 writes and 38 reads go to a path their caller passes, not to this repository.
+- 15 writes and 2 reads go to the directory the command is run in (desk-out/), not to this repository.
 - 5 writes and 2 reads go to the directory the command is run in (desk-out/) or a path their caller passes, not to this repository.
 - Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions.
 

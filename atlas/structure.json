@@ -32,7 +32,7 @@
       "unresolvedSites": 0
     },
     {
-      "dynamicReads": 5,
+      "dynamicReads": 4,
       "dynamicSpawns": 0,
       "dynamicSpawnsInTests": 0,
       "dynamicWrites": 0,
@@ -43,7 +43,7 @@
       "files": [
         {
           "constantOnly": true,
-          "hash": "5c6c54789369734de55d7260dae488384213a2c7e5c600dda849246d8a8ec3d5",
+          "hash": "a647e7065bf480b4f0835700a7a50fcb8c20f5cb24bb3acb8ad28b25b1b60303",
           "path": "dataset_desk/__init__.py"
         },
         {
@@ -368,210 +368,205 @@
             {
               "in": "_config_display_label",
               "kind": "except",
-              "line": 269
+              "line": 285
             },
             {
               "in": "_as_str_tuple",
-              "kind": "raise",
-              "line": 278
-            },
-            {
-              "in": "_build_caption_rules",
-              "kind": "raise",
-              "line": 289
-            },
-            {
-              "in": "_build_caption_rules",
               "kind": "raise",
               "line": 294
             },
             {
               "in": "_build_caption_rules",
               "kind": "raise",
-              "line": 299
+              "line": 305
             },
             {
               "in": "_build_caption_rules",
               "kind": "raise",
-              "line": 312
+              "line": 310
             },
             {
               "in": "_build_caption_rules",
               "kind": "raise",
-              "line": 321
+              "line": 315
             },
             {
               "in": "_build_caption_rules",
               "kind": "raise",
-              "line": 327
+              "line": 328
             },
             {
               "in": "_build_caption_rules",
               "kind": "raise",
-              "line": 333
+              "line": 337
             },
             {
               "in": "_build_caption_rules",
               "kind": "raise",
-              "line": 338
+              "line": 343
+            },
+            {
+              "in": "_build_caption_rules",
+              "kind": "raise",
+              "line": 349
+            },
+            {
+              "in": "_build_caption_rules",
+              "kind": "raise",
+              "line": 354
             },
             {
               "in": "_build_caption_rules",
               "kind": "except",
-              "line": 344
+              "line": 360
             },
             {
               "in": "_build_caption_rules",
               "kind": "raise",
-              "line": 345
+              "line": 361
             },
             {
               "in": "_build_caption_rules",
               "kind": "raise",
-              "line": 362
+              "line": 378
             },
             {
               "in": "_build_caption_rules",
               "kind": "raise",
-              "line": 368
+              "line": 384
             },
             {
               "in": "_build_caption_rules",
               "kind": "raise",
-              "line": 373
+              "line": 389
             },
             {
               "in": "_build_caption_rules",
               "kind": "raise",
-              "line": 379
+              "line": 395
             },
             {
               "in": "_build_caption_rules",
               "kind": "raise",
-              "line": 383
+              "line": 399
             },
             {
               "in": "_build_caption_rules",
               "kind": "raise",
-              "line": 387
+              "line": 403
             },
             {
               "in": "load_caption_rules",
               "kind": "raise",
-              "line": 437
+              "line": 453
             },
             {
               "in": "load_caption_rules",
               "kind": "except",
-              "line": 448
+              "line": 464
             },
             {
               "in": "load_caption_rules",
               "kind": "raise",
-              "line": 449
+              "line": 465
             },
             {
               "in": "coerce_caption_rules",
               "kind": "raise",
-              "line": 466
+              "line": 482
             },
             {
               "in": "link_target",
               "kind": "except",
-              "line": 571
+              "line": 587
             },
             {
               "in": "_extract_png_prompt_text",
               "kind": "except",
-              "line": 1162
+              "line": 1185
             },
             {
               "in": "_extract_png_prompt_text",
               "kind": "except",
-              "line": 1168
+              "line": 1191
             },
             {
               "in": "_load_wave_prompts",
               "kind": "except",
-              "line": 1206
+              "line": 1229
             },
             {
               "in": "scan_sidecar_project",
               "kind": "raise",
-              "line": 1220
+              "line": 1246
             },
             {
               "in": "load_sidecar_import",
               "kind": "except",
-              "line": 1379
+              "line": 1420
             },
             {
               "in": "load_project_records",
               "kind": "except",
-              "line": 1457
+              "line": 1504
             },
             {
               "in": "_ensure_out_outside_project",
               "kind": "except",
-              "line": 1814
+              "line": 1963
             },
             {
               "in": "_ensure_out_outside_project",
               "kind": "raise",
-              "line": 1817
+              "line": 1966
             },
             {
               "in": "import_worksheet_edits",
               "kind": "raise",
-              "line": 1868
+              "line": 2017
             },
             {
               "in": "import_worksheet_edits",
               "kind": "raise",
-              "line": 1871
+              "line": 2020
             },
             {
               "in": "import_worksheet_edits",
               "kind": "raise",
-              "line": 1918
+              "line": 2091
             },
             {
               "in": "import_worksheet_edits",
               "kind": "raise",
-              "line": 1923
+              "line": 2096
             },
             {
               "in": "compose_captions",
               "kind": "raise",
-              "line": 2054
+              "line": 2303
             },
             {
               "in": "compose_captions",
               "kind": "raise",
-              "line": 2078
+              "line": 2331
             },
             {
               "in": "compose_captions",
               "kind": "raise",
-              "line": 2092
+              "line": 2348
             },
             {
               "in": "compose_captions",
               "kind": "raise",
-              "line": 2128
+              "line": 2352
             },
             {
               "in": "compose_captions",
               "kind": "raise",
-              "line": 2132
-            },
-            {
-              "in": "compose_captions",
-              "kind": "raise",
-              "line": 2134
+              "line": 2354
             }
           ],
-          "hash": "9fa49c70712f2d2ff3c25f37cf3c7cff720b4e6f9038eb7567cfd68896dfbfb5",
+          "hash": "d9d118361e2e7ff5cac89f3426cd53d88812e3a59519113e933795aa99cf3201",
           "importOrder": [
             "dataset_desk/errors.py",
             "dataset_desk/__init__.py",
@@ -608,6 +603,7 @@
             "eg2_fit_accept",
             "embed_file_chunks",
             "embedding_description_clusters",
+            "enumerate_project_images",
             "flip_hamming",
             "hamming",
             "image_stats",
@@ -646,394 +642,444 @@
           ],
           "failurePaths": [
             {
-              "in": "_parse_pool_tag_value",
-              "kind": "raise",
-              "line": 98
-            },
-            {
-              "in": "_parse_pool_tag_value",
-              "kind": "raise",
-              "line": 103
-            },
-            {
-              "in": "_resolve_project_pool_tag",
-              "kind": "raise",
-              "line": 124
-            },
-            {
-              "in": "_resolve_project_pool_tag",
+              "in": "_walk_followlinks",
               "kind": "except",
-              "line": 129
+              "line": 102
             },
             {
-              "in": "_resolve_project_pool_tag",
-              "kind": "raise",
-              "line": 130
+              "in": "_walk_followlinks",
+              "kind": "except",
+              "line": 109
             },
             {
-              "in": "_resolve_project_pool_tag",
-              "kind": "raise",
-              "line": 132
+              "in": "_walk_followlinks",
+              "kind": "except",
+              "line": 119
             },
             {
-              "in": "_normalize_pool_dir_specs",
-              "kind": "raise",
-              "line": 166
+              "in": "enumerate_project_images",
+              "kind": "except",
+              "line": 149
             },
             {
-              "in": "_normalize_pool_dir_specs",
-              "kind": "raise",
+              "in": "enumerate_project_images",
+              "kind": "except",
               "line": 172
             },
             {
+              "in": "enumerate_project_images",
+              "kind": "except",
+              "line": 192
+            },
+            {
+              "in": "enumerate_project_images",
+              "kind": "except",
+              "line": 200
+            },
+            {
+              "in": "_parse_pool_tag_value",
+              "kind": "raise",
+              "line": 216
+            },
+            {
+              "in": "_parse_pool_tag_value",
+              "kind": "raise",
+              "line": 221
+            },
+            {
+              "in": "_resolve_project_pool_tag",
+              "kind": "raise",
+              "line": 242
+            },
+            {
+              "in": "_resolve_project_pool_tag",
+              "kind": "except",
+              "line": 247
+            },
+            {
+              "in": "_resolve_project_pool_tag",
+              "kind": "raise",
+              "line": 248
+            },
+            {
+              "in": "_resolve_project_pool_tag",
+              "kind": "raise",
+              "line": 250
+            },
+            {
               "in": "_normalize_pool_dir_specs",
               "kind": "raise",
-              "line": 176
+              "line": 312
             },
             {
-              "in": "_extract_hash_set",
+              "in": "_normalize_pool_dir_specs",
               "kind": "raise",
-              "line": 204
+              "line": 318
             },
             {
-              "in": "_extract_hash_set",
+              "in": "_normalize_pool_dir_specs",
               "kind": "raise",
-              "line": 209
+              "line": 322
             },
             {
-              "in": "_extract_hash_set",
+              "in": "_extract_hash_and_stem_sets",
               "kind": "raise",
-              "line": 217
+              "line": 351
             },
             {
-              "in": "_parse_pool_manifest_doc",
+              "in": "_extract_hash_and_stem_sets",
               "kind": "raise",
-              "line": 227
+              "line": 363
             },
             {
-              "in": "_parse_pool_manifest_doc",
+              "in": "_extract_hash_and_stem_sets",
               "kind": "raise",
-              "line": 241
+              "line": 368
             },
             {
-              "in": "_load_user_pool_config",
-              "kind": "raise",
-              "line": 258
-            },
-            {
-              "in": "_load_user_pool_config",
-              "kind": "except",
-              "line": 273
-            },
-            {
-              "in": "_load_user_pool_config",
-              "kind": "raise",
-              "line": 274
-            },
-            {
-              "in": "_load_user_pool_config",
-              "kind": "raise",
-              "line": 276
-            },
-            {
-              "in": "_load_user_pool_config",
-              "kind": "raise",
-              "line": 282
-            },
-            {
-              "in": "resolve_pool_detection",
-              "kind": "raise",
-              "line": 352
-            },
-            {
-              "in": "resolve_pool_detection",
-              "kind": "except",
-              "line": 356
-            },
-            {
-              "in": "resolve_pool_detection",
-              "kind": "raise",
-              "line": 357
-            },
-            {
-              "in": "resolve_pool_detection",
-              "kind": "raise",
-              "line": 383
-            },
-            {
-              "in": "resolve_pool_detection",
+              "in": "_extract_hash_and_stem_sets",
               "kind": "raise",
               "line": 389
             },
             {
-              "in": "resolve_pool_detection",
+              "in": "_parse_pool_manifest_doc",
               "kind": "raise",
-              "line": 396
+              "line": 404
+            },
+            {
+              "in": "_parse_pool_manifest_doc",
+              "kind": "raise",
+              "line": 407
+            },
+            {
+              "in": "_parse_pool_manifest_doc",
+              "kind": "raise",
+              "line": 418
+            },
+            {
+              "in": "_parse_pool_manifest_doc",
+              "kind": "raise",
+              "line": 430
+            },
+            {
+              "in": "_parse_pool_manifest_doc",
+              "kind": "raise",
+              "line": 437
+            },
+            {
+              "in": "_parse_pool_manifest_doc",
+              "kind": "raise",
+              "line": 445
+            },
+            {
+              "in": "_load_user_pool_config",
+              "kind": "raise",
+              "line": 460
+            },
+            {
+              "in": "_load_user_pool_config",
+              "kind": "except",
+              "line": 475
+            },
+            {
+              "in": "_load_user_pool_config",
+              "kind": "raise",
+              "line": 476
+            },
+            {
+              "in": "_load_user_pool_config",
+              "kind": "raise",
+              "line": 478
+            },
+            {
+              "in": "_load_user_pool_config",
+              "kind": "raise",
+              "line": 484
+            },
+            {
+              "in": "_resolve_pool_detection_with_stems",
+              "kind": "raise",
+              "line": 523
+            },
+            {
+              "in": "_resolve_pool_detection_with_stems",
+              "kind": "raise",
+              "line": 552
+            },
+            {
+              "in": "_resolve_pool_detection_with_stems",
+              "kind": "except",
+              "line": 556
+            },
+            {
+              "in": "_resolve_pool_detection_with_stems",
+              "kind": "raise",
+              "line": 557
+            },
+            {
+              "in": "_resolve_pool_detection_with_stems",
+              "kind": "raise",
+              "line": 582
+            },
+            {
+              "in": "_resolve_pool_detection_with_stems",
+              "kind": "raise",
+              "line": 588
+            },
+            {
+              "in": "_resolve_pool_detection_with_stems",
+              "kind": "raise",
+              "line": 595
+            },
+            {
+              "in": "_resolve_pool_detection_with_stems",
+              "kind": "raise",
+              "line": 602
+            },
+            {
+              "in": "_resolve_pool_detection_with_stems",
+              "kind": "raise",
+              "line": 616
             },
             {
               "in": "_check_multimodal_pool_state",
               "kind": "raise",
-              "line": 474
+              "line": 711
             },
             {
               "in": "_check_multimodal_pool_state",
               "kind": "raise",
-              "line": 504
+              "line": 742
             },
             {
               "in": "_check_multimodal_pool_state",
               "kind": "raise",
-              "line": 519
+              "line": 757
             },
             {
               "in": "_check_multimodal_pool_state",
               "kind": "raise",
-              "line": 529
+              "line": 767
+            },
+            {
+              "in": "_check_txt_stems_against_pools",
+              "kind": "raise",
+              "line": 793
             },
             {
               "in": "_png_prompt_meta",
               "kind": "except",
-              "line": 840
+              "line": 1150
             },
             {
               "in": "_scan_worker_one",
               "kind": "except",
-              "line": 907
+              "line": 1217
             },
             {
               "in": "load_records",
               "kind": "except",
-              "line": 1022
+              "line": 1332
             },
             {
               "in": "load_wave_metadata",
               "kind": "except",
-              "line": 1094
+              "line": 1404
             },
             {
               "in": "load_wave_metadata",
               "kind": "except",
-              "line": 1117
+              "line": 1427
             },
             {
               "in": "_load_scan_cache",
               "kind": "except",
-              "line": 1142
+              "line": 1452
             },
             {
               "in": "scan",
               "kind": "raise",
-              "line": 1328
+              "line": 1602
             },
             {
               "in": "scan",
               "kind": "except",
-              "line": 1339
+              "line": 1613
             },
             {
               "in": "scan",
               "kind": "raise",
-              "line": 1341
+              "line": 1615
             },
             {
               "in": "load_cache",
               "kind": "except",
-              "line": 1480
+              "line": 1754
             },
             {
               "in": "load_cache",
               "kind": "raise",
-              "line": 1482
+              "line": 1756
             },
             {
               "in": "index",
               "kind": "except",
-              "line": 1573
+              "line": 1847
             },
             {
               "in": "_resolve_sibling_image_vecs",
               "kind": "except",
-              "line": 2142
+              "line": 2416
             },
             {
               "in": "_resolve_tokenizer",
               "kind": "raise",
-              "line": 2451
+              "line": 2733
             },
             {
               "in": "_encode_token_ids",
               "kind": "except",
-              "line": 2461
+              "line": 2743
             },
             {
               "in": "_encode_token_ids",
               "kind": "except",
-              "line": 2466
+              "line": 2748
             },
             {
               "in": "chunk_text",
               "kind": "except",
-              "line": 2527
+              "line": 2809
             },
             {
               "in": "_check_not_private_path",
               "kind": "raise",
-              "line": 2570
+              "line": 2852
             },
             {
               "in": "_check_out_not_inside",
               "kind": "except",
-              "line": 2576
+              "line": 2858
             },
             {
               "in": "_check_out_not_inside",
               "kind": "raise",
-              "line": 2579
+              "line": 2861
             },
             {
               "in": "scan_text_source",
               "kind": "raise",
-              "line": 2587
+              "line": 2869
             },
             {
               "in": "scan_text_source",
               "kind": "except",
-              "line": 2601
+              "line": 2883
             },
             {
               "in": "scan_text_source",
               "kind": "raise",
-              "line": 2604
+              "line": 2886
             },
             {
               "in": "_read_run_outcome",
               "kind": "except",
-              "line": 2627
+              "line": 2909
             },
             {
               "in": "scan_rnd_data",
               "kind": "raise",
-              "line": 2645
-            },
-            {
-              "in": "scan_rnd_data",
-              "kind": "except",
-              "line": 2662
-            },
-            {
-              "in": "scan_rnd_data",
-              "kind": "raise",
-              "line": 2663
-            },
-            {
-              "in": "scan_rnd_data",
-              "kind": "raise",
-              "line": 2670
-            },
-            {
-              "in": "scan_rnd_data",
-              "kind": "raise",
-              "line": 2681
-            },
-            {
-              "in": "scan_rnd_data",
-              "kind": "raise",
-              "line": 2686
-            },
-            {
-              "in": "scan_rnd_data",
-              "kind": "raise",
-              "line": 2693
+              "line": 2927
             },
             {
               "in": "scan_rnd_data",
               "kind": "except",
-              "line": 2701
+              "line": 2944
             },
             {
               "in": "scan_rnd_data",
               "kind": "raise",
-              "line": 2704
+              "line": 2945
             },
             {
               "in": "scan_rnd_data",
-              "kind": "raise",
-              "line": 2709
-            },
-            {
-              "in": "load_text_cache",
-              "kind": "raise",
-              "line": 2800
-            },
-            {
-              "in": "load_text_cache",
-              "kind": "except",
-              "line": 2810
-            },
-            {
-              "in": "load_text_cache",
-              "kind": "raise",
-              "line": 2811
-            },
-            {
-              "in": "text_index",
-              "kind": "raise",
-              "line": 2832
-            },
-            {
-              "in": "text_index",
-              "kind": "except",
-              "line": 2871
-            },
-            {
-              "in": "text_dupes",
               "kind": "raise",
               "line": 2952
             },
             {
+              "in": "scan_rnd_data",
+              "kind": "raise",
+              "line": 2963
+            },
+            {
+              "in": "scan_rnd_data",
+              "kind": "raise",
+              "line": 2968
+            },
+            {
+              "in": "scan_rnd_data",
+              "kind": "raise",
+              "line": 2975
+            },
+            {
+              "in": "scan_rnd_data",
+              "kind": "except",
+              "line": 2983
+            },
+            {
+              "in": "scan_rnd_data",
+              "kind": "raise",
+              "line": 2986
+            },
+            {
+              "in": "scan_rnd_data",
+              "kind": "raise",
+              "line": 2991
+            },
+            {
+              "in": "load_text_cache",
+              "kind": "raise",
+              "line": 3082
+            },
+            {
+              "in": "load_text_cache",
+              "kind": "except",
+              "line": 3092
+            },
+            {
+              "in": "load_text_cache",
+              "kind": "raise",
+              "line": 3093
+            },
+            {
+              "in": "text_index",
+              "kind": "raise",
+              "line": 3119
+            },
+            {
+              "in": "text_index",
+              "kind": "except",
+              "line": 3169
+            },
+            {
+              "in": "text_dupes",
+              "kind": "raise",
+              "line": 3252
+            },
+            {
               "in": "_token_counter",
               "kind": "except",
-              "line": 3148
+              "line": 3448
             },
             {
               "in": "_token_counter",
               "kind": "raise",
-              "line": 3149
+              "line": 3449
             },
             {
               "in": "main",
               "kind": "raise",
-              "line": 3261
-            },
-            {
-              "in": "main",
-              "kind": "raise",
-              "line": 3266
-            },
-            {
-              "in": "main",
-              "kind": "raise",
-              "line": 3271
-            },
-            {
-              "in": "main",
-              "kind": "raise",
-              "line": 3289
-            },
-            {
-              "in": "main",
-              "kind": "except",
-              "line": 3305
-            },
-            {
-              "in": "main",
-              "kind": "raise",
-              "line": 3308
-            },
-            {
-              "in": "main",
-              "kind": "raise",
-              "line": 3314
+              "line": 3564
             },
             {
               "in": "main",
@@ -1043,35 +1089,70 @@
             {
               "in": "main",
               "kind": "raise",
-              "line": 3570
+              "line": 3571
             },
             {
               "in": "main",
               "kind": "raise",
-              "line": 3594
+              "line": 3577
+            },
+            {
+              "in": "main",
+              "kind": "raise",
+              "line": 3579
+            },
+            {
+              "in": "main",
+              "kind": "except",
+              "line": 3661
+            },
+            {
+              "in": "main",
+              "kind": "raise",
+              "line": 3664
+            },
+            {
+              "in": "main",
+              "kind": "raise",
+              "line": 3670
+            },
+            {
+              "in": "main",
+              "kind": "raise",
+              "line": 3925
+            },
+            {
+              "in": "main",
+              "kind": "raise",
+              "line": 3928
+            },
+            {
+              "in": "main",
+              "kind": "raise",
+              "line": 3952
             },
             {
               "in": "run",
               "kind": "except",
-              "line": 3647
+              "line": 4009
             },
             {
               "in": "run",
               "kind": "except",
-              "line": 3650
+              "line": 4012
             },
             {
               "in": "run",
               "kind": "except",
-              "line": 3653
+              "line": 4015
             },
             {
               "in": "run",
               "kind": "raise",
-              "line": 3655
+              "line": 4017
             }
           ],
-          "hash": "9cfdd95b6eeafd906d4a76344a4b7425b00535702de430af60c012ff5e4119d8",
+          "hash": "c45bd35710367dc4cc0e85ca975f6561f8923d1cafdd654b0e72528aa6526c95",
           "importsFiles": [
             "dataset_desk/__init__.py",
             "dataset_desk/backends.py",
@@ -1085,7 +1166,7 @@
               "calls": [
                 {
                   "branch": "not isinstance(raw_tag, str)",
-                  "line": 98,
+                  "line": 216,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1093,7 +1174,7 @@
                 },
                 {
                   "branch": "norm not in MULTIMODAL_POOL",
-                  "line": 103,
+                  "line": 221,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1109,7 +1190,7 @@
               "calls": [
                 {
                   "branch": "required",
-                  "line": 124,
+                  "line": 242,
                   "name": "DeskError",
                   "over": "candidates",
                   "target": {
@@ -1117,7 +1198,7 @@
                   }
                 },
                 {
-                  "line": 130,
+                  "line": 248,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1125,7 +1206,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 132,
+                  "line": 250,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1133,7 +1214,7 @@
                 },
                 {
                   "branch": "not isinstance(raw_tag, str)",
-                  "line": 98,
+                  "line": 216,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1142,7 +1223,7 @@
                 },
                 {
                   "branch": "norm not in MULTIMODAL_POOL",
-                  "line": 103,
+                  "line": 221,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1159,7 +1240,7 @@
               "calls": [
                 {
                   "branch": "not isinstance(elem, str)",
-                  "line": 166,
+                  "line": 312,
                   "name": "DeskError",
                   "over": "specs",
                   "target": {
@@ -1168,7 +1249,7 @@
                 },
                 {
                   "branch": "not isinstance(k, str) or not isinstance(v, str)",
-                  "line": 172,
+                  "line": 318,
                   "name": "DeskError",
                   "over": "specs.items()",
                   "target": {
@@ -1176,7 +1257,7 @@
                   }
                 },
                 {
-                  "line": 176,
+                  "line": 322,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1191,7 +1272,15 @@
             {
               "calls": [
                 {
-                  "line": 204,
+                  "branch": "not isinstance(raw_stems, list) or any(not isinstance(s, st…",
+                  "line": 351,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  }
+                },
+                {
+                  "line": 363,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1199,7 +1288,7 @@
                 },
                 {
                   "branch": "not isinstance(items_raw, list)",
-                  "line": 209,
+                  "line": 368,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1207,7 +1296,7 @@
                 },
                 {
                   "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
-                  "line": 217,
+                  "line": 389,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1217,13 +1306,21 @@
               "exported": false,
               "invokedAtTopLevel": false,
               "isDefaultExport": false,
-              "name": "_extract_hash_set"
+              "name": "_extract_hash_and_stem_sets"
             },
             {
               "calls": [
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 227,
+                  "line": 404,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  }
+                },
+                {
+                  "branch": "not isinstance(doc[\"pools\"], dict)",
+                  "line": 407,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1231,7 +1328,7 @@
                 },
                 {
                   "branch": "not isinstance(elem, str)",
-                  "line": 166,
+                  "line": 312,
                   "name": "DeskError",
                   "over": "specs",
                   "target": {
@@ -1241,7 +1338,7 @@
                 },
                 {
                   "branch": "not isinstance(k, str) or not isinstance(v, str)",
-                  "line": 172,
+                  "line": 318,
                   "name": "DeskError",
                   "over": "specs.items()",
                   "target": {
@@ -1250,7 +1347,7 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "line": 176,
+                  "line": 322,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1258,38 +1355,71 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "branch": "norm_pool not in MULTIMODAL_POOL",
-                  "line": 241,
+                  "branch": "has_dir_key and raw_dirs is not None and not extra_dirs",
+                  "line": 418,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   }
                 },
                 {
-                  "line": 204,
+                  "branch": "norm_pool not in MULTIMODAL_POOL",
+                  "line": 430,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  }
+                },
+                {
+                  "branch": "not isinstance(raw_stems, list) or any(not isinstance(s, st…",
+                  "line": 351,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "line": 363,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(items_raw, list)",
-                  "line": 209,
+                  "line": 368,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
-                  "line": 217,
+                  "line": 389,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "branch": "not h_set",
+                  "line": 437,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  }
+                },
+                {
+                  "branch": "not hashes_by_pool and not extra_dirs",
+                  "line": 445,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  }
                 }
               ],
               "exported": false,
@@ -1301,14 +1431,14 @@
               "calls": [
                 {
                   "branch": "not os.path.isfile(cfg_path)",
-                  "line": 258,
+                  "line": 460,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   }
                 },
                 {
-                  "line": 274,
+                  "line": 476,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1316,7 +1446,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 276,
+                  "line": 478,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1324,7 +1454,7 @@
                 },
                 {
                   "branch": "not isinstance(pm_raw, str)",
-                  "line": 282,
+                  "line": 484,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1332,7 +1462,7 @@
                 },
                 {
                   "branch": "not isinstance(elem, str)",
-                  "line": 166,
+                  "line": 312,
                   "name": "DeskError",
                   "over": "specs",
                   "target": {
@@ -1342,7 +1472,7 @@
                 },
                 {
                   "branch": "not isinstance(k, str) or not isinstance(v, str)",
-                  "line": 172,
+                  "line": 318,
                   "name": "DeskError",
                   "over": "specs.items()",
                   "target": {
@@ -1351,7 +1481,7 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "line": 176,
+                  "line": 322,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1368,7 +1498,7 @@
               "calls": [
                 {
                   "branch": "not os.path.isfile(cfg_path)",
-                  "line": 258,
+                  "line": 460,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1376,7 +1506,7 @@
                   "via": "_load_user_pool_config"
                 },
                 {
-                  "line": 274,
+                  "line": 476,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1385,7 +1515,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 276,
+                  "line": 478,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1394,7 +1524,7 @@
                 },
                 {
                   "branch": "not isinstance(pm_raw, str)",
-                  "line": 282,
+                  "line": 484,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1403,7 +1533,7 @@
                 },
                 {
                   "branch": "not isinstance(elem, str)",
-                  "line": 166,
+                  "line": 312,
                   "name": "DeskError",
                   "over": "specs",
                   "target": {
@@ -1413,7 +1543,7 @@
                 },
                 {
                   "branch": "not isinstance(k, str) or not isinstance(v, str)",
-                  "line": 172,
+                  "line": 318,
                   "name": "DeskError",
                   "over": "specs.items()",
                   "target": {
@@ -1422,7 +1552,7 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "line": 176,
+                  "line": 322,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1430,15 +1560,23 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "branch": "not os.path.isfile(abs_m)",
-                  "line": 352,
+                  "branch": "not norm_arg_dirs",
+                  "line": 523,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   }
                 },
                 {
-                  "line": 357,
+                  "branch": "not os.path.isfile(abs_m)",
+                  "line": 552,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  }
+                },
+                {
+                  "line": 557,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1446,7 +1584,25 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 227,
+                  "line": 404,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not isinstance(doc[\"pools\"], dict)",
+                  "line": 407,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "has_dir_key and raw_dirs is not None and not extra_dirs",
+                  "line": 418,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1455,7 +1611,7 @@
                 },
                 {
                   "branch": "norm_pool not in MULTIMODAL_POOL",
-                  "line": 241,
+                  "line": 430,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1463,34 +1619,61 @@
                   "via": "_parse_pool_manifest_doc"
                 },
                 {
-                  "line": 204,
+                  "branch": "not isinstance(raw_stems, list) or any(not isinstance(s, st…",
+                  "line": 351,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "line": 363,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(items_raw, list)",
-                  "line": 209,
+                  "line": 368,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
-                  "line": 217,
+                  "line": 389,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "branch": "not h_set",
+                  "line": 437,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not hashes_by_pool and not extra_dirs",
+                  "line": 445,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
                 },
                 {
                   "branch": "explicit_pool not in MULTIMODAL_POOL",
-                  "line": 383,
+                  "line": 582,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1498,7 +1681,7 @@
                 },
                 {
                   "branch": "not os.path.isdir(abs_d)",
-                  "line": 389,
+                  "line": 588,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1506,7 +1689,7 @@
                 },
                 {
                   "branch": "required",
-                  "line": 124,
+                  "line": 242,
                   "name": "DeskError",
                   "over": "candidates",
                   "target": {
@@ -1515,263 +1698,221 @@
                   "via": "_resolve_project_pool_tag"
                 },
                 {
-                  "line": 130,
+                  "line": 248,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
                   "via": "_resolve_project_pool_tag"
-                },
-                {
-                  "branch": "not isinstance(doc, dict)",
-                  "line": 132,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_resolve_project_pool_tag"
-                },
-                {
-                  "branch": "not isinstance(raw_tag, str)",
-                  "line": 98,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_parse_pool_tag_value"
-                },
-                {
-                  "branch": "norm not in MULTIMODAL_POOL",
-                  "line": 103,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_parse_pool_tag_value"
-                },
-                {
-                  "branch": "inferred_pool not in MULTIMODAL_POOL",
-                  "line": 396,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  }
-                }
-              ],
-              "exported": true,
-              "invokedAtTopLevel": false,
-              "isDefaultExport": false,
-              "name": "resolve_pool_detection"
-            },
-            {
-              "calls": [
-                {
-                  "branch": "not os.path.isfile(cfg_path)",
-                  "line": 258,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_load_user_pool_config"
-                },
-                {
-                  "line": 274,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_load_user_pool_config"
-                },
-                {
-                  "branch": "not isinstance(doc, dict)",
-                  "line": 276,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_load_user_pool_config"
-                },
-                {
-                  "branch": "not isinstance(pm_raw, str)",
-                  "line": 282,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_load_user_pool_config"
-                },
-                {
-                  "branch": "not isinstance(elem, str)",
-                  "line": 166,
-                  "name": "DeskError",
-                  "over": "specs",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_normalize_pool_dir_specs"
-                },
-                {
-                  "branch": "not isinstance(k, str) or not isinstance(v, str)",
-                  "line": 172,
-                  "name": "DeskError",
-                  "over": "specs.items()",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_normalize_pool_dir_specs"
-                },
-                {
-                  "line": 176,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_normalize_pool_dir_specs"
-                },
-                {
-                  "branch": "not os.path.isfile(abs_m)",
-                  "line": 352,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "line": 357,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "not isinstance(doc, dict)",
-                  "line": 227,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_parse_pool_manifest_doc"
-                },
-                {
-                  "branch": "norm_pool not in MULTIMODAL_POOL",
-                  "line": 241,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_parse_pool_manifest_doc"
-                },
-                {
-                  "line": 204,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_extract_hash_set"
-                },
-                {
-                  "branch": "not isinstance(items_raw, list)",
-                  "line": 209,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_extract_hash_set"
-                },
-                {
-                  "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
-                  "line": 217,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_extract_hash_set"
-                },
-                {
-                  "branch": "explicit_pool not in MULTIMODAL_POOL",
-                  "line": 383,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "not os.path.isdir(abs_d)",
-                  "line": 389,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "required",
-                  "line": 124,
-                  "name": "DeskError",
-                  "over": "candidates",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_resolve_project_pool_tag"
-                },
-                {
-                  "line": 130,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_resolve_project_pool_tag"
-                },
-                {
-                  "branch": "not isinstance(doc, dict)",
-                  "line": 132,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_resolve_project_pool_tag"
-                },
-                {
-                  "branch": "not isinstance(raw_tag, str)",
-                  "line": 98,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_parse_pool_tag_value"
-                },
-                {
-                  "branch": "norm not in MULTIMODAL_POOL",
-                  "line": 103,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_parse_pool_tag_value"
-                },
-                {
-                  "branch": "inferred_pool not in MULTIMODAL_POOL",
-                  "line": 396,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
                 }
               ],
               "exported": false,
               "invokedAtTopLevel": false,
               "isDefaultExport": false,
-              "name": "_load_locked_pool_hashes"
+              "name": "_resolve_pool_detection_with_stems",
+              "truncated": true
             },
             {
               "calls": [
                 {
+                  "branch": "not os.path.isfile(cfg_path)",
+                  "line": 460,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_load_user_pool_config"
+                },
+                {
+                  "line": 476,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_load_user_pool_config"
+                },
+                {
+                  "branch": "not isinstance(doc, dict)",
+                  "line": 478,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_load_user_pool_config"
+                },
+                {
+                  "branch": "not isinstance(pm_raw, str)",
+                  "line": 484,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_load_user_pool_config"
+                },
+                {
+                  "branch": "not isinstance(elem, str)",
+                  "line": 312,
+                  "name": "DeskError",
+                  "over": "specs",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_normalize_pool_dir_specs"
+                },
+                {
+                  "branch": "not isinstance(k, str) or not isinstance(v, str)",
+                  "line": 318,
+                  "name": "DeskError",
+                  "over": "specs.items()",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_normalize_pool_dir_specs"
+                },
+                {
+                  "line": 322,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_normalize_pool_dir_specs"
+                },
+                {
+                  "branch": "not norm_arg_dirs",
+                  "line": 523,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "branch": "not os.path.isfile(abs_m)",
+                  "line": 552,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "line": 557,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "branch": "not isinstance(doc, dict)",
+                  "line": 404,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not isinstance(doc[\"pools\"], dict)",
+                  "line": 407,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "has_dir_key and raw_dirs is not None and not extra_dirs",
+                  "line": 418,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "norm_pool not in MULTIMODAL_POOL",
+                  "line": 430,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not isinstance(raw_stems, list) or any(not isinstance(s, st…",
+                  "line": 351,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "line": 363,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "branch": "not isinstance(items_raw, list)",
+                  "line": 368,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
+                  "line": 389,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "branch": "not h_set",
+                  "line": 437,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not hashes_by_pool and not extra_dirs",
+                  "line": 445,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "explicit_pool not in MULTIMODAL_POOL",
+                  "line": 582,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "branch": "not os.path.isdir(abs_d)",
+                  "line": 588,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
                   "branch": "required",
-                  "line": 124,
+                  "line": 242,
                   "name": "DeskError",
                   "over": "candidates",
                   "target": {
@@ -1780,7 +1921,257 @@
                   "via": "_resolve_project_pool_tag"
                 },
                 {
-                  "line": 130,
+                  "line": 248,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_project_pool_tag"
+                }
+              ],
+              "exported": true,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "resolve_pool_detection",
+              "truncated": true
+            },
+            {
+              "calls": [
+                {
+                  "branch": "not os.path.isfile(cfg_path)",
+                  "line": 460,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_load_user_pool_config"
+                },
+                {
+                  "line": 476,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_load_user_pool_config"
+                },
+                {
+                  "branch": "not isinstance(doc, dict)",
+                  "line": 478,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_load_user_pool_config"
+                },
+                {
+                  "branch": "not isinstance(pm_raw, str)",
+                  "line": 484,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_load_user_pool_config"
+                },
+                {
+                  "branch": "not isinstance(elem, str)",
+                  "line": 312,
+                  "name": "DeskError",
+                  "over": "specs",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_normalize_pool_dir_specs"
+                },
+                {
+                  "branch": "not isinstance(k, str) or not isinstance(v, str)",
+                  "line": 318,
+                  "name": "DeskError",
+                  "over": "specs.items()",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_normalize_pool_dir_specs"
+                },
+                {
+                  "line": 322,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_normalize_pool_dir_specs"
+                },
+                {
+                  "branch": "not norm_arg_dirs",
+                  "line": 523,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "branch": "not os.path.isfile(abs_m)",
+                  "line": 552,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "line": 557,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "branch": "not isinstance(doc, dict)",
+                  "line": 404,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not isinstance(doc[\"pools\"], dict)",
+                  "line": 407,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "has_dir_key and raw_dirs is not None and not extra_dirs",
+                  "line": 418,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "norm_pool not in MULTIMODAL_POOL",
+                  "line": 430,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not isinstance(raw_stems, list) or any(not isinstance(s, st…",
+                  "line": 351,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "line": 363,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "branch": "not isinstance(items_raw, list)",
+                  "line": 368,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
+                  "line": 389,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "branch": "not h_set",
+                  "line": 437,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not hashes_by_pool and not extra_dirs",
+                  "line": 445,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "explicit_pool not in MULTIMODAL_POOL",
+                  "line": 582,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "branch": "not os.path.isdir(abs_d)",
+                  "line": 588,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "branch": "required",
+                  "line": 242,
+                  "name": "DeskError",
+                  "over": "candidates",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_project_pool_tag"
+                },
+                {
+                  "line": 248,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_project_pool_tag"
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_load_locked_pool_hashes",
+              "truncated": true
+            },
+            {
+              "calls": [
+                {
+                  "branch": "required",
+                  "line": 242,
+                  "name": "DeskError",
+                  "over": "candidates",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_project_pool_tag"
+                },
+                {
+                  "line": 248,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1789,7 +2180,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 132,
+                  "line": 250,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1798,7 +2189,7 @@
                 },
                 {
                   "branch": "not isinstance(raw_tag, str)",
-                  "line": 98,
+                  "line": 216,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1807,7 +2198,7 @@
                 },
                 {
                   "branch": "norm not in MULTIMODAL_POOL",
-                  "line": 103,
+                  "line": 221,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1816,7 +2207,7 @@
                 },
                 {
                   "branch": "not allow_multimodal_pool and folder_name in MULTIMODAL_POO…",
-                  "line": 474,
+                  "line": 711,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1824,7 +2215,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(cfg_path)",
-                  "line": 258,
+                  "line": 460,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1832,7 +2223,7 @@
                   "via": "_load_user_pool_config"
                 },
                 {
-                  "line": 274,
+                  "line": 476,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1841,7 +2232,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 276,
+                  "line": 478,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1850,7 +2241,7 @@
                 },
                 {
                   "branch": "not isinstance(pm_raw, str)",
-                  "line": 282,
+                  "line": 484,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1859,7 +2250,7 @@
                 },
                 {
                   "branch": "not isinstance(elem, str)",
-                  "line": 166,
+                  "line": 312,
                   "name": "DeskError",
                   "over": "specs",
                   "target": {
@@ -1869,7 +2260,7 @@
                 },
                 {
                   "branch": "not isinstance(k, str) or not isinstance(v, str)",
-                  "line": 172,
+                  "line": 318,
                   "name": "DeskError",
                   "over": "specs.items()",
                   "target": {
@@ -1878,7 +2269,7 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "line": 176,
+                  "line": 322,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1886,25 +2277,52 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "branch": "not os.path.isfile(abs_m)",
-                  "line": 352,
+                  "branch": "not norm_arg_dirs",
+                  "line": 523,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
-                  "line": 357,
+                  "branch": "not os.path.isfile(abs_m)",
+                  "line": 552,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "line": 557,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 227,
+                  "line": 404,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not isinstance(doc[\"pools\"], dict)",
+                  "line": 407,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "has_dir_key and raw_dirs is not None and not extra_dirs",
+                  "line": 418,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1913,7 +2331,7 @@
                 },
                 {
                   "branch": "norm_pool not in MULTIMODAL_POOL",
-                  "line": 241,
+                  "line": 430,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -1921,65 +2339,39 @@
                   "via": "_parse_pool_manifest_doc"
                 },
                 {
-                  "line": 204,
+                  "branch": "not isinstance(raw_stems, list) or any(not isinstance(s, st…",
+                  "line": 351,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "line": 363,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(items_raw, list)",
-                  "line": 209,
+                  "line": 368,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
-                  "line": 217,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_extract_hash_set"
-                },
-                {
-                  "branch": "explicit_pool not in MULTIMODAL_POOL",
-                  "line": 383,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "not os.path.isdir(abs_d)",
                   "line": 389,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "inferred_pool not in MULTIMODAL_POOL",
-                  "line": 396,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "matches",
-                  "line": 504,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  }
+                  "via": "_extract_hash_and_stem_sets"
                 }
               ],
               "exported": false,
@@ -1991,8 +2383,86 @@
             {
               "calls": [
                 {
+                  "branch": "matches",
+                  "line": 793,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  }
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_check_txt_stems_against_pools"
+            },
+            {
+              "calls": [
+                {
+                  "branch": "source_root is None",
+                  "line": 460,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_load_user_pool_config"
+                },
+                {
+                  "branch": "not allow_multimodal_pool and folder_name in MULTIMODAL_POO…",
+                  "line": 711,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_check_multimodal_pool_state"
+                },
+                {
+                  "branch": "matches",
+                  "line": 742,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_check_multimodal_pool_state"
+                },
+                {
+                  "branch": "arm_acceptance",
+                  "line": 757,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_check_multimodal_pool_state"
+                },
+                {
+                  "branch": "not eff_images_only",
+                  "line": 767,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_check_multimodal_pool_state"
+                },
+                {
+                  "branch": "matches",
+                  "line": 793,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_check_txt_stems_against_pools"
+                }
+              ],
+              "exported": false,
+              "invokedAtTopLevel": false,
+              "isDefaultExport": false,
+              "name": "_check_text_source_pool_state"
+            },
+            {
+              "calls": [
+                {
                   "branch": "required",
-                  "line": 124,
+                  "line": 242,
                   "name": "DeskError",
                   "over": "candidates",
                   "target": {
@@ -2001,7 +2471,7 @@
                   "via": "_resolve_project_pool_tag"
                 },
                 {
-                  "line": 130,
+                  "line": 248,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2010,7 +2480,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 132,
+                  "line": 250,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2019,7 +2489,7 @@
                 },
                 {
                   "branch": "not isinstance(raw_tag, str)",
-                  "line": 98,
+                  "line": 216,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2028,7 +2498,7 @@
                 },
                 {
                   "branch": "norm not in MULTIMODAL_POOL",
-                  "line": 103,
+                  "line": 221,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2037,7 +2507,7 @@
                 },
                 {
                   "branch": "not allow_multimodal_pool and folder_name in MULTIMODAL_POO…",
-                  "line": 474,
+                  "line": 711,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2046,7 +2516,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(cfg_path)",
-                  "line": 258,
+                  "line": 460,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2054,7 +2524,7 @@
                   "via": "_load_user_pool_config"
                 },
                 {
-                  "line": 274,
+                  "line": 476,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2063,7 +2533,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 276,
+                  "line": 478,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2072,7 +2542,7 @@
                 },
                 {
                   "branch": "not isinstance(pm_raw, str)",
-                  "line": 282,
+                  "line": 484,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2081,7 +2551,7 @@
                 },
                 {
                   "branch": "not isinstance(elem, str)",
-                  "line": 166,
+                  "line": 312,
                   "name": "DeskError",
                   "over": "specs",
                   "target": {
@@ -2091,7 +2561,7 @@
                 },
                 {
                   "branch": "not isinstance(k, str) or not isinstance(v, str)",
-                  "line": 172,
+                  "line": 318,
                   "name": "DeskError",
                   "over": "specs.items()",
                   "target": {
@@ -2100,7 +2570,7 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "line": 176,
+                  "line": 322,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2108,25 +2578,52 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "branch": "not os.path.isfile(abs_m)",
-                  "line": 352,
+                  "branch": "not norm_arg_dirs",
+                  "line": 523,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
-                  "line": 357,
+                  "branch": "not os.path.isfile(abs_m)",
+                  "line": 552,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "line": 557,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 227,
+                  "line": 404,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not isinstance(doc[\"pools\"], dict)",
+                  "line": 407,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "has_dir_key and raw_dirs is not None and not extra_dirs",
+                  "line": 418,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2135,7 +2632,7 @@
                 },
                 {
                   "branch": "norm_pool not in MULTIMODAL_POOL",
-                  "line": 241,
+                  "line": 430,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2143,66 +2640,39 @@
                   "via": "_parse_pool_manifest_doc"
                 },
                 {
-                  "line": 204,
+                  "branch": "not isinstance(raw_stems, list) or any(not isinstance(s, st…",
+                  "line": 351,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "line": 363,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(items_raw, list)",
-                  "line": 209,
+                  "line": 368,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
-                  "line": 217,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_extract_hash_set"
-                },
-                {
-                  "branch": "explicit_pool not in MULTIMODAL_POOL",
-                  "line": 383,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "not os.path.isdir(abs_d)",
                   "line": 389,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "inferred_pool not in MULTIMODAL_POOL",
-                  "line": 396,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "matches",
-                  "line": 504,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_check_multimodal_pool_state"
+                  "via": "_extract_hash_and_stem_sets"
                 }
               ],
               "exported": true,
@@ -2215,7 +2685,7 @@
               "calls": [
                 {
                   "branch": "required",
-                  "line": 124,
+                  "line": 242,
                   "name": "DeskError",
                   "over": "candidates",
                   "target": {
@@ -2224,7 +2694,7 @@
                   "via": "_resolve_project_pool_tag"
                 },
                 {
-                  "line": 130,
+                  "line": 248,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2233,7 +2703,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 132,
+                  "line": 250,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2242,7 +2712,7 @@
                 },
                 {
                   "branch": "not isinstance(raw_tag, str)",
-                  "line": 98,
+                  "line": 216,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2251,7 +2721,7 @@
                 },
                 {
                   "branch": "norm not in MULTIMODAL_POOL",
-                  "line": 103,
+                  "line": 221,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2260,7 +2730,7 @@
                 },
                 {
                   "branch": "not allow_multimodal_pool and folder_name in MULTIMODAL_POO…",
-                  "line": 474,
+                  "line": 711,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2269,7 +2739,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(cfg_path)",
-                  "line": 258,
+                  "line": 460,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2277,7 +2747,7 @@
                   "via": "_load_user_pool_config"
                 },
                 {
-                  "line": 274,
+                  "line": 476,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2286,7 +2756,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 276,
+                  "line": 478,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2295,7 +2765,7 @@
                 },
                 {
                   "branch": "not isinstance(pm_raw, str)",
-                  "line": 282,
+                  "line": 484,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2304,7 +2774,7 @@
                 },
                 {
                   "branch": "not isinstance(elem, str)",
-                  "line": 166,
+                  "line": 312,
                   "name": "DeskError",
                   "over": "specs",
                   "target": {
@@ -2314,7 +2784,7 @@
                 },
                 {
                   "branch": "not isinstance(k, str) or not isinstance(v, str)",
-                  "line": 172,
+                  "line": 318,
                   "name": "DeskError",
                   "over": "specs.items()",
                   "target": {
@@ -2323,7 +2793,7 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "line": 176,
+                  "line": 322,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2331,25 +2801,52 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "branch": "not os.path.isfile(abs_m)",
-                  "line": 352,
+                  "branch": "not norm_arg_dirs",
+                  "line": 523,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
-                  "line": 357,
+                  "branch": "not os.path.isfile(abs_m)",
+                  "line": 552,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "line": 557,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 227,
+                  "line": 404,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not isinstance(doc[\"pools\"], dict)",
+                  "line": 407,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "has_dir_key and raw_dirs is not None and not extra_dirs",
+                  "line": 418,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2358,7 +2855,7 @@
                 },
                 {
                   "branch": "norm_pool not in MULTIMODAL_POOL",
-                  "line": 241,
+                  "line": 430,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2366,66 +2863,39 @@
                   "via": "_parse_pool_manifest_doc"
                 },
                 {
-                  "line": 204,
+                  "branch": "not isinstance(raw_stems, list) or any(not isinstance(s, st…",
+                  "line": 351,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "line": 363,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(items_raw, list)",
-                  "line": 209,
+                  "line": 368,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
-                  "line": 217,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_extract_hash_set"
-                },
-                {
-                  "branch": "explicit_pool not in MULTIMODAL_POOL",
-                  "line": 383,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "not os.path.isdir(abs_d)",
                   "line": 389,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "inferred_pool not in MULTIMODAL_POOL",
-                  "line": 396,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "matches",
-                  "line": 504,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_check_multimodal_pool_state"
+                  "via": "_extract_hash_and_stem_sets"
                 }
               ],
               "exported": true,
@@ -2438,7 +2908,7 @@
               "calls": [
                 {
                   "branch": "required",
-                  "line": 124,
+                  "line": 242,
                   "name": "DeskError",
                   "over": "candidates",
                   "target": {
@@ -2447,7 +2917,7 @@
                   "via": "_resolve_project_pool_tag"
                 },
                 {
-                  "line": 130,
+                  "line": 248,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2456,7 +2926,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 132,
+                  "line": 250,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2465,7 +2935,7 @@
                 },
                 {
                   "branch": "not isinstance(raw_tag, str)",
-                  "line": 98,
+                  "line": 216,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2474,7 +2944,7 @@
                 },
                 {
                   "branch": "norm not in MULTIMODAL_POOL",
-                  "line": 103,
+                  "line": 221,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2483,7 +2953,7 @@
                 },
                 {
                   "branch": "not allow_multimodal_pool and folder_name in MULTIMODAL_POO…",
-                  "line": 474,
+                  "line": 711,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2492,7 +2962,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(cfg_path)",
-                  "line": 258,
+                  "line": 460,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2500,7 +2970,7 @@
                   "via": "_load_user_pool_config"
                 },
                 {
-                  "line": 274,
+                  "line": 476,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2509,7 +2979,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 276,
+                  "line": 478,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2518,7 +2988,7 @@
                 },
                 {
                   "branch": "not isinstance(pm_raw, str)",
-                  "line": 282,
+                  "line": 484,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2527,7 +2997,7 @@
                 },
                 {
                   "branch": "not isinstance(elem, str)",
-                  "line": 166,
+                  "line": 312,
                   "name": "DeskError",
                   "over": "specs",
                   "target": {
@@ -2537,7 +3007,7 @@
                 },
                 {
                   "branch": "not isinstance(k, str) or not isinstance(v, str)",
-                  "line": 172,
+                  "line": 318,
                   "name": "DeskError",
                   "over": "specs.items()",
                   "target": {
@@ -2546,7 +3016,7 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "line": 176,
+                  "line": 322,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2554,25 +3024,52 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "branch": "not os.path.isfile(abs_m)",
-                  "line": 352,
+                  "branch": "not norm_arg_dirs",
+                  "line": 523,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
-                  "line": 357,
+                  "branch": "not os.path.isfile(abs_m)",
+                  "line": 552,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "line": 557,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 227,
+                  "line": 404,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not isinstance(doc[\"pools\"], dict)",
+                  "line": 407,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "has_dir_key and raw_dirs is not None and not extra_dirs",
+                  "line": 418,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2581,7 +3078,7 @@
                 },
                 {
                   "branch": "norm_pool not in MULTIMODAL_POOL",
-                  "line": 241,
+                  "line": 430,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2589,66 +3086,39 @@
                   "via": "_parse_pool_manifest_doc"
                 },
                 {
-                  "line": 204,
+                  "branch": "not isinstance(raw_stems, list) or any(not isinstance(s, st…",
+                  "line": 351,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "line": 363,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(items_raw, list)",
-                  "line": 209,
+                  "line": 368,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
-                  "line": 217,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_extract_hash_set"
-                },
-                {
-                  "branch": "explicit_pool not in MULTIMODAL_POOL",
-                  "line": 383,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "not os.path.isdir(abs_d)",
                   "line": 389,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "inferred_pool not in MULTIMODAL_POOL",
-                  "line": 396,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "matches",
-                  "line": 504,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_check_multimodal_pool_state"
+                  "via": "_extract_hash_and_stem_sets"
                 }
               ],
               "exported": true,
@@ -2661,7 +3131,7 @@
               "calls": [
                 {
                   "branch": "required",
-                  "line": 124,
+                  "line": 242,
                   "name": "DeskError",
                   "over": "candidates",
                   "target": {
@@ -2670,7 +3140,7 @@
                   "via": "_resolve_project_pool_tag"
                 },
                 {
-                  "line": 130,
+                  "line": 248,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2679,7 +3149,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 132,
+                  "line": 250,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2688,7 +3158,7 @@
                 },
                 {
                   "branch": "not isinstance(raw_tag, str)",
-                  "line": 98,
+                  "line": 216,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2697,7 +3167,7 @@
                 },
                 {
                   "branch": "norm not in MULTIMODAL_POOL",
-                  "line": 103,
+                  "line": 221,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2706,7 +3176,7 @@
                 },
                 {
                   "branch": "not allow_multimodal_pool and folder_name in MULTIMODAL_POO…",
-                  "line": 474,
+                  "line": 711,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2715,7 +3185,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(cfg_path)",
-                  "line": 258,
+                  "line": 460,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2723,7 +3193,7 @@
                   "via": "_load_user_pool_config"
                 },
                 {
-                  "line": 274,
+                  "line": 476,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2732,7 +3202,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 276,
+                  "line": 478,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2741,7 +3211,7 @@
                 },
                 {
                   "branch": "not isinstance(pm_raw, str)",
-                  "line": 282,
+                  "line": 484,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2750,7 +3220,7 @@
                 },
                 {
                   "branch": "not isinstance(elem, str)",
-                  "line": 166,
+                  "line": 312,
                   "name": "DeskError",
                   "over": "specs",
                   "target": {
@@ -2760,7 +3230,7 @@
                 },
                 {
                   "branch": "not isinstance(k, str) or not isinstance(v, str)",
-                  "line": 172,
+                  "line": 318,
                   "name": "DeskError",
                   "over": "specs.items()",
                   "target": {
@@ -2769,7 +3239,7 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "line": 176,
+                  "line": 322,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2777,25 +3247,52 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "branch": "not os.path.isfile(abs_m)",
-                  "line": 352,
+                  "branch": "not norm_arg_dirs",
+                  "line": 523,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
-                  "line": 357,
+                  "branch": "not os.path.isfile(abs_m)",
+                  "line": 552,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "line": 557,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 227,
+                  "line": 404,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not isinstance(doc[\"pools\"], dict)",
+                  "line": 407,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "has_dir_key and raw_dirs is not None and not extra_dirs",
+                  "line": 418,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2804,7 +3301,7 @@
                 },
                 {
                   "branch": "norm_pool not in MULTIMODAL_POOL",
-                  "line": 241,
+                  "line": 430,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -2812,66 +3309,39 @@
                   "via": "_parse_pool_manifest_doc"
                 },
                 {
-                  "line": 204,
+                  "branch": "not isinstance(raw_stems, list) or any(not isinstance(s, st…",
+                  "line": 351,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "line": 363,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(items_raw, list)",
-                  "line": 209,
+                  "line": 368,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
-                  "line": 217,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_extract_hash_set"
-                },
-                {
-                  "branch": "explicit_pool not in MULTIMODAL_POOL",
-                  "line": 383,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "not os.path.isdir(abs_d)",
                   "line": 389,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "inferred_pool not in MULTIMODAL_POOL",
-                  "line": 396,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "matches",
-                  "line": 504,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_check_multimodal_pool_state"
+                  "via": "_extract_hash_and_stem_sets"
                 }
               ],
               "exported": true,
@@ -2883,7 +3353,7 @@
             {
               "calls": [
                 {
-                  "line": 683,
+                  "line": 993,
                   "name": "convert",
                   "target": null,
                   "via": "_dhash"
@@ -2897,13 +3367,13 @@
             {
               "calls": [
                 {
-                  "line": 691,
+                  "line": 1001,
                   "name": "transpose",
                   "target": null,
                   "via": "_dhash_flip"
                 },
                 {
-                  "line": 683,
+                  "line": 993,
                   "name": "convert",
                   "target": null,
                   "via": "_dhash"
@@ -2917,7 +3387,7 @@
             {
               "calls": [
                 {
-                  "line": 683,
+                  "line": 993,
                   "name": "convert",
                   "target": null
                 }
@@ -2930,12 +3400,12 @@
             {
               "calls": [
                 {
-                  "line": 691,
+                  "line": 1001,
                   "name": "transpose",
                   "target": null
                 },
                 {
-                  "line": 683,
+                  "line": 993,
                   "name": "convert",
                   "target": null,
                   "via": "_dhash"
@@ -2949,7 +3419,7 @@
             {
               "calls": [
                 {
-                  "line": 747,
+                  "line": 1057,
                   "name": "convert",
                   "target": null
                 }
@@ -2962,7 +3432,7 @@
             {
               "calls": [
                 {
-                  "line": 801,
+                  "line": 1111,
                   "name": "convert",
                   "target": null
                 }
@@ -2975,7 +3445,7 @@
             {
               "calls": [
                 {
-                  "line": 683,
+                  "line": 993,
                   "name": "convert",
                   "target": null,
                   "via": "_dhash"
@@ -2989,19 +3459,19 @@
             {
               "calls": [
                 {
-                  "line": 683,
+                  "line": 993,
                   "name": "convert",
                   "target": null,
                   "via": "_dhash"
                 },
                 {
-                  "line": 691,
+                  "line": 1001,
                   "name": "transpose",
                   "target": null,
                   "via": "_dhash_flip"
                 },
                 {
-                  "line": 801,
+                  "line": 1111,
                   "name": "convert",
                   "target": null,
                   "via": "_palette"
@@ -3015,19 +3485,19 @@
             {
               "calls": [
                 {
-                  "line": 683,
+                  "line": 993,
                   "name": "convert",
                   "target": null,
                   "via": "_dhash"
                 },
                 {
-                  "line": 691,
+                  "line": 1001,
                   "name": "transpose",
                   "target": null,
                   "via": "_dhash_flip"
                 },
                 {
-                  "line": 801,
+                  "line": 1111,
                   "name": "convert",
                   "target": null,
                   "via": "_palette"
@@ -3042,7 +3512,7 @@
               "calls": [
                 {
                   "branch": "required",
-                  "line": 124,
+                  "line": 242,
                   "name": "DeskError",
                   "over": "candidates",
                   "target": {
@@ -3051,7 +3521,7 @@
                   "via": "_resolve_project_pool_tag"
                 },
                 {
-                  "line": 130,
+                  "line": 248,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3060,7 +3530,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 132,
+                  "line": 250,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3069,7 +3539,7 @@
                 },
                 {
                   "branch": "not isinstance(raw_tag, str)",
-                  "line": 98,
+                  "line": 216,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3078,7 +3548,7 @@
                 },
                 {
                   "branch": "norm not in MULTIMODAL_POOL",
-                  "line": 103,
+                  "line": 221,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3087,7 +3557,7 @@
                 },
                 {
                   "branch": "not allow_multimodal_pool and folder_name in MULTIMODAL_POO…",
-                  "line": 474,
+                  "line": 711,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3096,7 +3566,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(cfg_path)",
-                  "line": 258,
+                  "line": 460,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3104,7 +3574,7 @@
                   "via": "_load_user_pool_config"
                 },
                 {
-                  "line": 274,
+                  "line": 476,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3113,7 +3583,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 276,
+                  "line": 478,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3122,7 +3592,7 @@
                 },
                 {
                   "branch": "not isinstance(pm_raw, str)",
-                  "line": 282,
+                  "line": 484,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3131,7 +3601,7 @@
                 },
                 {
                   "branch": "not isinstance(elem, str)",
-                  "line": 166,
+                  "line": 312,
                   "name": "DeskError",
                   "over": "specs",
                   "target": {
@@ -3141,7 +3611,7 @@
                 },
                 {
                   "branch": "not isinstance(k, str) or not isinstance(v, str)",
-                  "line": 172,
+                  "line": 318,
                   "name": "DeskError",
                   "over": "specs.items()",
                   "target": {
@@ -3150,7 +3620,7 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "line": 176,
+                  "line": 322,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3158,25 +3628,52 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "branch": "not os.path.isfile(abs_m)",
-                  "line": 352,
+                  "branch": "not norm_arg_dirs",
+                  "line": 523,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
-                  "line": 357,
+                  "branch": "not os.path.isfile(abs_m)",
+                  "line": 552,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "line": 557,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 227,
+                  "line": 404,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not isinstance(doc[\"pools\"], dict)",
+                  "line": 407,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "has_dir_key and raw_dirs is not None and not extra_dirs",
+                  "line": 418,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3185,7 +3682,7 @@
                 },
                 {
                   "branch": "norm_pool not in MULTIMODAL_POOL",
-                  "line": 241,
+                  "line": 430,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3193,66 +3690,39 @@
                   "via": "_parse_pool_manifest_doc"
                 },
                 {
-                  "line": 204,
+                  "branch": "not isinstance(raw_stems, list) or any(not isinstance(s, st…",
+                  "line": 351,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "line": 363,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(items_raw, list)",
-                  "line": 209,
+                  "line": 368,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
-                  "line": 217,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_extract_hash_set"
-                },
-                {
-                  "branch": "explicit_pool not in MULTIMODAL_POOL",
-                  "line": 383,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "not os.path.isdir(abs_d)",
                   "line": 389,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "inferred_pool not in MULTIMODAL_POOL",
-                  "line": 396,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "matches",
-                  "line": 504,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_check_multimodal_pool_state"
+                  "via": "_extract_hash_and_stem_sets"
                 }
               ],
               "exported": true,
@@ -3264,7 +3734,7 @@
             {
               "calls": [
                 {
-                  "line": 1482,
+                  "line": 1756,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3280,7 +3750,7 @@
               "calls": [
                 {
                   "branch": "required",
-                  "line": 124,
+                  "line": 242,
                   "name": "DeskError",
                   "over": "candidates",
                   "target": {
@@ -3289,7 +3759,7 @@
                   "via": "_resolve_project_pool_tag"
                 },
                 {
-                  "line": 130,
+                  "line": 248,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3298,7 +3768,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 132,
+                  "line": 250,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3307,7 +3777,7 @@
                 },
                 {
                   "branch": "not isinstance(raw_tag, str)",
-                  "line": 98,
+                  "line": 216,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3316,7 +3786,7 @@
                 },
                 {
                   "branch": "norm not in MULTIMODAL_POOL",
-                  "line": 103,
+                  "line": 221,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3325,7 +3795,7 @@
                 },
                 {
                   "branch": "not allow_multimodal_pool and folder_name in MULTIMODAL_POO…",
-                  "line": 474,
+                  "line": 711,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3334,7 +3804,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(cfg_path)",
-                  "line": 258,
+                  "line": 460,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3342,7 +3812,7 @@
                   "via": "_load_user_pool_config"
                 },
                 {
-                  "line": 274,
+                  "line": 476,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3351,7 +3821,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 276,
+                  "line": 478,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3360,7 +3830,7 @@
                 },
                 {
                   "branch": "not isinstance(pm_raw, str)",
-                  "line": 282,
+                  "line": 484,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3369,7 +3839,7 @@
                 },
                 {
                   "branch": "not isinstance(elem, str)",
-                  "line": 166,
+                  "line": 312,
                   "name": "DeskError",
                   "over": "specs",
                   "target": {
@@ -3379,7 +3849,7 @@
                 },
                 {
                   "branch": "not isinstance(k, str) or not isinstance(v, str)",
-                  "line": 172,
+                  "line": 318,
                   "name": "DeskError",
                   "over": "specs.items()",
                   "target": {
@@ -3388,7 +3858,7 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "line": 176,
+                  "line": 322,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3396,25 +3866,52 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "branch": "not os.path.isfile(abs_m)",
-                  "line": 352,
+                  "branch": "not norm_arg_dirs",
+                  "line": 523,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
-                  "line": 357,
+                  "branch": "not os.path.isfile(abs_m)",
+                  "line": 552,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "line": 557,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 227,
+                  "line": 404,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not isinstance(doc[\"pools\"], dict)",
+                  "line": 407,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "has_dir_key and raw_dirs is not None and not extra_dirs",
+                  "line": 418,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3423,7 +3920,7 @@
                 },
                 {
                   "branch": "norm_pool not in MULTIMODAL_POOL",
-                  "line": 241,
+                  "line": 430,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3431,66 +3928,39 @@
                   "via": "_parse_pool_manifest_doc"
                 },
                 {
-                  "line": 204,
+                  "branch": "not isinstance(raw_stems, list) or any(not isinstance(s, st…",
+                  "line": 351,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "line": 363,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(items_raw, list)",
-                  "line": 209,
+                  "line": 368,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
-                  "line": 217,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_extract_hash_set"
-                },
-                {
-                  "branch": "explicit_pool not in MULTIMODAL_POOL",
-                  "line": 383,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "not os.path.isdir(abs_d)",
                   "line": 389,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "inferred_pool not in MULTIMODAL_POOL",
-                  "line": 396,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "matches",
-                  "line": 504,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_check_multimodal_pool_state"
+                  "via": "_extract_hash_and_stem_sets"
                 }
               ],
               "exported": true,
@@ -3502,7 +3972,7 @@
             {
               "calls": [
                 {
-                  "line": 2038,
+                  "line": 2312,
                   "name": "normalize_text",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -3517,7 +3987,7 @@
             {
               "calls": [
                 {
-                  "line": 2090,
+                  "line": 2364,
                   "name": "link_target",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -3533,7 +4003,7 @@
               "calls": [
                 {
                   "branch": "meta is not None and meta.get(\"backend\") == \"dinov2\" and it…",
-                  "line": 124,
+                  "line": 242,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3541,7 +4011,7 @@
                   "via": "_resolve_project_pool_tag"
                 },
                 {
-                  "line": 1482,
+                  "line": 1756,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3558,7 +4028,7 @@
               "calls": [
                 {
                   "branch": "required",
-                  "line": 124,
+                  "line": 242,
                   "name": "DeskError",
                   "over": "candidates",
                   "target": {
@@ -3567,7 +4037,7 @@
                   "via": "_resolve_project_pool_tag"
                 },
                 {
-                  "line": 130,
+                  "line": 248,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3576,7 +4046,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 132,
+                  "line": 250,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3585,7 +4055,7 @@
                 },
                 {
                   "branch": "not isinstance(raw_tag, str)",
-                  "line": 98,
+                  "line": 216,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3594,7 +4064,7 @@
                 },
                 {
                   "branch": "norm not in MULTIMODAL_POOL",
-                  "line": 103,
+                  "line": 221,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3603,7 +4073,7 @@
                 },
                 {
                   "branch": "not allow_multimodal_pool and folder_name in MULTIMODAL_POO…",
-                  "line": 474,
+                  "line": 711,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3612,7 +4082,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(cfg_path)",
-                  "line": 258,
+                  "line": 460,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3620,7 +4090,7 @@
                   "via": "_load_user_pool_config"
                 },
                 {
-                  "line": 274,
+                  "line": 476,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3629,7 +4099,7 @@
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 276,
+                  "line": 478,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3638,7 +4108,7 @@
                 },
                 {
                   "branch": "not isinstance(pm_raw, str)",
-                  "line": 282,
+                  "line": 484,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3647,7 +4117,7 @@
                 },
                 {
                   "branch": "not isinstance(elem, str)",
-                  "line": 166,
+                  "line": 312,
                   "name": "DeskError",
                   "over": "specs",
                   "target": {
@@ -3657,7 +4127,7 @@
                 },
                 {
                   "branch": "not isinstance(k, str) or not isinstance(v, str)",
-                  "line": 172,
+                  "line": 318,
                   "name": "DeskError",
                   "over": "specs.items()",
                   "target": {
@@ -3666,7 +4136,7 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "line": 176,
+                  "line": 322,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3674,25 +4144,52 @@
                   "via": "_normalize_pool_dir_specs"
                 },
                 {
-                  "branch": "not os.path.isfile(abs_m)",
-                  "line": 352,
+                  "branch": "not norm_arg_dirs",
+                  "line": 523,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
-                  "line": 357,
+                  "branch": "not os.path.isfile(abs_m)",
+                  "line": 552,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
+                  "via": "_resolve_pool_detection_with_stems"
+                },
+                {
+                  "line": 557,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_resolve_pool_detection_with_stems"
                 },
                 {
                   "branch": "not isinstance(doc, dict)",
-                  "line": 227,
+                  "line": 404,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "not isinstance(doc[\"pools\"], dict)",
+                  "line": 407,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_parse_pool_manifest_doc"
+                },
+                {
+                  "branch": "has_dir_key and raw_dirs is not None and not extra_dirs",
+                  "line": 418,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3701,7 +4198,7 @@
                 },
                 {
                   "branch": "norm_pool not in MULTIMODAL_POOL",
-                  "line": 241,
+                  "line": 430,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3709,66 +4206,39 @@
                   "via": "_parse_pool_manifest_doc"
                 },
                 {
-                  "line": 204,
+                  "branch": "not isinstance(raw_stems, list) or any(not isinstance(s, st…",
+                  "line": 351,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
+                },
+                {
+                  "line": 363,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(items_raw, list)",
-                  "line": 209,
+                  "line": 368,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "_extract_hash_set"
+                  "via": "_extract_hash_and_stem_sets"
                 },
                 {
                   "branch": "not isinstance(val, str) or not _HEX64_RE.match(val.strip()…",
-                  "line": 217,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_extract_hash_set"
-                },
-                {
-                  "branch": "explicit_pool not in MULTIMODAL_POOL",
-                  "line": 383,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "not os.path.isdir(abs_d)",
                   "line": 389,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "inferred_pool not in MULTIMODAL_POOL",
-                  "line": 396,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "resolve_pool_detection"
-                },
-                {
-                  "branch": "matches",
-                  "line": 504,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_check_multimodal_pool_state"
+                  "via": "_extract_hash_and_stem_sets"
                 }
               ],
               "exported": true,
@@ -3780,14 +4250,14 @@
             {
               "calls": [
                 {
-                  "line": 2445,
+                  "line": 2727,
                   "name": "_extract_model_tokenizer",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 2451,
+                  "line": 2733,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3802,7 +4272,7 @@
             {
               "calls": [
                 {
-                  "line": 2445,
+                  "line": 2727,
                   "name": "_extract_model_tokenizer",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -3810,7 +4280,7 @@
                   "via": "_resolve_tokenizer"
                 },
                 {
-                  "line": 2451,
+                  "line": 2733,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3826,12 +4296,12 @@
             {
               "calls": [
                 {
-                  "line": 2560,
+                  "line": 2842,
                   "name": "texts",
                   "target": null
                 },
                 {
-                  "line": 2563,
+                  "line": 2845,
                   "name": "unit_rows",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -3847,7 +4317,7 @@
               "calls": [
                 {
                   "branch": "\"rnd-data-private\" in parts or \"blobs\" in parts",
-                  "line": 2570,
+                  "line": 2852,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3863,7 +4333,7 @@
               "calls": [
                 {
                   "branch": "inside",
-                  "line": 2579,
+                  "line": 2861,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3879,7 +4349,7 @@
               "calls": [
                 {
                   "branch": "\"rnd-data-private\" in parts or \"blobs\" in parts",
-                  "line": 2570,
+                  "line": 2852,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3888,7 +4358,7 @@
                 },
                 {
                   "branch": "not os.path.isdir(src_abs)",
-                  "line": 2587,
+                  "line": 2869,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3896,7 +4366,7 @@
                 },
                 {
                   "branch": "not in_root",
-                  "line": 2604,
+                  "line": 2886,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3912,7 +4382,7 @@
               "calls": [
                 {
                   "branch": "\"rnd-data-private\" in parts or \"blobs\" in parts",
-                  "line": 2570,
+                  "line": 2852,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3921,14 +4391,14 @@
                 },
                 {
                   "branch": "not os.path.isdir(runs_dir)",
-                  "line": 2645,
+                  "line": 2927,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   }
                 },
                 {
-                  "line": 2663,
+                  "line": 2945,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3936,7 +4406,7 @@
                 },
                 {
                   "branch": "\"rnd-data-private\" in str(manifest.get(\"source\") or \"\").low…",
-                  "line": 2670,
+                  "line": 2952,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3944,7 +4414,7 @@
                 },
                 {
                   "branch": "\"rnd-data-private\" in store.lower() or \"private\" in store.l…",
-                  "line": 2681,
+                  "line": 2963,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3952,7 +4422,7 @@
                 },
                 {
                   "branch": "os.path.isabs(raw_loc) or os.path.isabs(loc) or \"..\" in loc…",
-                  "line": 2686,
+                  "line": 2968,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3960,7 +4430,7 @@
                 },
                 {
                   "branch": "not loc.startswith(\"runs/\")",
-                  "line": 2693,
+                  "line": 2975,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3968,7 +4438,7 @@
                 },
                 {
                   "branch": "not in_runs",
-                  "line": 2704,
+                  "line": 2986,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3976,7 +4446,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(real)",
-                  "line": 2709,
+                  "line": 2991,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -3992,14 +4462,14 @@
               "calls": [
                 {
                   "branch": "not os.path.isfile(sym_path)",
-                  "line": 2800,
+                  "line": 3082,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   }
                 },
                 {
-                  "line": 2811,
+                  "line": 3093,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4015,7 +4485,7 @@
               "calls": [
                 {
                   "branch": "bool(source) == bool(rnd_data)",
-                  "line": 2832,
+                  "line": 3119,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4023,7 +4493,7 @@
                 },
                 {
                   "branch": "inside",
-                  "line": 2579,
+                  "line": 2861,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4031,8 +4501,62 @@
                   "via": "_check_out_not_inside"
                 },
                 {
+                  "branch": "source_root is None",
+                  "line": 460,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_load_user_pool_config"
+                },
+                {
+                  "branch": "not allow_multimodal_pool and folder_name in MULTIMODAL_POO…",
+                  "line": 711,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_check_multimodal_pool_state"
+                },
+                {
+                  "branch": "matches",
+                  "line": 742,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_check_multimodal_pool_state"
+                },
+                {
+                  "branch": "arm_acceptance",
+                  "line": 757,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_check_multimodal_pool_state"
+                },
+                {
+                  "branch": "not eff_images_only",
+                  "line": 767,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_check_multimodal_pool_state"
+                },
+                {
+                  "branch": "matches",
+                  "line": 793,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_check_txt_stems_against_pools"
+                },
+                {
                   "branch": "\"rnd-data-private\" in parts or \"blobs\" in parts",
-                  "line": 2570,
+                  "line": 2852,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4041,7 +4565,7 @@
                 },
                 {
                   "branch": "not os.path.isdir(src_abs)",
-                  "line": 2587,
+                  "line": 2869,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4050,7 +4574,7 @@
                 },
                 {
                   "branch": "not in_root",
-                  "line": 2604,
+                  "line": 2886,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4059,7 +4583,7 @@
                 },
                 {
                   "branch": "not os.path.isdir(runs_dir)",
-                  "line": 2645,
+                  "line": 2927,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4067,7 +4591,7 @@
                   "via": "scan_rnd_data"
                 },
                 {
-                  "line": 2663,
+                  "line": 2945,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4076,7 +4600,7 @@
                 },
                 {
                   "branch": "\"rnd-data-private\" in str(manifest.get(\"source\") or \"\").low…",
-                  "line": 2670,
+                  "line": 2952,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4085,7 +4609,7 @@
                 },
                 {
                   "branch": "\"rnd-data-private\" in store.lower() or \"private\" in store.l…",
-                  "line": 2681,
+                  "line": 2963,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4094,7 +4618,7 @@
                 },
                 {
                   "branch": "os.path.isabs(raw_loc) or os.path.isabs(loc) or \"..\" in loc…",
-                  "line": 2686,
+                  "line": 2968,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4103,7 +4627,7 @@
                 },
                 {
                   "branch": "not loc.startswith(\"runs/\")",
-                  "line": 2693,
+                  "line": 2975,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4112,7 +4636,7 @@
                 },
                 {
                   "branch": "not in_runs",
-                  "line": 2704,
+                  "line": 2986,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4121,7 +4645,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(real)",
-                  "line": 2709,
+                  "line": 2991,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4130,7 +4654,7 @@
                 },
                 {
                   "branch": "not os.path.isfile(sym_path)",
-                  "line": 2800,
+                  "line": 3082,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4138,7 +4662,7 @@
                   "via": "load_text_cache"
                 },
                 {
-                  "line": 2811,
+                  "line": 3093,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4146,14 +4670,14 @@
                   "via": "load_text_cache"
                 },
                 {
-                  "line": 2886,
+                  "line": 3184,
                   "name": "format_eg2_prefix",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 2445,
+                  "line": 2727,
                   "name": "_extract_model_tokenizer",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4161,45 +4685,25 @@
                   "via": "_resolve_tokenizer"
                 },
                 {
-                  "line": 2451,
+                  "line": 2733,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   },
                   "via": "_resolve_tokenizer"
-                },
-                {
-                  "line": 2560,
-                  "name": "texts",
-                  "target": null,
-                  "via": "embed_file_chunks"
-                },
-                {
-                  "line": 2563,
-                  "name": "unit_rows",
-                  "target": {
-                    "file": "dataset_desk/__init__.py"
-                  },
-                  "via": "embed_file_chunks"
-                },
-                {
-                  "line": 2891,
-                  "name": "format_eg2_prefix",
-                  "target": {
-                    "file": "dataset_desk/__init__.py"
-                  }
                 }
               ],
               "exported": true,
               "invokedAtTopLevel": false,
               "isDefaultExport": false,
-              "name": "text_index"
+              "name": "text_index",
+              "truncated": true
             },
             {
               "calls": [
                 {
                   "branch": "backend is not None and backend != calibrated",
-                  "line": 2952,
+                  "line": 3252,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4214,7 +4718,7 @@
             {
               "calls": [
                 {
-                  "line": 3129,
+                  "line": 3429,
                   "name": "resolve_backend",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4229,14 +4733,14 @@
             {
               "calls": [
                 {
-                  "line": 3147,
+                  "line": 3447,
                   "name": "load_siglip2_tokenizer",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 3149,
+                  "line": 3449,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4251,7 +4755,7 @@
             {
               "calls": [
                 {
-                  "line": 3129,
+                  "line": 3429,
                   "name": "resolve_backend",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4259,21 +4763,21 @@
                   "via": "command_backend"
                 },
                 {
-                  "line": 3244,
+                  "line": 3547,
                   "name": "check_device",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 3245,
+                  "line": 3548,
                   "name": "validate_embedder_options",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   }
                 },
                 {
-                  "line": 3246,
+                  "line": 3549,
                   "name": "cap_threads",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4281,7 +4785,15 @@
                 },
                 {
                   "branch": "a.source and a.rnd_data",
-                  "line": 3261,
+                  "line": 3564,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  }
+                },
+                {
+                  "branch": "a.command == \"text-index\" and not src_root",
+                  "line": 3567,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4289,7 +4801,7 @@
                 },
                 {
                   "branch": "a.command in text_cmds",
-                  "line": 2570,
+                  "line": 2852,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4298,7 +4810,7 @@
                 },
                 {
                   "branch": "not a.out and not src_root",
-                  "line": 3266,
+                  "line": 3571,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4306,7 +4818,7 @@
                 },
                 {
                   "branch": "a.command in text_cmds",
-                  "line": 2579,
+                  "line": 2861,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4315,15 +4827,32 @@
                 },
                 {
                   "branch": "backend == \"none\" and a.command == \"text-search\"",
-                  "line": 3271,
+                  "line": 3577,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   }
                 },
                 {
+                  "branch": "a.command == \"text-search\" and not a.text",
+                  "line": 3579,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  }
+                },
+                {
+                  "branch": "a.command in text_cmds",
+                  "line": 460,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_load_user_pool_config"
+                },
+                {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2832,
+                  "line": 3119,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4332,7 +4861,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2886,
+                  "line": 3184,
                   "name": "format_eg2_prefix",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4341,7 +4870,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2445,
+                  "line": 2727,
                   "name": "_extract_model_tokenizer",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4350,7 +4879,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2451,
+                  "line": 2733,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4359,14 +4888,14 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2560,
+                  "line": 2842,
                   "name": "texts",
                   "target": null,
                   "via": "embed_file_chunks"
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2563,
+                  "line": 2845,
                   "name": "unit_rows",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4375,7 +4904,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2891,
+                  "line": 3189,
                   "name": "format_eg2_prefix",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4384,7 +4913,7 @@
                 },
                 {
                   "branch": "a.command in text_cmds",
-                  "line": 2952,
+                  "line": 3252,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4392,23 +4921,15 @@
                   "via": "text_dupes"
                 },
                 {
-                  "branch": "not a.text",
-                  "line": 3289,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  }
-                },
-                {
                   "branch": "out_inside",
-                  "line": 3308,
+                  "line": 3664,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
                   }
                 },
                 {
-                  "line": 3310,
+                  "line": 3666,
                   "name": "load_caption_rules",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4416,7 +4937,7 @@
                 },
                 {
                   "branch": "backend == \"none\" and a.command in (\"search\", \"coverage\")",
-                  "line": 3314,
+                  "line": 3670,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4424,28 +4945,12 @@
                 },
                 {
                   "branch": "a.command == \"scan\"",
-                  "line": 124,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_resolve_project_pool_tag"
-                },
-                {
-                  "branch": "a.command == \"scan\"",
-                  "line": 1193,
+                  "line": 1503,
                   "name": "scan_sidecar_project",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   },
                   "via": "scan"
-                },
-                {
-                  "branch": "a.command == \"scan\"",
-                  "line": 683,
-                  "name": "convert",
-                  "target": null,
-                  "via": "_dhash"
                 }
               ],
               "exported": true,
@@ -4457,7 +4962,7 @@
             {
               "calls": [
                 {
-                  "line": 3129,
+                  "line": 3429,
                   "name": "resolve_backend",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4465,7 +4970,7 @@
                   "via": "command_backend"
                 },
                 {
-                  "line": 3244,
+                  "line": 3547,
                   "name": "check_device",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4473,7 +4978,7 @@
                   "via": "main"
                 },
                 {
-                  "line": 3245,
+                  "line": 3548,
                   "name": "validate_embedder_options",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4481,7 +4986,7 @@
                   "via": "main"
                 },
                 {
-                  "line": 3246,
+                  "line": 3549,
                   "name": "cap_threads",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4490,7 +4995,16 @@
                 },
                 {
                   "branch": "a.source and a.rnd_data",
-                  "line": 3261,
+                  "line": 3564,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "main"
+                },
+                {
+                  "branch": "a.command == \"text-index\" and not src_root",
+                  "line": 3567,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4499,7 +5013,7 @@
                 },
                 {
                   "branch": "a.command in text_cmds",
-                  "line": 2570,
+                  "line": 2852,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4508,7 +5022,7 @@
                 },
                 {
                   "branch": "not a.out and not src_root",
-                  "line": 3266,
+                  "line": 3571,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4517,7 +5031,7 @@
                 },
                 {
                   "branch": "a.command in text_cmds",
-                  "line": 2579,
+                  "line": 2861,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4526,7 +5040,7 @@
                 },
                 {
                   "branch": "backend == \"none\" and a.command == \"text-search\"",
-                  "line": 3271,
+                  "line": 3577,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4534,8 +5048,26 @@
                   "via": "main"
                 },
                 {
+                  "branch": "a.command == \"text-search\" and not a.text",
+                  "line": 3579,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "main"
+                },
+                {
+                  "branch": "a.command in text_cmds",
+                  "line": 460,
+                  "name": "DeskError",
+                  "target": {
+                    "file": "dataset_desk/errors.py"
+                  },
+                  "via": "_load_user_pool_config"
+                },
+                {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2832,
+                  "line": 3119,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4544,7 +5076,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2886,
+                  "line": 3184,
                   "name": "format_eg2_prefix",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4553,7 +5085,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2445,
+                  "line": 2727,
                   "name": "_extract_model_tokenizer",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4562,7 +5094,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2451,
+                  "line": 2733,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4571,14 +5103,14 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2560,
+                  "line": 2842,
                   "name": "texts",
                   "target": null,
                   "via": "embed_file_chunks"
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2563,
+                  "line": 2845,
                   "name": "unit_rows",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4587,7 +5119,7 @@
                 },
                 {
                   "branch": "a.command == \"text-index\"",
-                  "line": 2891,
+                  "line": 3189,
                   "name": "format_eg2_prefix",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4596,7 +5128,7 @@
                 },
                 {
                   "branch": "a.command in text_cmds",
-                  "line": 2952,
+                  "line": 3252,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4604,17 +5136,8 @@
                   "via": "text_dupes"
                 },
                 {
-                  "branch": "not a.text",
-                  "line": 3289,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "main"
-                },
-                {
                   "branch": "out_inside",
-                  "line": 3308,
+                  "line": 3664,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4622,7 +5145,7 @@
                   "via": "main"
                 },
                 {
-                  "line": 3310,
+                  "line": 3666,
                   "name": "load_caption_rules",
                   "target": {
                     "file": "dataset_desk/__init__.py"
@@ -4631,7 +5154,7 @@
                 },
                 {
                   "branch": "backend == \"none\" and a.command in (\"search\", \"coverage\")",
-                  "line": 3314,
+                  "line": 3670,
                   "name": "DeskError",
                   "target": {
                     "file": "dataset_desk/errors.py"
@@ -4640,28 +5163,12 @@
                 },
                 {
                   "branch": "a.command == \"scan\"",
-                  "line": 124,
-                  "name": "DeskError",
-                  "target": {
-                    "file": "dataset_desk/errors.py"
-                  },
-                  "via": "_resolve_project_pool_tag"
-                },
-                {
-                  "branch": "a.command == \"scan\"",
-                  "line": 1193,
+                  "line": 1503,
                   "name": "scan_sidecar_project",
                   "target": {
                     "file": "dataset_desk/__init__.py"
                   },
                   "via": "scan"
-                },
-                {
-                  "branch": "a.command == \"scan\"",
-                  "line": 683,
-                  "name": "convert",
-                  "target": null,
-                  "via": "_dhash"
                 }
               ],
               "exported": true,
@@ -4673,7 +5180,7 @@
           ]
         },
         {
-          "hash": "6ab36b2da0d278202fdaa8e933b8e7062bda62f57c91a0cb6fa2d40629eee81b",
+          "hash": "898a084fad0ed2534b437298fb868d3f6814a48efcfd60f62e9785f48aceede9",
           "path": "dataset_desk/errors.py"
         },
         {
@@ -4705,7 +5212,7 @@
       "origin": "authored",
       "outsidePlaces": [
         {
-          "reads": 33,
+          "reads": 38,
           "where": [
             "caller"
           ],
@@ -4724,11 +5231,11 @@
           "where": [
             "cwd:desk-out/"
           ],
-          "writes": 11
+          "writes": 15
         }
       ],
-      "outsideReads": 37,
-      "outsideWrites": 33,
+      "outsideReads": 42,
+      "outsideWrites": 37,
       "role": "code",
       "testRunners": [
         "unittest"
@@ -4753,7 +5260,7 @@
           "path": ".gitignore"
         },
         {
-          "hash": "edef8f954101221667c2508d7f73f2535fcc8d0b824324973f766ae9369b490b",
+          "hash": "4be3cca74521d0535ea6015f29610e95916043e4cfab6117442fb76c32c30cd1",
           "path": "CHANGELOG.md"
         },
         {
@@ -4781,7 +5288,7 @@
           "path": "README.ja.md"
         },
         {
-          "hash": "21eabc495adb3221dd98fcd6a723fdc7e6786301db3510c59a16ee54314c3e5f",
+          "hash": "21bc881e1189af820e303c8559416474d3ebdbd9a511d06c95a31215fcebfc40",
           "path": "README.md"
         },
         {
@@ -4809,11 +5316,11 @@
           "path": "codecov.yml"
         },
         {
-          "hash": "be38e9fcacbcd05e996a71ae7ed5daebd6dbcde4396d4ea8c65910685474d5b2",
+          "hash": "0517f0cdf0ae5994b8f3667f9c8603ff43bb9979932a038b0c08729a27e3c201",
           "path": "pyproject.toml"
         },
         {
-          "hash": "73b63ff4cc2989a83881b4444522768e35a401cd34dfa156491342f7972b0fa5",
+          "hash": "c027988fb2d97f16b6f344ffd2de6907faba4592439099f242a32fa01c4af2da",
           "path": "uv.lock"
         },
         {
@@ -4943,11 +5450,12 @@
         {
           "exports": [
             "fake_modules",
+            "isolate_desk_env",
             "make_sentence_transformers",
             "make_torch",
             "make_transformers"
           ],
-          "hash": "ea8d015ebd21b19d55729c9ecf6a95ab735a2beae881af41351afe9a1313425d",
+          "hash": "bca2739724f105f3bbe2e6a7efcd2241564d2e1765a525ee15e8c67f4bdfc12a",
           "path": "tests/fakes.py",
           "testFramework": "unittest"
         },
@@ -4955,7 +5463,7 @@
           "exports": [
             "png"
           ],
-          "hash": "3712f1a4ccb79054c4a302bda2252a5abac49dd57ce80b24cb896d190fc7fe02",
+          "hash": "3316162dac4cd4ae409f189ad8c717b4d91bc80ccac0e67738d1ed5d8a7b805b",
           "importOrder": [
             "tests/fakes.py",
             "dataset_desk/__init__.py",
@@ -4977,12 +5485,13 @@
           "exports": [
             "make_project"
           ],
-          "hash": "e7517085ea8c0c7533ef227ae825cdd797d3aa9d9b24dc9baf169220ec82e570",
+          "hash": "2b30e7b1d4c07575a2b722beb4f0c1888cc8b53789ec6afec542b8ca6aaa8c00",
           "importsFiles": [
             "dataset_desk/__init__.py",
             "dataset_desk/backends.py",
             "dataset_desk/desk.py",
-            "dataset_desk/errors.py"
+            "dataset_desk/errors.py",
+            "tests/fakes.py"
           ],
           "path": "tests/test_cli.py",
           "spawns": [
@@ -4995,7 +5504,7 @@
             "pattern",
             "record"
           ],
-          "hash": "761d2dcdb4844ba568732de600e6517543b0796c3c17b216ea9c7b7eb516c22d",
+          "hash": "166b699858f6d8fa61482bd7cc4732c6f98d9d7c3122d271dbb28e3d3faa9cbd",
           "importOrder": [
             "tests/fakes.py",
             "dataset_desk/__init__.py",
@@ -5019,7 +5528,7 @@
           "exports": [
             "rec"
           ],
-          "hash": "50483c1090bb8781d18307339dbe5eef9a3bd38de787b946f538ef56816837ef",
+          "hash": "9ad1d5dcb16c64e0c33ed054956fab1d58d075c1a4b03b5ac6bd948658e615d3",
           "importOrder": [
             "tests/fakes.py",
             "dataset_desk/__init__.py",
@@ -5049,17 +5558,18 @@
             "swap_check_reference",
             "unit_vectors"
           ],
-          "hash": "bcdece775ad1c3b2c7ca58c76d7341d74c1118efbb544237f7ce9197895341cf",
+          "hash": "627e4bfc0ca3eb282e9a96fcb2c1029785167669f643943efaa51982a2e58af8",
           "importsFiles": [
             "dataset_desk/__init__.py",
             "dataset_desk/description_gate.py",
-            "dataset_desk/desk.py"
+            "dataset_desk/desk.py",
+            "tests/fakes.py"
           ],
           "path": "tests/test_scale.py",
           "testFramework": "unittest"
         },
         {
-          "hash": "34b586bd92e839bcc88bca7a2fdedb30466f076998ec24022eec95132e4ddd33",
+          "hash": "67adf9d3344e7db525cd04b3d230bfd87e0dfb4204ff7dfdfd40c6df46542de3",
           "importOrder": [
             "dataset_desk/__init__.py",
             "dataset_desk/backends.py",
@@ -5093,7 +5603,14 @@
         "unittest"
       ],
       "testedBy": 0,
-      "unresolvedSites": 0
+      "unresolvedNamed": [
+        {
+          "path": "tests/test_training_captions.py",
+          "specifier": null,
+          "why": "dynamic"
+        }
+      ],
+      "unresolvedSites": 1
     }
   ],
   "doors": [
@@ -5709,7 +6226,7 @@
   ],
   "engine": "1.26.0",
   "generatedFrom": {
-    "commit": "e8a40997d8d6252e996aae69a335386a1434e1c1",
+    "commit": "90cea26841a83a1941874087f6473c2d0287a4b5",
     "tracked": 55
   },
   "landings": [
@@ -5776,6 +6293,18 @@
         }
       ],
       "target": "site/src/content/docs/handbook",
+      "writers": []
+    },
+    {
+      "readers": [
+        {
+          "by": "tests/test_training_captions.py",
+          "call": "os.listdir",
+          "confidence": "ast",
+          "fromTests": true
+        }
+      ],
+      "target": "tests",
       "writers": []
     }
   ],

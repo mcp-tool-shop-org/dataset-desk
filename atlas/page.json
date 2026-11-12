@@ -19,30 +19,85 @@
   "changes": {
     "fileCounts": {
       "added": 0,
-      "changed": 1,
+      "changed": 15,
       "moved": 0,
-      "parts": 1,
+      "parts": 3,
       "removed": 0
     },
     "items": [
       {
+        "kind": "landing",
+        "sentence": "tests/ is now read by tests/test_training_captions.py.",
+        "subjects": [
+          "tests/",
+          "tests/test_training_captions.py"
+        ]
+      },
+      {
         "kind": "counts",
-        "sentence": "Nothing structural changed since 2026-11-12; 1 file changed content.",
+        "sentence": "15 files changed content, across 3 parts.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "b1f84328969819a7ad00e0ab149e32da1aecad8b",
-      "generatedAt": "2026-11-12T02:24:46.016Z"
+      "commit": "e8a40997d8d6252e996aae69a335386a1434e1c1",
+      "generatedAt": "2026-11-12T02:31:39.881Z"
     },
-    "unchanged": true
+    "unchanged": false
   },
-  "changesTogether": [],
+  "changesTogether": [
+    {
+      "a": "tests/test_backends.py",
+      "b": "tests/test_desk.py",
+      "either": 5,
+      "partLabels": [
+        "tests",
+        "tests"
+      ],
+      "parts": [
+        "tests",
+        "tests"
+      ],
+      "relation": "inside",
+      "shared": 5
+    },
+    {
+      "a": "dataset_desk/description_gate.py",
+      "b": "tests/test_training_captions.py",
+      "either": 9,
+      "partLabels": [
+        "dataset_desk",
+        "tests"
+      ],
+      "parts": [
+        "dataset_desk",
+        "tests"
+      ],
+      "relation": "b-imports-a",
+      "shared": 6
+    },
+    {
+      "a": "dataset_desk/description_gate.py",
+      "b": "dataset_desk/desk.py",
+      "either": 13,
+      "partLabels": [
+        "dataset_desk",
+        "dataset_desk"
+      ],
+      "parts": [
+        "dataset_desk",
+        "dataset_desk"
+      ],
+      "relation": "inside",
+      "shared": 7
+    }
+  ],
   "changesTogetherNote": [
+    "Confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions.",
     "Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "e8a40997d8d6252e996aae69a335386a1434e1c1",
+  "commit": "90cea26841a83a1941874087f6473c2d0287a4b5",
   "defaultBranch": "main",
   "derived": "5 parts, mostly Python (14 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 4 doors; the busiest is CI, which reaches 3 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.",
   "doors": [
@@ -184,11 +239,12 @@
   "edges": [],
   "engine": "1.26.0",
   "generated": [],
-  "generatedAt": "2026-11-12T02:31:39.881Z",
+  "generatedAt": "2026-11-12T11:03:16.759Z",
   "limits": [
-    "5 reads use paths built at run time and are not named here.",
-    "17 writes and 33 reads go to a path their caller passes, not to this repository.",
-    "11 writes and 2 reads go to the directory the command is run in (desk-out/), not to this repository.",
+    "1 import could not be resolved: `tests/test_training_captions.py` imports a path built at run time.",
+    "4 reads use paths built at run time and are not named here.",
+    "17 writes and 38 reads go to a path their caller passes, not to this repository.",
+    "15 writes and 2 reads go to the directory the command is run in (desk-out/), not to this repository.",
     "5 writes and 2 reads go to the directory the command is run in (desk-out/) or a path their caller passes, not to this repository.",
     "Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions."
   ],
