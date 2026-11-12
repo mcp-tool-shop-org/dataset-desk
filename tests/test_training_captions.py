@@ -2442,5 +2442,305 @@ class Addendum3bComposeDraftingTests(fakes.IsolatedDeskTestCase):
         self.assertEqual(it_after["drafter_writer"], expected_d_writer)
 
 
+class LockFollowupTests(fakes.IsolatedDeskTestCase):
+    """Synthetic tests for the five lock follow-up notes + consistency fix; every test fails at b06db28c."""
+
+    def setUp(self):
+        super().setUp()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = self._tmp.name
+
+    def test_note1_locked_image_under_outputs_wave_records_is_hashed_and_refused(self):
+        locked_rl = os.path.join(self.tmp, "rustline")
+        sha_locked = _write_png(os.path.join(locked_rl, "outputs", "w1", "rl_plate_01.png"), (135, 65, 45), seed=301)
+
+        proj_nested = os.path.join(self.tmp, "untagged-wave-records")
+        nested_img = os.path.join(proj_nested, "outputs", "w1", "records", "copied_plate.png")
+        os.makedirs(os.path.dirname(nested_img), exist_ok=True)
+        with open(os.path.join(locked_rl, "outputs", "w1", "rl_plate_01.png"), "rb") as fsrc, open(nested_img, "wb") as fdst:
+            fdst.write(fsrc.read())
+
+        proj_top_out = os.path.join(self.tmp, "untagged-outputs-records")
+        top_out_img = os.path.join(proj_top_out, "outputs", "records", "copied_plate2.png")
+        os.makedirs(os.path.dirname(top_out_img), exist_ok=True)
+        with open(os.path.join(locked_rl, "outputs", "w1", "rl_plate_01.png"), "rb") as fsrc, open(top_out_img, "wb") as fdst:
+            fdst.write(fsrc.read())
+
+        for cand_proj, expected_rel in (
+            (proj_nested, "outputs/w1/records/copied_plate.png"),
+            (proj_top_out, "outputs/records/copied_plate2.png"),
+        ):
+            with self.assertRaises(DeskError) as cm_pool:
+                desk.check_multimodal_pool(cand_proj, "none", locked_pool_dirs=[locked_rl])
+            self.assertEqual(cm_pool.exception.code, "PERM_LOCKED_POOL")
+            self.assertIn("rustline", cm_pool.exception.message)
+
+            read_non_sc = [r for r, _, _ in desk.enumerate_project_images(cand_proj, sidecars=False)]
+            read_sc = [r for r, _, _ in desk.enumerate_project_images(cand_proj, sidecars=True)]
+            self.assertEqual(read_non_sc, [expected_rel])
+            self.assertEqual(read_sc, [expected_rel])
+            self.assertEqual(desk._collect_folder_image_shas(cand_proj), {sha_locked})
+
+            err_buf = io.StringIO()
+            with contextlib.redirect_stderr(err_buf):
+                rc = desk.run([
+                    "scan", "--project", cand_proj,
+                    "--out", os.path.join(self.tmp, f"out-{os.path.basename(cand_proj)}"),
+                    "--locked-pool-dir", locked_rl,
+                ])
+            self.assertEqual(rc, EXIT_USER)
+            self.assertIn("PERM_LOCKED_POOL", err_buf.getvalue())
+
+    def test_note2_record_asset_saved_as_dat_is_hashed_and_refused(self):
+        locked_rl = os.path.join(self.tmp, "rustline")
+        sha_locked = _write_png(os.path.join(locked_rl, "outputs", "w1", "rl_plate_02.png"), (45, 95, 145), seed=302)
+
+        proj = os.path.join(self.tmp, "untagged-dat-copy")
+        os.makedirs(os.path.join(proj, "records"), exist_ok=True)
+        os.makedirs(os.path.join(proj, "outputs", "w1"), exist_ok=True)
+        dat_path = os.path.join(proj, "outputs", "w1", "x.dat")
+        with open(os.path.join(locked_rl, "outputs", "w1", "rl_plate_02.png"), "rb") as fsrc, open(dat_path, "wb") as fdst:
+            fdst.write(fsrc.read())
+
+        with open(os.path.join(proj, "caption-rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"prefix": "ink study,"}, f)
+        with open(os.path.join(proj, "records", "r_dat.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "id": "r_dat",
+                "asset_path": "outputs/w1/x.dat",
+                "judgment": {
+                    "status": "approved",
+                    "explanation": "ink study, weathered stone bridge spanning narrow millstream beside reeds",
+                },
+            }, f)
+
+        err_comp = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err_comp):
+            rc = desk.run([
+                "compose", "--project", proj, "--out", os.path.join(self.tmp, "out-dat"),
+                "--draft", "none", "--locked-pool-dir", locked_rl,
+            ])
+        self.assertEqual(rc, EXIT_USER)
+        self.assertIn("PERM_LOCKED_POOL", err_comp.getvalue())
+
+        self.assertIn(sha_locked, desk._collect_folder_image_shas(proj))
+        with self.assertRaises(DeskError) as cm_pool:
+            desk.check_multimodal_pool(proj, "none", locked_pool_dirs=[locked_rl])
+        self.assertEqual(cm_pool.exception.code, "PERM_LOCKED_POOL")
+        self.assertIn("rustline", cm_pool.exception.message)
+
+    def test_note3a_empty_locked_pool_dirs_in_user_config_refused(self):
+        ucfg = os.path.join(self.tmp, "empty-user-cfg.json")
+        proj = os.path.join(self.tmp, "plain-proj-3a")
+        _write_png(os.path.join(proj, "outputs", "w1", "p.png"), (80, 90, 100), seed=303)
+
+        for bad_doc in (
+            {"locked_pool_dirs": []},
+            {"locked_pool_dirs": ""},
+            {"locked_pool_dirs": f"{os.pathsep}{os.pathsep}"},
+            {"locked_pool_dirs": ["   "]},
+            {"locked_pool_dirs": {}},
+            {"pool_dirs": []},
+            {"pool_manifest": ""},
+            {"pool_manifest": "   "},
+            {},
+        ):
+            with open(ucfg, "w", encoding="utf-8") as f:
+                json.dump(bad_doc, f)
+            with mock.patch.dict(os.environ, {"DATASET_DESK_USER_CONFIG": ucfg}):
+                with self.assertRaises(DeskError) as cm_cfg:
+                    desk.resolve_pool_detection(emit_warning=False)
+                self.assertEqual(cm_cfg.exception.code, "INPUT_EMPTY_POOL_SOURCE", bad_doc)
+
+                err_cli = io.StringIO()
+                with contextlib.redirect_stderr(err_cli):
+                    rc = desk.run(["scan", "--project", proj, "--out", os.path.join(self.tmp, "out-3a")])
+                self.assertEqual(rc, EXIT_USER, bad_doc)
+                self.assertIn("INPUT_EMPTY_POOL_SOURCE", err_cli.getvalue())
+
+    def test_note3b_env_pool_dirs_holding_only_separators_refused(self):
+        proj = os.path.join(self.tmp, "plain-proj-3b")
+        _write_png(os.path.join(proj, "outputs", "w1", "p.png"), (85, 95, 105), seed=304)
+
+        for sep_val in (
+            os.pathsep,
+            f"{os.pathsep}{os.pathsep}",
+            f" {os.pathsep}  {os.pathsep} ",
+            "",
+            "   ",
+        ):
+            with mock.patch.dict(os.environ, {"DATASET_DESK_POOL_DIRS": sep_val}):
+                with self.assertRaises(DeskError) as cm_env:
+                    desk.resolve_pool_detection(emit_warning=False)
+                self.assertEqual(cm_env.exception.code, "INPUT_EMPTY_POOL_SOURCE", repr(sep_val))
+
+                err_cli = io.StringIO()
+                with contextlib.redirect_stderr(err_cli):
+                    rc = desk.run(["scan", "--project", proj, "--out", os.path.join(self.tmp, "out-3b")])
+                self.assertEqual(rc, EXIT_USER, repr(sep_val))
+                self.assertIn("INPUT_EMPTY_POOL_SOURCE", err_cli.getvalue())
+
+        for empty_mf in ("", "   "):
+            with mock.patch.dict(os.environ, {"DATASET_DESK_POOL_MANIFEST": empty_mf}):
+                with self.assertRaises(DeskError) as cm_mf_env:
+                    desk.resolve_pool_detection(emit_warning=False)
+                self.assertEqual(cm_mf_env.exception.code, "INPUT_EMPTY_POOL_SOURCE", repr(empty_mf))
+
+    def test_note4_manifest_items_carry_gate_status_and_reasons_for_flagged_passed_and_unchecked(self):
+        proj = os.path.join(self.tmp, "proj-manifest-gate")
+        os.makedirs(os.path.join(proj, "records"), exist_ok=True)
+        _write_png(os.path.join(proj, "outputs", "w1", "ok_01.png"), (70, 110, 90), seed=305)
+        _write_png(os.path.join(proj, "outputs", "w1", "bad_01.png"), (120, 70, 90), seed=306)
+        with open(os.path.join(proj, "caption-rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"prefix": "copperplate study, weathered stone courtyard,"}, f, indent=2)
+        with open(os.path.join(proj, "records", "ok_01.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "id": "ok_01",
+                "asset_path": "outputs/w1/ok_01.png",
+                "judgment": {
+                    "status": "approved",
+                    "explanation": "copperplate study, weathered stone courtyard, arched doorway beside stacked slate slabs",
+                },
+            }, f)
+        with open(os.path.join(proj, "records", "bad_01.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "id": "bad_01",
+                "asset_path": "outputs/w1/bad_01.png",
+                "judgment": {"status": "approved", "explanation": "short bad"},
+            }, f)
+
+        # 1. Without token_counter: unflagged item is 'unchecked', flagged unedited item is kept with 'failed' + reasons
+        out_unchecked = os.path.join(self.tmp, "out-gate-unchecked")
+        with contextlib.redirect_stderr(io.StringIO()):
+            description_gate.compose_captions(proj, out_unchecked, drafter=None, token_counter=None)
+        with open(os.path.join(out_unchecked, "captions-manifest.json"), encoding="utf-8") as f:
+            mf_u = json.load(f)
+        by_id_u = {it["id"]: it for it in mf_u["items"]}
+        self.assertEqual(set(by_id_u), {"ok_01", "bad_01"})
+        self.assertEqual(by_id_u["ok_01"]["gate_status"], "unchecked")
+        self.assertEqual(by_id_u["ok_01"]["flags"], [])
+        self.assertEqual(by_id_u["ok_01"]["reasons"], [])
+        self.assertEqual(by_id_u["bad_01"]["gate_status"], "failed")
+        self.assertIn("too_short", by_id_u["bad_01"]["flags"])
+        self.assertTrue(
+            any("too short (" in r and "need >= 8 words" in r for r in by_id_u["bad_01"]["reasons"]),
+            by_id_u["bad_01"]["reasons"],
+        )
+
+        # 2. With token_counter: unflagged item within SigLIP2 limit is 'passed'; flagged item remains 'failed'
+        out_passed = os.path.join(self.tmp, "out-gate-passed")
+        with contextlib.redirect_stderr(io.StringIO()):
+            description_gate.compose_captions(
+                proj,
+                out_passed,
+                drafter=None,
+                token_counter=lambda texts: [len(t.split()) for t in texts],
+            )
+        with open(os.path.join(out_passed, "captions-manifest.json"), encoding="utf-8") as f:
+            mf_p = json.load(f)
+        by_id_p = {it["id"]: it for it in mf_p["items"]}
+        self.assertEqual(set(by_id_p), {"ok_01", "bad_01"})
+        self.assertEqual(by_id_p["ok_01"]["gate_status"], "passed")
+        self.assertEqual(by_id_p["ok_01"]["flags"], [])
+        self.assertEqual(by_id_p["ok_01"]["reasons"], [])
+        self.assertEqual(by_id_p["bad_01"]["gate_status"], "failed")
+        self.assertIn("too_short", by_id_p["bad_01"]["flags"])
+        self.assertTrue(
+            any("too short (" in r and "need >= 8 words" in r for r in by_id_p["bad_01"]["reasons"]),
+            by_id_p["bad_01"]["reasons"],
+        )
+
+    def test_note5_hashes_only_manifest_records_stem_check_no_stems_configured_and_warns_on_text_commands(self):
+        sha_sr = hashlib.sha256(b"synthetic-salt-road-plate").hexdigest()
+        hashes_only_mf = os.path.join(self.tmp, "hashes-only-manifest.json")
+        with open(hashes_only_mf, "w", encoding="utf-8") as f:
+            json.dump({"salt-road": [sha_sr]}, f)
+
+        clean_src = os.path.join(self.tmp, "clean-text-src-5")
+        os.makedirs(clean_src, exist_ok=True)
+        with open(os.path.join(clean_src, "notes.py"), "w", encoding="utf-8") as f:
+            f.write("def measure():\n    return 42\n")
+        with open(os.path.join(clean_src, "plate_note.txt"), "w", encoding="utf-8") as f:
+            f.write("granite arch spanning quiet canal water")
+
+        out_txt = os.path.join(self.tmp, "out-text-nostems")
+        for argv in (
+            ["text-index", "--source", clean_src, "--out", out_txt, "--backend", "fake", "--pool-manifest", hashes_only_mf],
+            [
+                "text-dupes", "--source", clean_src, "--out", out_txt, "--backend", "fake",
+                "--semantic", "0.9", "--pool-manifest", hashes_only_mf,
+            ],
+            [
+                "text-search", "--source", clean_src, "--out", out_txt, "--backend", "fake",
+                "--text", "granite", "--pool-manifest", hashes_only_mf,
+            ],
+            ["lineage", "--source", clean_src, "--out", out_txt, "--backend", "fake", "--pool-manifest", hashes_only_mf],
+        ):
+            err_buf = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err_buf):
+                self.assertEqual(desk.run(argv), EXIT_OK, argv[0])
+            err_text = err_buf.getvalue()
+            self.assertIn("no stems configured", err_text, argv[0])
+            self.assertEqual(err_text.strip().count("\n"), 0, argv[0])
+
+        for rel_json in (
+            os.path.join("fake", "text", "meta.json"),
+            "text-dupes-fake.json",
+            "text-search-fake.json",
+            "lineage-fake.json",
+            "pool-detection.json",
+        ):
+            with open(os.path.join(out_txt, rel_json), encoding="utf-8") as f:
+                doc = json.load(f)
+            self.assertEqual(doc["pool_detection"]["status"], "on", rel_json)
+            self.assertEqual(doc["pool_detection"]["stem_check"], "no stems configured", rel_json)
+            self.assertIn("no stems configured", doc["pool_detection"].get("warning", ""), rel_json)
+
+        # Mixed sources (hashes-only manifest for salt-road + folder with stems for rustline) report the stem-less pool
+        locked_rl = os.path.join(self.tmp, "rustline")
+        _write_png(os.path.join(locked_rl, "outputs", "w1", "rl_mix_01.png"), (115, 55, 75), seed=308)
+        out_mix = os.path.join(self.tmp, "out-text-mixstems")
+        err_mix = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err_mix):
+            self.assertEqual(
+                desk.run([
+                    "text-index", "--source", clean_src, "--out", out_mix,
+                    "--backend", "fake", "--pool-manifest", hashes_only_mf, "--locked-pool-dir", locked_rl,
+                ]),
+                EXIT_OK,
+            )
+        self.assertIn("no stems configured for salt-road", err_mix.getvalue())
+        with open(os.path.join(out_mix, "pool-detection.json"), encoding="utf-8") as f:
+            mix_pd = json.load(f)["pool_detection"]
+        self.assertEqual(mix_pd["stem_check"], "no stems configured for salt-road")
+
+    def test_consistency_flagged_drafted_row_author_kind_and_caption_stratum_agree(self):
+        proj = os.path.join(self.tmp, "proj-stratum-consistency")
+        os.makedirs(os.path.join(proj, "records"), exist_ok=True)
+        _write_png(os.path.join(proj, "outputs", "w1", "c_01.png"), (100, 75, 90), seed=307)
+        rec = {
+            "id": "c_01",
+            "asset_path": "outputs/w1/c_01.png",
+            "judgment": {"status": "approved", "explanation": "too short"},
+        }
+        audit = description_gate.audit_records([rec])
+        description_gate.draft_flagged_records(proj, audit, backends.FakeDrafter())
+        row = audit["records"][0]
+        self.assertEqual(row["author_kind"], "captioner_assisted")
+        self.assertEqual(row["caption_stratum"], row["author_kind"])
+
+        with open(os.path.join(proj, "caption-rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"prefix": "ink study,"}, f)
+        with open(os.path.join(proj, "records", "c_01.json"), "w", encoding="utf-8") as f:
+            json.dump(rec, f)
+        out_comp = os.path.join(self.tmp, "out-stratum-consistency")
+        with contextlib.redirect_stderr(io.StringIO()):
+            comp_res = description_gate.compose_captions(proj, out_comp, drafter=backends.FakeDrafter())
+        comp_row = comp_res["audit"]["records"][0]
+        self.assertEqual(comp_row["author_kind"], "captioner_assisted")
+        self.assertEqual(comp_row["caption_stratum"], comp_row["author_kind"])
+
+
 if __name__ == "__main__":
     unittest.main()

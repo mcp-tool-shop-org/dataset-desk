@@ -20,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     `<out>/captions-manifest.json` (`style-dataset-lab` lane-3 `run_dataset` format) from per-project
     `caption-rules.json` (`--caption-config`: `prefix`, `classes`, `class_field`, `class_pattern`, `backdrop`,
     `banned_words`, `drafter`, `drafter_prompt`) and imported seat edits, with per-part `writers` provenance
-    (`config:<file>:<line>`, `drafter:<id>@<rev>:<prompt sha>`, `seat:<name>`, `record:<file>`, `sidecar:<file>`). By
+    (`config:<file>:<line>`, `drafter:<id>@<rev>:<prompt sha>`, `seat:<name>`, `record:<file>`, `sidecar:<file>`) and
+    per-item `gate_status` (`"passed"`, `"failed"`, or `"unchecked"`), `flags`, and `reasons` on every manifest item
+    (preserving keep-all while marking flagged items for downstream trainers). By
     default, `compose` and `report --compose` draft **only** records flagged by the model-free gate into the review
     queue (`description-review.jsonl` and `description-worksheet.md`) — never straight into the training caption — and
     leave unflagged records untouched; `--all` also drafts unflagged records as side-by-side offers (`draft_offer` and
@@ -37,8 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     - Locked-pool hash/directory configuration via `--pool-manifest` / `DATASET_DESK_POOL_MANIFEST`,
       `--locked-pool-dir` / `DATASET_DESK_POOL_DIRS`, and user config (`DATASET_DESK_USER_CONFIG`,
       `~/.config/dataset-desk/config.json`, or `%APPDATA%\dataset-desk\config.json`).
-    - Per-run `pool_detection` (`status: "on" | "off"`, configured pools, per-pool and per-source image-hash counts, and
-      source paths — never hash values) recorded across image, caption, and text commands.
+    - Per-run `pool_detection` (`status: "on" | "off"`, configured pools, `stem_check` status, per-pool and per-source
+      image-hash counts, and source paths — never hash values) recorded across image, caption, and text commands. When a
+      hashes-only manifest provides no image stems or paths, `pool_detection` records `"stem_check": "no stems
+      configured"` (or names the stem-less pools) and text commands emit a single `stderr` warning noting that `.txt`
+      sidecar stem matching had no stems to compare.
 
 ### Breaking changes
 - **Stderr warning when renamed-copy detection is `off`:** every `--project` command (`scan`, `index`, `dupes`,
@@ -51,18 +56,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   error, or a `multimodal_pool` tag conflicting with a locked folder's `realpath` name (`PERM_LOCKED_POOL`) exits `1`.
 - **User config and pool sources fail closed on malformed or empty inputs:** the user config
   (`DATASET_DESK_USER_CONFIG` when non-empty, else `~/.config/dataset-desk/config.json` or
-  `%APPDATA%\dataset-desk\config.json`) and any configured pool manifest or pool folder are read on every command;
-  malformed JSON, a non-object user config or manifest, a non-object `"pools"` value (`INPUT_BAD_ARGUMENT`), an empty
-  manifest, or any configured pool entry or folder yielding zero image hashes (`INPUT_EMPTY_POOL_SOURCE`) fails every
-  command with exit `1`. Set `DATASET_DESK_USER_CONFIG=""` to ignore user config files.
+  `%APPDATA%\dataset-desk\config.json`) and any configured pool manifest, environment variable, or pool folder are read
+  on every command; malformed JSON, a non-object user config or manifest, a non-object `"pools"` value
+  (`INPUT_BAD_ARGUMENT`), or **any** explicitly configured but empty pool source — an empty manifest or empty user
+  config, an empty `pool_manifest` or `locked_pool_dirs` / `pool_dirs` in user config or a manifest, an empty or
+  separator-only `DATASET_DESK_POOL_DIRS` or `--locked-pool-dir`, an empty `DATASET_DESK_POOL_MANIFEST` or
+  `--pool-manifest`, or any configured pool entry or folder yielding zero image hashes (`INPUT_EMPTY_POOL_SOURCE`) —
+  fails every command with exit `1`. Set `DATASET_DESK_USER_CONFIG=""` to ignore user config files.
 - **Fail-closed pool lock across all project and text commands (links included):** an untagged `--project` or
   `--source` / `--rnd-data` folder sharing any image `sha256` with a configured pool (following symlinks and Windows
   directory junctions via `enumerate_project_images`) is refused (`PERM_LOCKED_POOL`, exit `1`) for all commands —
-  `scan`, `dupes`, `--backend none`, `sidecar-import`, and `text-*` included — unless `--allow-multimodal-pool` is
-  passed. Text commands (`text-index`, `text-dupes`, `text-search`, `lineage`) also refuse untagged sources or cached
-  text indexes containing `.txt` files whose stem matches an image of a locked pool, and refuse embedding backends on
-  named or tagged locked pools without `--allow-multimodal-pool`. Folder-name pool checks compare `realpath` rather
-  than `abspath`.
+  `scan`, `dupes`, `--backend none`, `sidecar-import`, `compose`, and `text-*` included — unless
+  `--allow-multimodal-pool` is passed:
+  - One shared directory-pruning rule (`desk.prune_project_walk_dirs`) governs both project reads and `sha256` pool
+    hashing (pruning `.git` and `__pycache__` at every depth and only top-level `<project>/records`, so images under
+    `outputs/records/` or `outputs/<wave>/records/` are hashed and refused identically to scan reads).
+  - Every `asset_path` named in `<project>/records/*.json` is hashed regardless of file extension, refusing renamed
+    byte-copies such as `.dat`.
+  - Explicitly configured empty pool sources outside a manifest (empty `locked_pool_dirs` / `pool_manifest` in user
+    config, or separator-only `DATASET_DESK_POOL_DIRS`) fail closed (`INPUT_EMPTY_POOL_SOURCE`) instead of falling back
+    to `"off"`.
+  - Text commands (`text-index`, `text-dupes`, `text-search`, `lineage`) also refuse untagged sources or cached text
+    indexes containing `.txt` files whose stem matches an image of a locked pool, and refuse embedding backends on named
+    or tagged locked pools without `--allow-multimodal-pool`. Folder-name pool checks compare `realpath` rather than
+    `abspath`.
 - **New output files under `--out` and new `pool_detection` / provenance fields:** commands write `pool-detection.json`,
   `scan-report.json`, `<cmd>-<backend>.json` (`dupes`, `search`, `coverage`, `text-dupes`, `text-search`, `lineage`),
   `drafter-raw.jsonl`, `seat-edits.jsonl`, `captions-manifest.json`, `sidecar-import.json`, and
@@ -82,7 +99,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Python API, provenance strata, and error codes:** `desk.check_multimodal_pool` returns the `pool_detection` `dict`
   (was `None`); `desk.check_drafter_pool` defaults `getattr(drafter, "is_arm_model", True)` so unknown drafter objects
   are treated as arm models; sidecar descriptions carry `author_kind: "sidecar"` (never `"human"`) and `"sidecar"` is
-  counted in `strata_counts`; `audit_records` initializes `writers` as a `list[str]` and `import-edits` appends
+  counted in `strata_counts`; flagged drafted review rows align `caption_stratum` with `author_kind`
+  (`"captioner_assisted"`); `audit_records` initializes `writers` as a `list[str]` and `import-edits` appends
   `seat:<name>` onto `writers` rather than overwriting; added `MODEL_REVISION_MISMATCH`, `DEP_DRAFTER_OFFLINE`, and
   `INPUT_EMPTY_POOL_SOURCE`; updated the `INPUT_UNKNOWN_DRAFTER` hint.
 

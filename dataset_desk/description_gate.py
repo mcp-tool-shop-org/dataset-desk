@@ -1248,13 +1248,15 @@ def scan_sidecar_project(project: str) -> dict:
 
     outputs_root = os.path.join(abs_proj, "outputs")
     skip_top_outputs = os.path.isdir(outputs_root) and any(
-        os.path.isdir(os.path.join(outputs_root, d)) for d in os.listdir(outputs_root)
+        os.path.isdir(os.path.join(outputs_root, d))
+        for d in os.listdir(outputs_root)
+        if d not in desk.PRUNED_WALK_DIRS
     )
     wave_prompts = _load_wave_prompts(abs_proj)
 
     txt_by_dir: dict[str, list[str]] = {}
     for root, dirs, files in desk._walk_followlinks(abs_proj):
-        dirs[:] = [d for d in dirs if d not in (".git", "records", "__pycache__")]
+        desk.prune_project_walk_dirs(root, dirs, abs_proj)
         if skip_top_outputs and os.path.abspath(root) == os.path.abspath(outputs_root):
             continue
         rel_dir = os.path.relpath(root, abs_proj).replace("\\", "/")
@@ -1582,7 +1584,7 @@ def draft_flagged_records(
             r["draft"] = clean
             r["florence2_draft"] = clean
             r["author_kind"] = "captioner_assisted"
-            r["caption_stratum"] = "captioner_draft_unedited"
+            r["caption_stratum"] = "captioner_assisted"
             r["drafter_id"] = drafter_id
             r["drafter_revision"] = drafter_rev
             r["drafter_prompt"] = d_prompt
@@ -2583,6 +2585,9 @@ def compose_captions(
             "caption": final_caption,
             "source": e["record_writer"],
             "author_kind": stratum,
+            "gate_status": "unchecked",
+            "flags": [],
+            "reasons": [],
             "writers": writers,
             "parts": parts,
             "drafter_writer": item_drafter_writer,
@@ -2655,6 +2660,7 @@ def compose_captions(
             r["drafter_writer"] = di["drafter_writer"]
             if rid_str not in edits_map and rid_str in flagged_ids:
                 r["author_kind"] = "captioner_assisted"
+                r["caption_stratum"] = "captioner_assisted"
                 if di["drafter_writer"] and di["drafter_writer"] not in r["writers"]:
                     r["writers"].append(str(di["drafter_writer"]))
         else:
@@ -2676,6 +2682,14 @@ def compose_captions(
                     "raw_output": off["drafter_raw_output"],
                     "draft": off["draft"],
                 }
+
+    audit_rows_by_id = {str(r["id"]): r for r in audit["records"]}
+    for it in manifest_items:
+        ar = audit_rows_by_id.get(str(it["id"]))
+        if ar is not None:
+            it["gate_status"] = ar["gate_status"]
+            it["flags"] = list(ar["flags"])
+            it["reasons"] = list(ar["reasons"])
 
     audit["flagged"] = [r for r in audit["records"] if r["gate_status"] == "failed"]
     audit["queue"] = audit["flagged"]
