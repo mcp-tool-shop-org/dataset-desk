@@ -21,14 +21,15 @@ def png(folder, name, colour=(200, 10, 10), size=(16, 16)):
     return path
 
 
-class TmpCase(unittest.TestCase):
+class TmpCase(fakes.IsolatedDeskTestCase):
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.tmp = self._tmp.name
 
 
-class ArgvThreads(unittest.TestCase):
+class ArgvThreads(fakes.IsolatedDeskTestCase):
     def test_flag_forms_and_fallbacks(self):
         f = backends._argv_threads
         self.assertEqual(f(["--threads", "6"]), 6)
@@ -44,7 +45,7 @@ class ArgvThreads(unittest.TestCase):
             self.assertEqual(backends._argv_threads(), 2)
 
 
-class EnterTorchRegion(unittest.TestCase):
+class EnterTorchRegion(fakes.IsolatedDeskTestCase):
     def test_sets_env_threads_and_interop_once(self):
         t = fakes.make_torch()
         with mock.patch.dict(sys.modules, {"torch": t}), mock.patch.object(backends, "_TORCH_INTEROP_SET", False):
@@ -65,7 +66,7 @@ class EnterTorchRegion(unittest.TestCase):
         self.assertEqual(t.calls.count(("interop", 1)), 1)
 
 
-class UnitRowsAndGuards(unittest.TestCase):
+class UnitRowsAndGuards(fakes.IsolatedDeskTestCase):
     def test_unit_rows_normalises_and_lifts_1d(self):
         out = backends.unit_rows([3.0, 4.0])
         self.assertEqual(out.shape, (1, 2))

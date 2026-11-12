@@ -32,11 +32,15 @@ dataset-desk finds both, on a project folder, without changing it. It writes a r
 
 | Command | What you get |
 |---|---|
+| `scan` | Scans the project into `scan.jsonl` and `scan-report.json` under `--out` without loading an embedder |
 | `index` | Scans the project (records, wave metadata, PNG generation data) and embeds every unique image into a cache under `--out` |
 | `dupes` | Byte-identical copies (sha256), near-duplicates (a mirror-aware 256-bit dHash) and semantic duplicates (embedding cosine), as JSON. On a DINOv2 index it uses a calibrated two-signal rule. Two views of one object are never paired. |
 | `search` | The nearest images to a description (`--text`), a picture (`--image`), or both together |
 | `coverage` | The best images for each subject in a wanted-subjects list, so gaps show |
 | `report` | A Markdown report: duplicates, the least typical approved images by content and by look, the description audit, and whether each description finds its own image |
+| `sidecar-import` | Imports folders of images paired with same-stem `.txt` caption sidecars (`--sidecars` on `index`/`report`/`compose` does the same), runs the description gate, reports images without a `.txt` sidecar without inventing text, and writes everything under `--out` |
+| `compose` | Composes final training captions into `--out` from per-project rules and imported seat edits (drafting only flagged records into the review queue by default, or offering side-by-side drafts with `--all`, without replacing human or sidecar text), writing a lane-3 dataset manifest (`{"items":[{"image","sha256","caption"}]}`) with per-part provenance |
+| `import-edits` | Re-imports edited rows from `description-worksheet.md` into `--out/seat-edits.jsonl` with a `seat:<name>` writer id |
 | `text-index` | Embeds the text and code files of a `--source` folder (or an rnd-data checkout), counting chunks with the model's own tokenizer |
 | `text-dupes` | Exact and near-duplicate files. `--task code` compares scripts only. |
 | `text-search` | The nearest files to a query (`--text`). `--task code` uses the model's code-retrieval prompt. |
@@ -53,9 +57,10 @@ Two renders of the same object from different camera angles are never duplicates
 - wraps the record's subject line: a 4+ word `canon.subject` appears as a contiguous run of its words;
 - is too short: under 8 words or under 5 content words;
 - duplicates another description in the set: identical once punctuation is removed, or a content-word Jaccard of 0.85 or more;
-- is too long for SigLIP2: more than 64 tokens (the one check that needs a tokenizer; unchecked records are never marked as passing).
+- is too long for SigLIP2: more than 64 tokens (the one check that needs a tokenizer; unchecked records are never marked as passing);
+- violates per-project `caption-rules.json` rules (when present): `prefix_missing`, `required_term_missing`, or `banned_word` (alongside the pool `exact_duplicate` and `near_duplicate` checks).
 
-Flagged records go to `description-review.jsonl` and to a **blind worksheet**: each flagged image beside 3–5 visually nearest siblings, with no prompt, no subject line and no old text in view, so the person rewriting it describes the picture. An optional drafter ([plain-sight](https://github.com/mcp-tool-shop-org/plain-sight), Florence-2) can write a first draft from the pixels alone; drafts are recorded as `captioner_assisted`, and a person edits them.
+Flagged records go to `description-review.jsonl` and to a **blind worksheet**: each flagged image beside 3–5 visually nearest siblings (chosen from DINOv2 image-only similarity when cached under `--out`, else dHash; never text embeddings in a locked pool), with no prompt, no subject line and no old text in view, so the person rewriting it describes the picture. An optional drafter (`--draft plain-sight` by default, or `--draft qwen3-vl`) can write a first draft from the pixels alone into the review queue for the seat (never straight into the training caption); full raw drafter output is saved per image to `drafter-raw.jsonl`. Passing `--all` also drafts unflagged records as side-by-side offers (`draft_offer` / `draft_offer_writer`) without replacing human or sidecar text. Seat-edited drafts are recorded as `captioner_assisted`.
 
 **The look channel** is 30 numbers per image (palette, tone, and texture at native resolution), so "this one's rendering is off" shows separately from "this one's subject is odd".
 
@@ -85,7 +90,14 @@ The models are fetched from Hugging Face at pinned revisions the first time they
 | `eg2` | [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2) | code (`--task code`, `lineage`) |
 | `qwen3-emb-0.6b`, `gte-modernbert` | [Qwen3-Embedding 0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B), [gte-modernbert-base](https://huggingface.co/Alibaba-NLP/gte-modernbert-base) | — |
 
-EmbeddingGemma 2 is used the way its model card says: a task prefix per command, text-only loading for text, and `--dim 768|512|256`. Set `HF_HUB_OFFLINE=1` to forbid downloads. The plain-sight drafter is always offline: it never downloads.
+Blind image drafters (`--draft`, `dataset_desk.registry.DRAFTER_REGISTRY`; both declare `is_arm_model=False`, so locked benchmark pools allow them to draft):
+
+| Drafter | Model | Pin | Licence | Default |
+|---|---|---|---|---|
+| `plain-sight` | [Florence-2-large](https://huggingface.co/florence-community/Florence-2-large) | `4271c66b88cdbc05735372ec13b2360108de5317` | MIT | yes |
+| `qwen3-vl` | [Qwen3-VL-8B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) | `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b` | Apache-2.0 | — |
+
+EmbeddingGemma 2 is used the way its model card says: a task prefix per command, text-only loading for text, and `--dim 768|512|256`. Set `HF_HUB_OFFLINE=1` to forbid downloads. `plain-sight` is always offline; `qwen3-vl` honours `HF_HUB_OFFLINE` (`local_files_only=True`), refuses any revision mismatch (`MODEL_REVISION_MISMATCH`), honours the VRAM governor, accepts a per-project prompt (`drafter_prompt` or `--drafter-prompt`), and stores the prompt and full raw output per image.
 
 **Runs on:** Python 3.11 and 3.12, on Windows and Linux. CPU by default, with every thread pool capped (4 threads unless `--threads` says otherwise), and a model run drops the process to below-normal priority, so it can share a machine.
 
@@ -111,7 +123,53 @@ dataset-desk text-index  --source path/to/folder --out desk-out/texts           
 dataset-desk text-dupes  --source path/to/folder --out desk-out/texts
 dataset-desk text-index  --source path/to/folder --out desk-out/texts --task code   # EmbeddingGemma 2, for code
 dataset-desk text-search --source path/to/folder --out desk-out/texts --task code --text "where the cache is written"
+
+# Training captions: audit + blind draft -> seat edit -> re-import -> compose manifest under --out
+dataset-desk index        --project path/to/project --backend dinov2 --out desk-out/project
+dataset-desk report       --project path/to/project --backend dinov2 --out desk-out/project --draft qwen3-vl --device cuda --grant g1
+dataset-desk import-edits --project path/to/project --out desk-out/project --seat studio-1
+dataset-desk compose      --project path/to/project --out desk-out/project --draft qwen3-vl --device cuda --grant g1
+
+# Training folders with image + same-stem .txt sidecars (no records/ directory)
+dataset-desk sidecar-import --project path/to/training-copy --out desk-out/training-copy
+dataset-desk index          --project path/to/training-copy --out desk-out/training-copy --backend none --sidecars
+dataset-desk report         --project path/to/training-copy --out desk-out/training-copy --backend none
 ```
+
+### Per-project caption rules (`caption-rules.json`) and provenance
+
+Place `caption-rules.json` at `<project>/caption-rules.json` (or pass `--caption-config path/to/rules.json`):
+
+```json
+{
+  "multimodal_pool": "salt-road",
+  "prefix": "linocut print,",
+  "drafter": "qwen3-vl",
+  "drafter_prompt": "Describe only the visible pose, props, backdrop, and floor in 12 to 25 words.",
+  "class_field": "canon.category",
+  "class_pattern": "(?:^|/)(?P<class>[a-z0-9_-]+)_[0-9]+\\.[a-z0-9]+$",
+  "backdrop": {
+    "text": "plain pale ground",
+    "field": "canon.backdrop",
+    "required": false,
+    "banned_words": ["neon", "bokeh"]
+  },
+  "banned_words": ["masterpiece", "photorealistic"],
+  "classes": {
+    "vessel": {
+      "required_terms": ["carved hull", "rigging lines"],
+      "banned_words": ["portrait", "person"]
+    }
+  }
+}
+```
+
+- **Gate checks (model-free, reported in `description-review.jsonl`):** `prefix_missing` (caption does not start with `prefix`), `required_term_missing` (any `required_terms` entry for the record's class — resolved from `class_field` or `class_pattern` — or a `required` backdrop is absent), `banned_word` (any global, backdrop, or class `banned_words` phrase appears), plus pool `exact_duplicate` and `near_duplicate` (Jaccard ≥ 0.85).
+- **Composition (`compose` or `report --compose`):** writes `<out>/captions-manifest.json` (`--manifest-name` overrides the filename) in `style-dataset-lab` lane-3 `run_dataset` format `{"items":[{"image","sha256","caption",...}]}` — never inside `--project`. Each caption is assembled from `prefix`, verbatim `class` required terms, optional `backdrop`, and the free visible-content part (`seat` edit when imported, else the approved human/sidecar text — never an unedited draft). By default `compose` and `report --compose` draft **only** records flagged by the model-free gate into the review queue; `--all` also writes optional `draft_offer` / `draft_offer_writer` offers beside unflagged originals without replacing human or sidecar text.
+- **Provenance record:** every final caption in both `captions-manifest.json` and `description-review.jsonl` carries a per-part `writers` list using `config:<file>:<line>`, `drafter:<id>@<rev>:<prompt sha>`, `seat:<name>`, `record:<file>`, and `sidecar:<file>`, with stratum `captioner_assisted` when edited by a seat after seeing a draft or offer, `"human"` for human records, and `"sidecar"` for `.txt` sidecars.
+- **Sidecar import (`sidecar-import` or `--sidecars`):** pairs each image with its same-stem `.txt` sidecar, assigns `author_kind: "sidecar"` (never `"human"`), extracts embedded ComfyUI PNG generation prompts when present, runs the full description gate (prompt echo, exact/Jaccard duplicates, and `caption-rules.json`), reports any image without a `.txt` sidecar instead of inventing text, and writes all imported records and review files strictly under `--out`.
+- **Pool lock by tag, fail-closed renamed-copy guard, and `pool_detection` status:** `check_multimodal_pool` enforces the benchmark lock across both `--project` and text commands (`text-index`, `text-dupes`, `text-search`, `lineage`) when either the `realpath` folder name or `"multimodal_pool"` in config (`caption-rules.json` or `project.json`) names a locked pool. For untagged folders outside those names, it hashes the exact set of images the scan reads (symlinks and Windows directory junctions included) against a non-empty local manifest (`DATASET_DESK_POOL_MANIFEST` or `pool_manifest` in `~/.config/dataset-desk/config.json`, kept outside the repo) or `--locked-pool-dir <path>` — and on text commands also checks `.txt` caption sidecar stems against locked-pool image stems — refusing fail-closed (`PERM_LOCKED_POOL`) naming the matching pool and count. Every command resolves one `pool_detection` status (`status: "on"` with >= 1 image hash per configured pool and per-source counts — never hash values — or `status: "off"` with the warning text, emitted once to `stderr`) and records `pool_detection` in `<out>/pool-detection.json`, JSON/JSONL outputs under `--out`, and a one-line note in each Markdown report.
+  - Renamed-copy detection matches images by `sha256`, so neither a copy made only of new images (none shared with a locked pool) nor a resized, re-encoded, or metadata-stripped copy matches by `sha256`; tag such projects with `"multimodal_pool"` in `caption-rules.json` or `project.json`.
 
 `dataset-desk --help` lists every flag. Exit codes: `0` ok, `1` a user error or a refusal, `2` an unexpected error. Errors print as `error <CODE>: <message>` with a `hint:` line; `--debug` adds the stack trace.
 
@@ -139,7 +197,7 @@ Report a vulnerability as described in [SECURITY.md](SECURITY.md).
 
 ## Status
 
-**v0.2.2, a public prototype.** The code is tested offline: 197 tests and 96% line coverage, with small stand-ins for the model libraries.
+**v0.3.0, a public prototype.** The code is tested offline with small stand-ins for the model libraries.
 - **Calibration:** the studio's runs on its own data, on an RTX 5090, set the duplicate thresholds, which are provisional and rest on one pool per kind. The VRAM figures are conservative whole-card figures, CUDA context included, measured on an RTX 5090; other cards and corpora may differ. The code thresholds rest on 17 planted copies. The method and the data are in [newsletter issue 16](https://mcp-tool-shop-org.github.io/rnd/newsletter/issue-16/).
 - **Large projects:** duplicates, outliers and the look channel work in bounded blocks. On synthetic sets, the near-duplicate search and the look channel take minutes at 100,000 images, where they took hours or ran out of memory. The description gate's near-duplicate check uses an exact prefix filter, so it only compares descriptions that could reach 0.85. The first scan is about 2× faster per image, with identical results, and runs in parallel under `--threads`.
 - **Expect the command line to change before 1.0.**

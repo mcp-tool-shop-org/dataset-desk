@@ -139,3 +139,84 @@ def resolve_backend(backend: str | None, task: str = "images") -> str:
     if backend is not None and backend != "":
         return backend
     return default_for_task(task)
+
+
+@dataclass(frozen=True)
+class DrafterSpec:
+    """One registered blind image drafter and its resource/provenance contract.
+
+    Drafters are generative captioning models only (`is_arm_model=False`): they never score, rank, or accept
+    descriptions, so `check_multimodal_pool` permits them to draft on locked benchmark pools.
+    """
+
+    name: str
+    repo: str
+    revision: str
+    licence: str
+    loader: str
+    vram_mib: int
+    gated: bool = False
+    is_arm_model: bool = False
+
+    @property
+    def loader_kind(self) -> str:
+        return self.loader
+
+    @property
+    def vram_budget(self) -> int:
+        return self.vram_mib
+
+    @property
+    def vram_budget_mib(self) -> int:
+        return self.vram_mib
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    def __getitem__(self, key: str):
+        return getattr(self, key)
+
+    def get(self, key: str, default=None):
+        return getattr(self, key, default)
+
+    def __contains__(self, key: str) -> bool:
+        return hasattr(self, key)
+
+
+DRAFTER_REGISTRY: dict[str, DrafterSpec] = {
+    "plain-sight": DrafterSpec(
+        name="plain-sight",
+        repo="florence-community/Florence-2-large",
+        revision="4271c66b88cdbc05735372ec13b2360108de5317",
+        licence="MIT",
+        loader="plain-sight",
+        vram_mib=3072,
+        gated=False,
+        is_arm_model=False,
+    ),
+    "qwen3-vl": DrafterSpec(
+        name="qwen3-vl",
+        repo="Qwen/Qwen3-VL-8B-Instruct",
+        revision="0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
+        licence="Apache-2.0",
+        loader="qwen3-vl",
+        vram_mib=18432,  # conservative bf16 budget for Qwen3-VL-8B-Instruct weights + vision context
+        gated=False,
+        is_arm_model=False,
+    ),
+}
+
+DEFAULT_DRAFTER = "plain-sight"
+
+MODEL_REGISTRY: dict[str, EmbedderSpec | DrafterSpec] = {
+    **REGISTRY,
+    **DRAFTER_REGISTRY,
+}
+
+
+def resolve_drafter(drafter: str | None) -> str:
+    """Return `drafter` when explicitly passed, else `DEFAULT_DRAFTER` ('plain-sight')."""
+    if drafter is not None and drafter != "":
+        return drafter
+    return DEFAULT_DRAFTER
+

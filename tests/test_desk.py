@@ -49,8 +49,9 @@ def record(project, rid, asset, status, explanation, *, subject="", failure_mode
         json.dump(rec, f)
 
 
-class Project(unittest.TestCase):
+class Project(fakes.IsolatedDeskTestCase):
     def setUp(self):
+        super().setUp()
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, True)
         P = self.P = os.path.join(self.tmp, "proj")
@@ -88,7 +89,7 @@ class Project(unittest.TestCase):
         return items, img, txt, meta, {os.path.basename(it.paths[0]): i for i, it in enumerate(items)}
 
 
-class ThreadCaps(unittest.TestCase):
+class ThreadCaps(fakes.IsolatedDeskTestCase):
     def test_import_desk_with_no_env_set_caps_blas_and_omp_threads(self):
         desk_dir = os.path.dirname(os.path.abspath(desk.__file__))
         env = {
@@ -407,7 +408,7 @@ class Analyses(Project):
         self.assertAlmostEqual(float(np.linalg.norm(mm[0])), 1.0, places=5)
 
 
-class DescriptionGateTests(unittest.TestCase):
+class DescriptionGateTests(fakes.IsolatedDeskTestCase):
     @staticmethod
     def _rec(rid, explanation, *, prompt="unrelated studio prompt words", subject="", status="approved", asset=None):
         return {
@@ -1025,11 +1026,12 @@ class CommandLine(Project):
         self.assertIn("--text or --image", str(cm.exception))
 
 
-class TextAndCodeInputTests(unittest.TestCase):
+class TextAndCodeInputTests(fakes.IsolatedDeskTestCase):
     SENTINEL_RED = "SECRET_BODY_ALPHA_99182_RED " + ("red " * 20)
     SENTINEL_BLUE = "SECRET_BODY_BETA_77412_BLUE " + ("blue " * 20)
 
     def setUp(self):
+        super().setUp()
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.out = os.path.join(self.tmp, "out")
@@ -1641,8 +1643,9 @@ def _bit_reverse_invert_dhash(h: str, size: int = 16) -> str:
     return f"{out:0{size * size // 4}x}"
 
 
-class D2DupesTests(unittest.TestCase):
+class D2DupesTests(fakes.IsolatedDeskTestCase):
     def setUp(self):
+        super().setUp()
         self.tmp = tempfile.mkdtemp(prefix="dd_d2_")
 
     def tearDown(self):

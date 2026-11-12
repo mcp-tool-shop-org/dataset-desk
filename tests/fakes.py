@@ -4,8 +4,10 @@ Injected into sys.modules for one test at a time (mock.patch.dict), so the suite
 where the real libraries are installed. Nothing here loads a model or touches the network."""
 
 import contextlib
+import os
 import sys
 import types
+import unittest
 from unittest import mock
 
 import numpy as np
@@ -218,3 +220,20 @@ def fake_modules(**mods):
     """Scoped sys.modules injection; restores the originals (or absence) on exit."""
     with mock.patch.dict(sys.modules, mods):
         yield
+
+
+def isolate_desk_env(testcase: unittest.TestCase) -> None:
+    """Isolate `testcase` from any real developer `DATASET_DESK_*` env vars or user config on disk."""
+    patcher = mock.patch.dict(os.environ, {"DATASET_DESK_USER_CONFIG": ""})
+    patcher.start()
+    testcase.addCleanup(patcher.stop)
+    os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
+    os.environ.pop("DATASET_DESK_POOL_DIRS", None)
+
+
+class IsolatedDeskTestCase(unittest.TestCase):
+    """Shared base `TestCase` setting `DATASET_DESK_USER_CONFIG=""` so real user configs never affect test runs."""
+
+    def setUp(self):
+        super().setUp()
+        isolate_desk_env(self)

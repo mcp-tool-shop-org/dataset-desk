@@ -14,8 +14,11 @@ EXIT_OK, EXIT_USER, EXIT_RUNTIME = 0, 1, 2
 # The registry. Codes are stable once released.
 CODES = {
     "INPUT_BAD_ARGUMENT": "check the command's --help",
+    "INPUT_EMPTY_POOL_SOURCE": "configure at least one locked-pool image sha256 per source, or remove the empty manifest/folder",
     "INPUT_UNKNOWN_BACKEND": "use one of: eg2, siglip2, bge-m3, qwen3-emb-0.6b, gte-modernbert, dinov2, none, fake",
-    "INPUT_UNKNOWN_DRAFTER": "use one of: plain-sight, fake, none",
+    "INPUT_UNKNOWN_DRAFTER": "use one of: plain-sight, qwen3-vl, fake, none",
+    "MODEL_REVISION_MISMATCH": "pass the exact 40-hex revision pinned in dataset_desk.registry.DRAFTER_REGISTRY",
+    "DEP_DRAFTER_OFFLINE": "cache the pinned drafter snapshot locally before running with HF_HUB_OFFLINE=1",
     "PERM_OUT_INSIDE_PROJECT": "point --out outside the project folder; the desk never writes into a project",
     "PERM_PRIVATE_SOURCE": "pass only public rnd-data checkouts and manifest-listed rnd-data copies",
     "PERM_GPU_NEEDS_GRANT": "pass --grant <id> from whoever schedules the GPU, or run on --device cpu",

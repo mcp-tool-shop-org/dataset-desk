@@ -25,17 +25,17 @@
         "coChangesOnly": [],
         "collapsed": false,
         "confidence": "low",
-        "importsAndCoChanges": [],
-        "importsOnly": [
+        "importsAndCoChanges": [
           "tests"
-        ]
+        ],
+        "importsOnly": []
       },
-      "cohesion": null,
+      "cohesion": 0.446809,
       "cohesionDropped": false,
       "confidence": "low",
       "highWater": null,
       "name": "dataset_desk",
-      "qualifyingSourceCommits": 6,
+      "qualifyingSourceCommits": 15,
       "rebaseline": null
     },
     {
@@ -67,23 +67,25 @@
       "confidence": "low",
       "highWater": null,
       "name": "site",
-      "qualifyingSourceCommits": 1,
+      "qualifyingSourceCommits": 3,
       "rebaseline": null
     },
     {
       "breakage": {
-        "coChangesOnly": [],
+        "coChangesOnly": [
+          "dataset_desk"
+        ],
         "collapsed": false,
         "confidence": "low",
         "importsAndCoChanges": [],
         "importsOnly": []
       },
-      "cohesion": null,
+      "cohesion": 0.6,
       "cohesionDropped": false,
       "confidence": "low",
       "highWater": null,
       "name": "tests",
-      "qualifyingSourceCommits": 6,
+      "qualifyingSourceCommits": 13,
       "rebaseline": null
     }
   ],
@@ -96,8 +98,8 @@
         "path": ".gitattributes"
       },
       {
-        "commits": 1,
-        "lines": 82,
+        "commits": 2,
+        "lines": 84,
         "path": ".github/workflows/ci.yml"
       },
       {
@@ -116,8 +118,8 @@
         "path": ".gitignore"
       },
       {
-        "commits": 10,
-        "lines": 247,
+        "commits": 12,
+        "lines": 351,
         "path": "CHANGELOG.md"
       },
       {
@@ -151,8 +153,8 @@
         "path": "README.ja.md"
       },
       {
-        "commits": 8,
-        "lines": 202,
+        "commits": 14,
+        "lines": 286,
         "path": "README.md"
       },
       {
@@ -181,8 +183,8 @@
         "path": "SHIP_GATE.md"
       },
       {
-        "commits": 7,
-        "lines": 138,
+        "commits": 10,
+        "lines": 165,
         "path": "atlas/README.md"
       },
       {
@@ -191,18 +193,18 @@
         "path": "atlas/boundaries.yaml"
       },
       {
-        "commits": 7,
-        "lines": 363,
+        "commits": 10,
+        "lines": 427,
         "path": "atlas/page.json"
       },
       {
-        "commits": 7,
-        "lines": 995,
+        "commits": 10,
+        "lines": 1271,
         "path": "atlas/statistics.json"
       },
       {
-        "commits": 7,
-        "lines": 4722,
+        "commits": 10,
+        "lines": 8917,
         "path": "atlas/structure.json"
       },
       {
@@ -211,8 +213,8 @@
         "path": "codecov.yml"
       },
       {
-        "commits": 7,
-        "lines": 15,
+        "commits": 8,
+        "lines": 17,
         "path": "dataset_desk/__init__.py"
       },
       {
@@ -221,28 +223,28 @@
         "path": "dataset_desk/__main__.py"
       },
       {
-        "commits": 7,
-        "lines": 2090,
+        "commits": 8,
+        "lines": 2373,
         "path": "dataset_desk/backends.py"
       },
       {
-        "commits": 4,
-        "lines": 931,
+        "commits": 11,
+        "lines": 3354,
         "path": "dataset_desk/description_gate.py"
       },
       {
-        "commits": 11,
-        "lines": 3984,
+        "commits": 17,
+        "lines": 6207,
         "path": "dataset_desk/desk.py"
       },
       {
-        "commits": 5,
-        "lines": 66,
+        "commits": 7,
+        "lines": 71,
         "path": "dataset_desk/errors.py"
       },
       {
-        "commits": 5,
-        "lines": 305,
+        "commits": 6,
+        "lines": 386,
         "path": "dataset_desk/registry.py"
       },
       {
@@ -251,8 +253,8 @@
         "path": "dataset_desk/stopwords.txt"
       },
       {
-        "commits": 7,
-        "lines": 71,
+        "commits": 8,
+        "lines": 73,
         "path": "pyproject.toml"
       },
       {
@@ -346,38 +348,43 @@
         "path": "site/tsconfig.json"
       },
       {
-        "commits": 4,
-        "lines": 256,
+        "commits": 5,
+        "lines": 275,
         "path": "tests/fakes.py"
       },
       {
-        "commits": 8,
-        "lines": 1692,
+        "commits": 9,
+        "lines": 1701,
         "path": "tests/test_backends.py"
       },
       {
-        "commits": 3,
-        "lines": 415,
+        "commits": 4,
+        "lines": 439,
         "path": "tests/test_cli.py"
       },
       {
-        "commits": 7,
-        "lines": 2598,
+        "commits": 8,
+        "lines": 2611,
         "path": "tests/test_desk.py"
       },
       {
-        "commits": 2,
-        "lines": 396,
+        "commits": 3,
+        "lines": 416,
         "path": "tests/test_gate_edges.py"
       },
       {
-        "commits": 3,
-        "lines": 929,
+        "commits": 4,
+        "lines": 936,
         "path": "tests/test_scale.py"
       },
       {
-        "commits": 6,
-        "lines": 1825,
+        "commits": 7,
+        "lines": 2570,
+        "path": "tests/test_training_captions.py"
+      },
+      {
+        "commits": 7,
+        "lines": 1827,
         "path": "uv.lock"
       },
       {
@@ -391,13 +398,77 @@
     "level": "low",
     "reason": "fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions"
   },
-  "generatedAt": "2026-11-11T22:14:40.407Z",
+  "generatedAt": "2026-11-12T11:03:16.759Z",
   "generatedFrom": {
-    "commit": "63735552820de17959fd97169726e92129f732bf"
+    "commit": "90cea26841a83a1941874087f6473c2d0287a4b5"
   },
-  "pairs": [],
+  "pairs": [
+    {
+      "a": "atlas/README.md",
+      "b": "atlas/page.json",
+      "either": 6,
+      "shared": 6,
+      "strength": 1
+    },
+    {
+      "a": "atlas/README.md",
+      "b": "atlas/statistics.json",
+      "either": 6,
+      "shared": 6,
+      "strength": 1
+    },
+    {
+      "a": "atlas/README.md",
+      "b": "atlas/structure.json",
+      "either": 6,
+      "shared": 6,
+      "strength": 1
+    },
+    {
+      "a": "atlas/page.json",
+      "b": "atlas/statistics.json",
+      "either": 6,
+      "shared": 6,
+      "strength": 1
+    },
+    {
+      "a": "atlas/page.json",
+      "b": "atlas/structure.json",
+      "either": 6,
+      "shared": 6,
+      "strength": 1
+    },
+    {
+      "a": "atlas/statistics.json",
+      "b": "atlas/structure.json",
+      "either": 6,
+      "shared": 6,
+      "strength": 1
+    },
+    {
+      "a": "dataset_desk/description_gate.py",
+      "b": "dataset_desk/desk.py",
+      "either": 13,
+      "shared": 7,
+      "strength": 0.538462
+    },
+    {
+      "a": "dataset_desk/description_gate.py",
+      "b": "tests/test_training_captions.py",
+      "either": 9,
+      "shared": 6,
+      "strength": 0.666667
+    },
+    {
+      "a": "tests/test_backends.py",
+      "b": "tests/test_desk.py",
+      "either": 5,
+      "shared": 5,
+      "strength": 1
+    }
+  ],
   "parameters": {
-    "appliedChangesetLimit": 14.75,
+    "appliedChangesetLimit": 15,
     "changeset": 50,
     "changesetFraction": 0.25,
     "cohesionDrop": 0.2,
@@ -406,16 +477,16 @@
     "floor": "fallen",
     "floorHeld": false,
     "floorTrigger": "both",
-    "headDate": "2026-10-20T15:28:57-04:00",
-    "inScopeFiles": 59,
+    "headDate": "2026-11-12T02:28:04-05:00",
+    "inScopeFiles": 60,
     "pinnedStart": null,
     "priorFloor": "fallen",
-    "qualifyingCommits": 10,
+    "qualifyingCommits": 23,
     "qualifyingMinimum": 30,
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 3,
-    "since": "2026-04-23T19:28:57.000Z",
+    "since": "2026-05-16T07:28:04.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",
@@ -431,7 +502,7 @@
     ],
     "sourceFileReach": 20,
     "sourceFileRise": 25,
-    "sourceFilesReachingStrongFloor": 0,
+    "sourceFilesReachingStrongFloor": 1,
     "strength": 0.5,
     "windowDays": 180
   },

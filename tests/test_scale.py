@@ -14,6 +14,11 @@ from PIL import Image
 
 from dataset_desk import description_gate, desk
 
+try:
+    import fakes
+except ImportError:
+    from tests import fakes
+
 
 def rand_hash(rng):
     return "".join(f"{int(x):016x}" for x in rng.integers(0, 2**63, size=4, dtype=np.int64))
@@ -274,7 +279,7 @@ def make_lineage_fixture(seed, n_items=40):
     return items, vecs
 
 
-class ManyImagePaths(unittest.TestCase):
+class ManyImagePaths(fakes.IsolatedDeskTestCase):
     # A tiny block forces many blocks, so every block edge is crossed.
     tiny = mock.patch.object(desk, "BLOCK_BYTES", 4096)
 

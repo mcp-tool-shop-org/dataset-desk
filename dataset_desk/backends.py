@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import sys
 import time
 
@@ -48,7 +49,7 @@ cap_threads(_argv_threads())
 import numpy as np  # noqa: E402
 
 from dataset_desk.errors import DeskError  # noqa: E402
-from dataset_desk.registry import REGISTRY, EmbedderSpec  # noqa: E402
+from dataset_desk.registry import DEFAULT_DRAFTER, DRAFTER_REGISTRY, REGISTRY, EmbedderSpec  # noqa: E402
 
 EG2_REPO, EG2_REVISION = REGISTRY["eg2"].repo, REGISTRY["eg2"].revision
 SIGLIP2_REPO, SIGLIP2_REVISION = REGISTRY["siglip2"].repo, REGISTRY["siglip2"].revision
@@ -828,23 +829,40 @@ class DINOv2Embedder:
         raise DeskError("INPUT_BAD_ARGUMENT", f"backend {self.name!r} is image-only and cannot embed texts")
 
 
-PLAIN_SIGHT_REPO = "florence-community/Florence-2-large"
-PLAIN_SIGHT_REVISION = "4271c66b88cdbc05735372ec13b2360108de5317"
+PLAIN_SIGHT_REPO = DRAFTER_REGISTRY["plain-sight"].repo
+PLAIN_SIGHT_REVISION = DRAFTER_REGISTRY["plain-sight"].revision
 FLORENCE2_REPO, FLORENCE2_REVISION = PLAIN_SIGHT_REPO, PLAIN_SIGHT_REVISION
+QWEN3_VL_REPO = DRAFTER_REGISTRY["qwen3-vl"].repo
+QWEN3_VL_REVISION = DRAFTER_REGISTRY["qwen3-vl"].revision
+DEFAULT_DRAFTER_PROMPT = "Describe only what is visibly present in this image in 15 to 35 words."
+_HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
+_UNSET_DRAFTER = object()
+
+
+def _is_hf_offline() -> bool:
+    for key in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
+        val = os.environ.get(key, "").strip().lower()
+        if val in ("1", "true", "yes", "on"):
+            return True
+    return False
 
 
 class FakeDrafter:
     """Offline and deterministic drafter for tests.
 
-    Accepts ONLY image paths (never prompts, canon.subject, or current descriptions) and records the exact paths
-    received in `seen_paths`."""
+    Accepts ONLY image paths (never generation prompts, canon.subject, or current descriptions) and records the exact
+    paths received in `seen_paths` and per-image raw output in `raw_outputs`."""
 
     name = "fake"
     drafter_id = "plain-sight/florence-2-fake"
     revision = "fake-florence2-1"
+    is_arm_model = False
 
-    def __init__(self) -> None:
+    def __init__(self, prompt: str | None = None) -> None:
         self.seen_paths: list[str] = []
+        self.prompt: str = prompt.strip() if isinstance(prompt, str) and prompt.strip() else DEFAULT_DRAFTER_PROMPT
+        self.raw_outputs: dict[str, str] = {}
+        self.last_raw_outputs: list[str] = []
 
     def draft(self, image_paths: list[str]) -> list[str]:
         if not isinstance(image_paths, list) or any(not isinstance(p, str) for p in image_paths):
@@ -852,6 +870,7 @@ class FakeDrafter:
         from PIL import Image
 
         out: list[str] = []
+        raw_batch: list[str] = []
         for p in image_paths:
             self.seen_paths.append(p)
             tone = "neutral"
@@ -864,9 +883,12 @@ class FakeDrafter:
                 except OSError:
                     pass
             stem = os.path.splitext(os.path.basename(p or "plate"))[0]
-            out.append(
-                f"a weathered {tone} figure beside carved stone pillars in a dim courtyard ({stem})"
-            )
+            clean = f"a weathered {tone} figure beside carved stone pillars in a dim courtyard ({stem})"
+            raw = f"<fake_raw prompt={self.prompt!r}>{clean}</fake_raw>"
+            self.raw_outputs[p] = raw
+            raw_batch.append(raw)
+            out.append(clean)
+        self.last_raw_outputs = raw_batch
         return out
 
 
@@ -878,9 +900,11 @@ class PlainSightDrafter:
       `4271c66b88cdbc05735372ec13b2360108de5317`) using native `transformers` classes only.
     - Enforces `local_files_only=True` and `HF_HUB_OFFLINE=1` around model loading so a missing snapshot raises a named
       error instead of downloading.
-    - Records the `drafter_id` and `revision` that actually loaded."""
+    - Records the `drafter_id`, `revision`, `prompt`, and per-image raw output."""
 
     name = "plain-sight"
+    is_arm_model = False
+    vram_mib = DRAFTER_REGISTRY["plain-sight"].vram_mib
     TASK_TOKEN = "<DETAILED_CAPTION>"
 
     def __init__(
@@ -890,21 +914,34 @@ class PlainSightDrafter:
         model_id: str = PLAIN_SIGHT_REPO,
         revision: str = PLAIN_SIGHT_REVISION,
         detail: str = "medium",
+        prompt: str | None = None,
+        *,
+        vram_budget: int = DEFAULT_VRAM_BUDGET_MIB,
+        wait: float = 0.0,
     ):
         self.device, self.threads = device, threads
         self.model_id = model_id
         self.requested_revision = revision
         self.detail = detail
+        self.prompt = prompt.strip() if isinstance(prompt, str) and prompt.strip() else self.TASK_TOKEN
+        self.vram_budget = vram_budget
+        self.wait = wait
+        self._vram_checked = False
         self.drafter_id = model_id
         self.revision = revision
         self.engine = None
         self.torch = None
         self.processor = None
         self.model = None
+        self.raw_outputs: dict[str, str] = {}
+        self.last_raw_outputs: list[str] = []
 
     def _ensure_model(self) -> None:
         if self.engine is not None or self.model is not None:
             return
+        if self.device != "cpu" and not self._vram_checked:
+            check_vram(self.device, self.vram_mib, vram_budget=self.vram_budget, wait=self.wait, name=self.name)
+            self._vram_checked = True
         enter_torch_region(self.threads)
 
         prev_hf_offline = os.environ.get("HF_HUB_OFFLINE")
@@ -1007,16 +1044,26 @@ class PlainSightDrafter:
         if not isinstance(image_paths, list) or any(not isinstance(p, str) for p in image_paths):
             raise TypeError("drafter.draft() accepts a list[str] of image file paths only")
         if not image_paths:
+            self.last_raw_outputs = []
             return []
         self._ensure_model()
 
         if self.engine is not None:
-            return [str(self.engine.describe(p, detail=self.detail)).strip() for p in image_paths]
+            out_eng: list[str] = []
+            raw_eng: list[str] = []
+            for p in image_paths:
+                raw_desc = str(self.engine.describe(p, detail=self.detail))
+                self.raw_outputs[p] = raw_desc
+                raw_eng.append(raw_desc)
+                out_eng.append(raw_desc.strip())
+            self.last_raw_outputs = raw_eng
+            return out_eng
 
         from PIL import Image
 
         task_prompt = self.TASK_TOKEN
         out: list[str] = []
+        raw_batch: list[str] = []
         for p in image_paths:
             with Image.open(p) as im:
                 rgb = im.convert("RGB")
@@ -1029,22 +1076,220 @@ class PlainSightDrafter:
                     num_beams=3,
                     do_sample=False,
                 )
-            text = self.processor.batch_decode(gen_ids, skip_special_tokens=False)[0]
+            text = str(self.processor.batch_decode(gen_ids, skip_special_tokens=False)[0])
+            self.raw_outputs[p] = text
+            raw_batch.append(text)
             parsed = self.processor.post_process_generation(text, task=task_prompt, image_size=(w, h))
             out.append(str(parsed.get(task_prompt, text)).strip())
+        self.last_raw_outputs = raw_batch
         return out
 
 
-def make_drafter(name: str, device: str = "cpu", threads: int = DEFAULT_THREADS, grant: str | None = None):
-    if name in ("none", "", None):
+class Qwen3VLDrafter:
+    """Qwen/Qwen3-VL-8B-Instruct @ 0c351dd0… blind drafter.
+
+    - Pinned to `Qwen/Qwen3-VL-8B-Instruct` at revision `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b` (Apache-2.0).
+    - Refuses any revision mismatch (both requested revision and loaded `_commit_hash`).
+    - Honours `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` via `local_files_only=True` and the VRAM governor (`check_vram`).
+    - Accepts a per-project prompt string, stores it on `self.prompt`, saves the full raw output per image in
+      `self.raw_outputs` / `self.last_raw_outputs`, and declares `is_arm_model = False`."""
+
+    name = "qwen3-vl"
+    is_arm_model = False
+    vram_mib = DRAFTER_REGISTRY["qwen3-vl"].vram_mib
+
+    def __init__(
+        self,
+        device: str = "cpu",
+        threads: int = DEFAULT_THREADS,
+        model_id: str = QWEN3_VL_REPO,
+        revision: str = QWEN3_VL_REVISION,
+        prompt: str | None = None,
+        *,
+        vram_budget: int = DEFAULT_VRAM_BUDGET_MIB,
+        wait: float = 0.0,
+        max_new_tokens: int = 256,
+    ):
+        rev_str = str(revision or "")
+        if not _HEX40_RE.match(rev_str) or (model_id == QWEN3_VL_REPO and rev_str != QWEN3_VL_REVISION):
+            raise DeskError(
+                "MODEL_REVISION_MISMATCH",
+                f"REFUSED: qwen3-vl requires pinned 40-hex revision {QWEN3_VL_REVISION!r} for {model_id!r}, "
+                f"got {revision!r}",
+            )
+        self.device, self.threads = device, threads
+        self.model_id = model_id
+        self.requested_revision = rev_str
+        self.drafter_id = model_id
+        self.revision = rev_str
+        self.prompt: str = prompt.strip() if isinstance(prompt, str) and prompt.strip() else DEFAULT_DRAFTER_PROMPT
+        self.vram_budget = vram_budget
+        self.wait = wait
+        self.max_new_tokens = max(1, int(max_new_tokens))
+        self._vram_checked = False
+        self.torch = None
+        self.processor = None
+        self.model = None
+        self.raw_outputs: dict[str, str] = {}
+        self.last_raw_outputs: list[str] = []
+
+    def _ensure_model(self) -> None:
+        if self.model is not None:
+            return
+        if self.device != "cpu" and not self._vram_checked:
+            check_vram(self.device, self.vram_mib, vram_budget=self.vram_budget, wait=self.wait, name=self.name)
+            self._vram_checked = True
+        enter_torch_region(self.threads)
+
+        offline = _is_hf_offline()
+        import torch
+        from transformers import AutoModelForImageTextToText, AutoProcessor
+
+        dtype = torch.bfloat16 if (self.device != "cpu" and torch.cuda.is_bf16_supported()) else torch.float32
+        try:
+            with transformers_warnings_off():
+                processor = AutoProcessor.from_pretrained(
+                    self.model_id,
+                    revision=self.requested_revision,
+                    local_files_only=offline,
+                )
+                model = AutoModelForImageTextToText.from_pretrained(
+                    self.model_id,
+                    revision=self.requested_revision,
+                    local_files_only=offline,
+                    dtype=dtype,
+                )
+        except DeskError:
+            raise
+        except Exception as exc:
+            if offline:
+                raise DeskError(
+                    "DEP_DRAFTER_OFFLINE",
+                    f"REFUSED: qwen3-vl offline load failed for repo {self.model_id!r} at revision "
+                    f"{self.requested_revision!r} (HF_HUB_OFFLINE=1; local_files_only=True): {exc}",
+                    cause=exc,
+                ) from exc
+            raise
+
+        cfg = getattr(model, "config", None)
+        loaded_rev = getattr(cfg, "_commit_hash", None)
+        proc_rev = getattr(processor, "_commit_hash", None)
+        for source_label, actual_rev in (("model.config._commit_hash", loaded_rev), ("processor._commit_hash", proc_rev)):
+            if actual_rev is not None and str(actual_rev) != self.requested_revision:
+                raise DeskError(
+                    "MODEL_REVISION_MISMATCH",
+                    f"REFUSED: qwen3-vl {source_label} resolved to {actual_rev!r}, expected pinned revision "
+                    f"{self.requested_revision!r}",
+                )
+
+        model = model.eval().to(self.device)
+        loaded_id = getattr(cfg, "_name_or_path", None) or self.model_id
+        self.drafter_id = str(loaded_id)
+        self.revision = str(loaded_rev or self.requested_revision)
+        self.torch = torch
+        self.processor = processor
+        self.model = model
+
+    def draft(self, image_paths: list[str]) -> list[str]:
+        if not isinstance(image_paths, list) or any(not isinstance(p, str) for p in image_paths):
+            raise TypeError("drafter.draft() accepts a list[str] of image file paths only")
+        if not image_paths:
+            self.last_raw_outputs = []
+            return []
+        self._ensure_model()
+
+        from PIL import Image
+
+        out: list[str] = []
+        raw_batch: list[str] = []
+        for p in image_paths:
+            with Image.open(p) as im:
+                rgb = im.convert("RGB")
+            messages = [{
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": rgb},
+                    {"type": "text", "text": self.prompt},
+                ],
+            }]
+            if hasattr(self.processor, "apply_chat_template"):
+                chat_text = self.processor.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            else:
+                chat_text = self.prompt
+            inputs = self.processor(text=[chat_text], images=[rgb], padding=True, return_tensors="pt").to(self.device)
+            with self.torch.no_grad():
+                gen_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=False,
+                )
+            raw_text = str(self.processor.batch_decode(gen_ids, skip_special_tokens=False)[0])
+            in_ids = inputs.get("input_ids") if isinstance(inputs, dict) else getattr(inputs, "input_ids", None)
+            trimmed_ids = gen_ids
+            if in_ids is not None and hasattr(gen_ids, "shape") and hasattr(in_ids, "shape"):
+                if len(gen_ids.shape) == 2 and len(in_ids.shape) == 2 and gen_ids.shape[1] >= in_ids.shape[1]:
+                    trimmed_ids = [row[in_ids.shape[1]:] for row in gen_ids]
+            clean_text = str(self.processor.batch_decode(trimmed_ids, skip_special_tokens=True)[0]).strip()
+            self.raw_outputs[p] = raw_text
+            raw_batch.append(raw_text)
+            out.append(clean_text)
+        self.last_raw_outputs = raw_batch
+        return out
+
+
+def make_drafter(
+    name: str | None | object = _UNSET_DRAFTER,
+    device: str = "cpu",
+    threads: int = DEFAULT_THREADS,
+    grant: str | None = None,
+    *,
+    prompt: str | None = None,
+    revision: str | None = None,
+    vram_budget: int = DEFAULT_VRAM_BUDGET_MIB,
+    wait: float = 0.0,
+):
+    resolved_name = DEFAULT_DRAFTER if name is _UNSET_DRAFTER else name
+    if resolved_name in ("none", "", None):
         return None
     check_device(device, grant)
     cap_threads(threads)
-    if name == "fake":
-        return FakeDrafter()
-    if name in ("plain-sight", "florence2"):
-        return PlainSightDrafter(device=device, threads=threads)
-    raise DeskError("INPUT_UNKNOWN_DRAFTER", f"unknown drafter {name!r}: plain-sight, fake, or none")
+    if resolved_name == "fake":
+        return FakeDrafter(prompt=prompt)
+    if resolved_name in ("plain-sight", "florence2"):
+        ps_kw: dict = {
+            "device": device,
+            "threads": threads,
+            "prompt": prompt,
+            "vram_budget": vram_budget,
+            "wait": wait,
+        }
+        if revision is not None:
+            ps_kw["revision"] = revision
+        drafter = PlainSightDrafter(**ps_kw)
+    elif resolved_name == "qwen3-vl":
+        qv_kw: dict = {
+            "device": device,
+            "threads": threads,
+            "prompt": prompt,
+            "vram_budget": vram_budget,
+            "wait": wait,
+        }
+        if revision is not None:
+            qv_kw["revision"] = revision
+        drafter = Qwen3VLDrafter(**qv_kw)
+    else:
+        raise DeskError(
+            "INPUT_UNKNOWN_DRAFTER",
+            f"unknown drafter {resolved_name!r}: plain-sight, qwen3-vl, fake, or none",
+        )
+    if device != "cpu" and _can_probe_vram():
+        check_vram(device, drafter.vram_mib, vram_budget=vram_budget, wait=wait, name=drafter.name)
+        drafter._vram_checked = True
+    return drafter
 
 
 _STANDINS = {
