@@ -1,6 +1,6 @@
 # dataset-desk: how it works
 
-Mapped at 2026-11-12 from commit 82a8b03 by Atlas 1.26.0.
+Mapped at 2026-11-12 from commit 2633ca3 by Atlas 1.26.0.
 
 ## What this is
 
@@ -8,16 +8,9 @@ dataset-desk: a review desk for visual datasets — duplicates, outliers, search
 
 6 parts, mostly Python (20 files), shell (3), CSS (2), TypeScript (2), Astro (1) and JavaScript (1). Work enters through 4 doors; the busiest is CI, which reaches 4 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.
 
-## What changed since 2026-11-12 (90cea26)
+## What changed since 2026-11-12 (82a8b03)
 
-- scripts now imports dataset_desk.
-- CI now also checks scripts/.
-- scripts/ is now read by scripts/colab/desk_draft_helper.py.
-- scripts/colab/colab_window.sh is now read by tests/test_colab_draft_lane.py.
-- scripts/colab/desk_bundle_now.py is now read by tests/test_colab_draft_lane.py.
-- And 5 more new writers and readers of places.
-- scripts is a new part, drawn from `scripts/**`.
-- 11 files added and 3 changed content, across 4 parts.
+Nothing structural changed since 2026-11-12; 1 file added and 18 changed content.
 
 ## What comes in
 
@@ -83,9 +76,9 @@ Read those in order to follow one run of dataset-desk end to end. This path foll
 
 - 3 imports could not be resolved: `scripts/colab/desk_bundle_now.py` imports a path built at run time; `tests/test_colab_draft_lane.py` imports a path built at run time; `tests/test_training_captions.py` imports a path built at run time.
 - 6 writes and 5 reads use paths built at run time and are not named here.
-- 26 writes and 79 reads go to a path their caller passes, not to this repository.
+- 29 writes and 86 reads go to a path their caller passes, not to this repository.
 - 15 writes and 2 reads go to the directory the command is run in (desk-out/), not to this repository.
-- 5 writes and 6 reads go to a temporary directory, not to this repository.
+- 7 writes and 10 reads go to a temporary directory, not to this repository.
 - 5 writes and 2 reads go to the directory the command is run in (desk-out/) or a path their caller passes, not to this repository.
 - Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions.
 
