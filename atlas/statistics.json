@@ -27,6 +27,7 @@
         "confidence": "low",
         "importsAndCoChanges": [],
         "importsOnly": [
+          "scripts",
           "tests"
         ]
       },
@@ -52,6 +53,22 @@
       "highWater": null,
       "name": "root",
       "qualifyingSourceCommits": 0,
+      "rebaseline": null
+    },
+    {
+      "breakage": {
+        "coChangesOnly": [],
+        "collapsed": false,
+        "confidence": "low",
+        "importsAndCoChanges": [],
+        "importsOnly": []
+      },
+      "cohesion": null,
+      "cohesionDropped": false,
+      "confidence": "low",
+      "highWater": null,
+      "name": "scripts",
+      "qualifyingSourceCommits": 1,
       "rebaseline": null
     },
     {
@@ -117,7 +134,7 @@
       },
       {
         "commits": 12,
-        "lines": 375,
+        "lines": 347,
         "path": "CHANGELOG.md"
       },
       {
@@ -186,8 +203,8 @@
         "path": "atlas/README.md"
       },
       {
-        "commits": 1,
-        "lines": 22,
+        "commits": 2,
+        "lines": 26,
         "path": "atlas/boundaries.yaml"
       },
       {
@@ -221,23 +238,23 @@
         "path": "dataset_desk/__main__.py"
       },
       {
-        "commits": 8,
-        "lines": 2373,
+        "commits": 9,
+        "lines": 2494,
         "path": "dataset_desk/backends.py"
       },
       {
-        "commits": 6,
-        "lines": 2946,
+        "commits": 5,
+        "lines": 2926,
         "path": "dataset_desk/description_gate.py"
       },
       {
-        "commits": 13,
-        "lines": 5843,
+        "commits": 12,
+        "lines": 5705,
         "path": "dataset_desk/desk.py"
       },
       {
-        "commits": 6,
-        "lines": 71,
+        "commits": 7,
+        "lines": 72,
         "path": "dataset_desk/errors.py"
       },
       {
@@ -254,6 +271,51 @@
         "commits": 8,
         "lines": 73,
         "path": "pyproject.toml"
+      },
+      {
+        "commits": 1,
+        "lines": 3949,
+        "path": "scripts/colab/colab_window.sh"
+      },
+      {
+        "commits": 1,
+        "lines": 174,
+        "path": "scripts/colab/desk_bundle_now.py"
+      },
+      {
+        "commits": 1,
+        "lines": 1840,
+        "path": "scripts/colab/desk_draft_helper.py"
+      },
+      {
+        "commits": 1,
+        "lines": 1009,
+        "path": "scripts/colab/launch_desk_draft.sh"
+      },
+      {
+        "commits": 1,
+        "lines": 1363,
+        "path": "scripts/colab/launch_guards.py"
+      },
+      {
+        "commits": 1,
+        "lines": 1,
+        "path": "scripts/colab/locks/desk_draft.exclude-newer"
+      },
+      {
+        "commits": 1,
+        "lines": 8,
+        "path": "scripts/colab/locks/desk_draft.in"
+      },
+      {
+        "commits": 1,
+        "lines": 916,
+        "path": "scripts/colab/locks/desk_draft.lock"
+      },
+      {
+        "commits": 1,
+        "lines": 177,
+        "path": "scripts/colab/remote_runner.py"
       },
       {
         "commits": 1,
@@ -346,6 +408,11 @@
         "path": "site/tsconfig.json"
       },
       {
+        "commits": 1,
+        "lines": 1239,
+        "path": "tests/fake_colab_desk.py"
+      },
+      {
         "commits": 5,
         "lines": 275,
         "path": "tests/fakes.py"
@@ -359,6 +426,11 @@
         "commits": 4,
         "lines": 439,
         "path": "tests/test_cli.py"
+      },
+      {
+        "commits": 1,
+        "lines": 1039,
+        "path": "tests/test_colab_draft_lane.py"
       },
       {
         "commits": 8,
@@ -376,8 +448,8 @@
         "path": "tests/test_scale.py"
       },
       {
-        "commits": 2,
-        "lines": 2746,
+        "commits": 1,
+        "lines": 2446,
         "path": "tests/test_training_captions.py"
       },
       {
@@ -396,13 +468,13 @@
     "level": "low",
     "reason": "fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions"
   },
-  "generatedAt": "2026-11-12T11:29:34.606Z",
+  "generatedAt": "2026-11-12T14:42:46.539Z",
   "generatedFrom": {
-    "commit": "9101583df389d0cb8b60ce864d48602129ef7af8"
+    "commit": "82a8b0364fec9d92ed4c00f803954d3f172a6f77"
   },
   "pairs": [],
   "parameters": {
-    "appliedChangesetLimit": 15,
+    "appliedChangesetLimit": 17.75,
     "changeset": 50,
     "changesetFraction": 0.25,
     "cohesionDrop": 0.2,
@@ -411,8 +483,8 @@
     "floor": "fallen",
     "floorHeld": false,
     "floorTrigger": "both",
-    "headDate": "2026-11-12T06:29:25-05:00",
-    "inScopeFiles": 60,
+    "headDate": "2026-11-12T09:42:34-05:00",
+    "inScopeFiles": 71,
     "pinnedStart": null,
     "priorFloor": "fallen",
     "qualifyingCommits": 14,
@@ -420,7 +492,7 @@
     "revisions": 5,
     "shared": 10,
     "sharedFloorUsed": 3,
-    "since": "2026-05-16T11:29:25.000Z",
+    "since": "2026-05-16T14:42:34.000Z",
     "sourceExtensions": [
       ".js",
       ".mjs",

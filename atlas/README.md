@@ -1,27 +1,34 @@
 # dataset-desk: how it works
 
-Mapped at 2026-11-12 from commit 9101583 by Atlas 1.26.0.
+Mapped at 2026-11-12 from commit 82a8b03 by Atlas 1.26.0.
 
 ## What this is
 
 dataset-desk: a review desk for visual datasets — duplicates, outliers, search, and a model-free description gate. (written by a person)
 
-5 parts, mostly Python (14 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 4 doors; the busiest is CI, which reaches 3 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.
+6 parts, mostly Python (20 files), shell (3), CSS (2), TypeScript (2), Astro (1) and JavaScript (1). Work enters through 4 doors; the busiest is CI, which reaches 4 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.
 
 ## What changed since 2026-11-12 (90cea26)
 
-Nothing structural changed since 2026-11-12; 4 files changed content.
+- scripts now imports dataset_desk.
+- CI now also checks scripts/.
+- scripts/ is now read by scripts/colab/desk_draft_helper.py.
+- scripts/colab/colab_window.sh is now read by tests/test_colab_draft_lane.py.
+- scripts/colab/desk_bundle_now.py is now read by tests/test_colab_draft_lane.py.
+- And 5 more new writers and readers of places.
+- scripts is a new part, drawn from `scripts/**`.
+- 11 files added and 3 changed content, across 4 parts.
 
 ## What comes in
 
-1. **CI.** On a pull request to main; on a push to main touching 7 paths; or by hand. Runs verify.sh and tests/; checks dataset_desk/.
+1. **CI.** On a pull request to main; on a push to main touching 7 paths; or by hand. Runs verify.sh and tests/; checks dataset_desk/ and scripts/.
 2. **Deploy site to GitHub Pages.** On a push to main touching 2 paths; or by hand. Runs site/astro.config.mjs and site/src/.
 3. **Release.** When a release is published; or by hand. Checks dataset_desk/.
 4. **dataset-desk** (a command people run). Runs dataset_desk/desk.py.
 
 ## What happens through CI
 
-1. The workflow runs verify.sh in the repository root and tests/ in tests; it checks dataset_desk/ in dataset_desk.
+1. The workflow runs verify.sh in the repository root and tests/ in tests; it checks dataset_desk/ in dataset_desk and scripts/ in scripts.
 2. It uploads coverage to Codecov.
 
 ## Who reads the results
@@ -38,7 +45,7 @@ CI writes nothing this map can see.
 
 ## What breaks what
 
-- **dataset_desk** is imported only from tests, by 1 part (tests), and sits on the path of 3 doors.
+- **dataset_desk** is imported by 1 part (scripts), and by 1 more only from tests; it sits on the path of 3 doors.
 
 ## What tends to change together
 
@@ -48,7 +55,7 @@ Window: 180 days; a pair counts from 3 shared commits, since the window holds fe
 
 ## What no test touches
 
-Every code part is imported by at least one test.
+- **scripts** is imported by no test.
 
 ## Written but never read
 
@@ -64,7 +71,7 @@ Nothing in this repository writes to a tracked place this map can see.
 
 ## Hand-authored
 
-People write .github/, the repository root and site/. Nothing in this repository writes to them.
+People write .github/, the repository root and site/; 6 writes with paths built at run time may land here.
 
 ## Where to start
 
@@ -74,10 +81,11 @@ Read those in order to follow one run of dataset-desk end to end. This path foll
 
 ## What this map cannot see
 
-- 1 import could not be resolved: `tests/test_training_captions.py` imports a path built at run time.
-- 4 reads use paths built at run time and are not named here.
-- 17 writes and 38 reads go to a path their caller passes, not to this repository.
+- 3 imports could not be resolved: `scripts/colab/desk_bundle_now.py` imports a path built at run time; `tests/test_colab_draft_lane.py` imports a path built at run time; `tests/test_training_captions.py` imports a path built at run time.
+- 6 writes and 5 reads use paths built at run time and are not named here.
+- 26 writes and 79 reads go to a path their caller passes, not to this repository.
 - 15 writes and 2 reads go to the directory the command is run in (desk-out/), not to this repository.
+- 5 writes and 6 reads go to a temporary directory, not to this repository.
 - 5 writes and 2 reads go to the directory the command is run in (desk-out/) or a path their caller passes, not to this repository.
 - Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions.
 
