@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Colab caption-drafting lane (`scripts/colab/`):**
+  - Vendors `style-dataset-lab` window library (`colab_window.sh`, `launch_guards.py`, `remote_runner.py`) at commit
+    `df9a1b3be2f8729a57776253e9b0cb32b7f5299c` with SHA-256 input verification and `launch_guards.sha256_self_normalized`
+    self-pinning.
+  - Adds `scripts/colab/launch_desk_draft.sh`, `scripts/colab/desk_draft_helper.py`, `scripts/colab/desk_bundle_now.py`,
+    and hash-locked `scripts/colab/locks/desk_draft.lock` with `--dry`, `--stub` (`CPU-high-mem` real install +
+    weight prefetch & sha check + offline `AutoConfig` load + `compose --draft fake` on 2 synthetic images), and GPU
+    drafting (`L4`/`A100`/`H100`, VRAM >= 22,000 MiB, disk & host-RAM guards, rig-built wheel + uv venv install,
+    local-disk `Qwen/Qwen3-VL-8B-Instruct` @ `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b` fetch with mode-600 token
+    shredding, HTTP 429 backoff inside download bound, `HF_HUB_OFFLINE=1`, per-record heartbeat, chunked private-image
+    upload & verified output fetch, VM workdir deletion before stop, and non-null `refusal_code`/`why` markers with
+    HTTP 412 never-retry vs HTTP 503 retry-later classification).
+  - Adds `EMBEDDING_BACKEND_FORBIDDEN` (`DATASET_DESK_FORBID_EMBEDDERS=1`), `DATASET_DESK_EMBEDDER_LOG_FILE`, and
+    `DATASET_DESK_DRAFT_HEARTBEAT_FILE` support in `dataset_desk/backends.py` and `dataset_desk/errors.py`.
+
 ## [0.3.0] - 2026-11-12
 
 ### Added
