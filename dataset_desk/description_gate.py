@@ -51,6 +51,10 @@ CAPTION_RULES_FILENAME = "caption-rules.json"
 CAPTION_MANIFEST_FILENAME = "captions-manifest.json"
 SEAT_EDITS_FILENAME = "seat-edits.jsonl"
 DRAFTER_RAW_FILENAME = "drafter-raw.jsonl"
+SIDECAR_RECORDS_FILENAME = "sidecar-records.jsonl"
+SIDECAR_REPORT_FILENAME = "sidecar-import.json"
+SIDECAR_IMAGE_EXT = frozenset({".png", ".jpg", ".jpeg", ".webp"})
+KNOWN_MULTIMODAL_POOLS = frozenset({"rustline", "tallow-fen", "salt-road", "hesperia"})
 
 # Pinned Revision 3 acceptance thresholds (no extra degrees of freedom)
 MIN_WORDS = 8
@@ -186,6 +190,8 @@ class CaptionRules:
     backdrop_line: int
     global_banned_words: tuple[str, ...]
     classes: dict[str, ClassCaptionRule]
+    multimodal_pool: str | None = None
+    multimodal_pool_line: int = 1
 
     def _lookup_dot_field(self, raw_record: dict, field_path: str | None) -> str:
         if not field_path or not isinstance(raw_record, dict):
@@ -217,11 +223,17 @@ class CaptionRules:
                 return str(m.group(0)).strip()
         return None
 
-    def resolve_backdrop(self, raw_record: dict, record_file: str) -> tuple[str, str | None]:
+    def resolve_backdrop(
+        self,
+        raw_record: dict,
+        record_file: str,
+        *,
+        record_writer: str | None = None,
+    ) -> tuple[str, str | None]:
         if self.backdrop_field:
             rec_val = self._lookup_dot_field(raw_record, self.backdrop_field)
             if rec_val:
-                return rec_val, f"record:{record_file}"
+                return rec_val, (record_writer or f"record:{record_file}")
         if self.backdrop_text:
             return self.backdrop_text, f"config:{self.config_label}:{self.backdrop_line}"
         return "", None
@@ -276,10 +288,32 @@ def _build_caption_rules(
     if not isinstance(doc, dict):
         raise DeskError("INPUT_BAD_ARGUMENT", f"caption config {config_label!r} must be a JSON object")
     lmap = line_map or {}
+
+    pool_raw = doc.get("multimodal_pool")
+    if pool_raw is not None and not isinstance(pool_raw, str):
+        raise DeskError("INPUT_BAD_ARGUMENT", f"caption config {config_label!r} 'multimodal_pool' must be a string")
+    multimodal_pool: str | None = None
+    if isinstance(pool_raw, str) and pool_raw.strip():
+        norm_pool = pool_raw.strip().lower()
+        if norm_pool not in KNOWN_MULTIMODAL_POOLS:
+            raise DeskError(
+                "INPUT_BAD_ARGUMENT",
+                f"caption config {config_label!r} has unknown 'multimodal_pool' {pool_raw!r}; "
+                f"expected one of {sorted(KNOWN_MULTIMODAL_POOLS)}",
+            )
+        multimodal_pool = norm_pool
+    multimodal_pool_line = lmap.get(("multimodal_pool",), 1)
+
     prefix_raw = doc.get("prefix")
-    if not isinstance(prefix_raw, str) or not prefix_raw.strip():
-        raise DeskError("INPUT_BAD_ARGUMENT", f"caption config {config_label!r} must define a non-empty string 'prefix'")
-    prefix = prefix_raw.strip()
+    if prefix_raw is None and multimodal_pool is not None:
+        prefix = ""
+    else:
+        if not isinstance(prefix_raw, str) or not prefix_raw.strip():
+            raise DeskError(
+                "INPUT_BAD_ARGUMENT",
+                f"caption config {config_label!r} must define a non-empty string 'prefix'",
+            )
+        prefix = prefix_raw.strip()
     prefix_line = lmap.get(("prefix",), 1)
 
     drafter_raw = doc.get("drafter")
@@ -388,6 +422,8 @@ def _build_caption_rules(
         backdrop_line=backdrop_line,
         global_banned_words=global_banned,
         classes=classes,
+        multimodal_pool=multimodal_pool,
+        multimodal_pool_line=multimodal_pool_line,
     )
 
 
@@ -630,17 +666,32 @@ def _extract_record_fields(raw: dict) -> dict:
         prompt = (raw.get("prompt") or "").strip()
         existing_author_kind = raw.get("author_kind")
 
-    if j_exp and status == "approved":
-        text = j_exp
-        source = "judgment.explanation"
-    elif c_subj:
-        text = c_subj
-        source = "canon.subject"
-    else:
-        text = ""
-        source = "none"
+    sidecar_file = (raw.get("_sidecar_file") or raw.get("sidecar_file") or "").replace("\\", "/")
+    if not sidecar_file and "provenance" in raw:
+        prov_src = (raw.get("provenance") or {}).get("source") or ""
+        if isinstance(prov_src, str) and prov_src.startswith("sidecar:"):
+            sidecar_file = prov_src[len("sidecar:"):].replace("\\", "/")
 
-    record_file = (raw.get("_record_file") or (f"records/{rid}.json" if rid else "records/unknown.json")).replace("\\", "/")
+    if sidecar_file:
+        text = j_exp if status == "approved" else ""
+        source = f"sidecar:{sidecar_file}"
+        record_file = sidecar_file
+        record_writer = f"sidecar:{sidecar_file}"
+    else:
+        if j_exp and status == "approved":
+            text = j_exp
+            source = "judgment.explanation"
+        elif c_subj:
+            text = c_subj
+            source = "canon.subject"
+        else:
+            text = ""
+            source = "none"
+        record_file = (
+            raw.get("_record_file") or (f"records/{rid}.json" if rid else "records/unknown.json")
+        ).replace("\\", "/")
+        record_writer = f"record:{record_file}"
+
     return {
         "id": rid,
         "asset_path": asset_path,
@@ -653,6 +704,8 @@ def _extract_record_fields(raw: dict) -> dict:
         "existing_author_kind": existing_author_kind,
         "raw_record": raw,
         "record_file": record_file,
+        "sidecar_file": sidecar_file or None,
+        "record_writer": record_writer,
     }
 
 
@@ -701,17 +754,20 @@ def audit_records(
                 "id": rid, "asset_path": "", "status": "missing",
                 "judgment_explanation": "", "canon_subject": "", "prompt": "",
                 "existing_author_kind": None, "raw_record": {}, "record_file": f"records/{rid}.json",
+                "sidecar_file": None, "record_writer": f"record:records/{rid}.json",
             })
             qt = (qtext or "").strip()
             base["text"] = qt
             if allow_composed_source and qt:
                 base["source"] = "composed"
             elif qt and qt == base["judgment_explanation"]:
-                base["source"] = "judgment.explanation"
+                base["source"] = (
+                    f"sidecar:{base['sidecar_file']}" if base.get("sidecar_file") else "judgment.explanation"
+                )
             elif qt and qt == base["canon_subject"]:
                 base["source"] = "canon.subject"
             elif not qt:
-                base["source"] = "none"
+                base["source"] = f"sidecar:{base['sidecar_file']}" if base.get("sidecar_file") else "none"
             else:
                 base["source"] = "custom"
             target_list.append(base)
@@ -855,7 +911,8 @@ def audit_records(
             flags.append("empty_description")
             reasons.append("no approved description text")
 
-        if e["source"] not in ("judgment.explanation", "composed"):
+        is_sidecar_src = isinstance(e["source"], str) and e["source"].startswith("sidecar:")
+        if e["source"] not in ("judgment.explanation", "composed") and not is_sidecar_src:
             flags.append("not_current_description")
             if e["source"] == "canon.subject":
                 reasons.append("text comes from canon.subject, not judgment.explanation")
@@ -913,7 +970,9 @@ def audit_records(
                 if tw and not contains_word_sequence(dw, tw):
                     missing_terms.append(req_term)
             if rules.backdrop_required:
-                b_text, _b_writer = rules.resolve_backdrop(e["raw_record"], e["record_file"])
+                b_text, _b_writer = rules.resolve_backdrop(
+                    e["raw_record"], e["record_file"], record_writer=e["record_writer"]
+                )
                 bw_req = words(b_text)
                 if not bw_req:
                     missing_terms.append("<backdrop>")
@@ -976,6 +1035,13 @@ def audit_records(
             else ("human" if passed_model_free else "captioner_assisted")
         )
 
+        init_writers = [e["record_writer"]] if e.get("sidecar_file") else None
+        init_parts = (
+            [{"part": "free", "text": e["text"], "writer": e["record_writer"]}]
+            if (e.get("sidecar_file") and e["text"])
+            else None
+        )
+
         rows.append({
             "id": rid,
             "asset_path": e["asset_path"],
@@ -1015,8 +1081,8 @@ def audit_records(
             "drafter_writer": None,
             "seat_edit": None,
             "seat_id": None,
-            "writers": None,
-            "parts": None,
+            "writers": init_writers,
+            "parts": init_parts,
             "final_caption": None,
         })
 
@@ -1061,6 +1127,266 @@ def audit_records(
         "records": rows,
         "flagged": flagged,
         "queue": flagged,
+    }
+
+
+def _trace_comfy_prompt_text(graph: dict, link: Any) -> str | None:
+    visited: set[str] = set()
+    cur = link
+    while isinstance(cur, list) and cur and isinstance(cur[0], (str, int)):
+        nid = str(cur[0])
+        if nid in visited or nid not in graph:
+            break
+        visited.add(nid)
+        node = graph[nid]
+        if not isinstance(node, dict):
+            break
+        inp = node.get("inputs") or {}
+        for key in ("text", "prompt", "text_g", "text_l"):
+            val = inp.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+        cur = inp.get("conditioning") or inp.get("conditioning_1") or inp.get("positive")
+    return None
+
+
+def _extract_png_prompt_text(path: str) -> str:
+    """Extract embedded ComfyUI PNG tEXt `prompt` string when present, returning '' otherwise."""
+    if os.path.splitext(path)[1].lower() != ".png":
+        return ""
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            raw = (getattr(im, "info", None) or {}).get("prompt")
+    except Exception:  # noqa: BLE001
+        return ""
+    if not raw or not isinstance(raw, str):
+        return ""
+    try:
+        graph = json.loads(raw)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(graph, dict):
+        return ""
+    fallback_texts: list[str] = []
+    for node in graph.values():
+        if not isinstance(node, dict):
+            continue
+        cls = node.get("class_type") or ""
+        inp = node.get("inputs") or {}
+        if cls in ("KSampler", "KSamplerAdvanced", "SamplerCustom", "SamplerCustomAdvanced", "RandomNoise"):
+            pos_txt = _trace_comfy_prompt_text(graph, inp.get("positive"))
+            if pos_txt:
+                return pos_txt
+        elif cls in ("CLIPTextEncode", "TextEncodeQwenImageEditPlus"):
+            txt = (inp.get("text") or inp.get("prompt") or "").strip()
+            if txt:
+                fallback_texts.append(txt)
+    return fallback_texts[0] if fallback_texts else ""
+
+
+def _load_wave_prompts(project: str) -> dict[str, str]:
+    out_dir = os.path.join(project, "outputs")
+    if not os.path.isdir(out_dir):
+        return {}
+    prompts: dict[str, str] = {}
+    for folder in sorted(os.listdir(out_dir)):
+        gen_path = os.path.join(out_dir, folder, "generation.json")
+        if not os.path.isfile(gen_path):
+            continue
+        try:
+            with open(gen_path, encoding="utf-8") as f:
+                gen = json.load(f)
+            for item in gen.get("items") or []:
+                fname = item.get("file")
+                p_txt = (item.get("prompt") or "").strip()
+                if fname and p_txt:
+                    prompts[f"outputs/{folder}/{fname}".replace("\\", "/")] = p_txt
+        except (OSError, json.JSONDecodeError):
+            continue
+    return prompts
+
+
+def scan_sidecar_project(project: str) -> dict:
+    """Scan `project` for images paired with same-stem `.txt` sidecars.
+
+    - Each `(image, <stem>.txt)` pair becomes an approved record with provenance source `sidecar:<file>`.
+    - Images without a sidecar are listed in `images_without_sidecar` and are never given invented text.
+    - Nothing is written inside `project`.
+    """
+    abs_proj = os.path.abspath(project)
+    if not os.path.isdir(abs_proj):
+        raise DeskError("INPUT_BAD_ARGUMENT", f"project folder {project!r} does not exist")
+
+    outputs_root = os.path.join(abs_proj, "outputs")
+    skip_top_outputs = os.path.isdir(outputs_root) and any(
+        os.path.isdir(os.path.join(outputs_root, d)) for d in os.listdir(outputs_root)
+    )
+    wave_prompts = _load_wave_prompts(abs_proj)
+
+    raw_pairs: list[tuple[str, str, str, str, str]] = []  # (stem, rel_img, full_img, rel_txt, full_txt)
+    images_without_sidecar: list[str] = []
+    orphan_sidecars: list[str] = []
+
+    for root, dirs, files in os.walk(abs_proj):
+        dirs[:] = sorted(d for d in dirs if d not in (".git", "records", "__pycache__"))
+        is_top_outputs = skip_top_outputs and os.path.abspath(root) == os.path.abspath(outputs_root)
+        if is_top_outputs:
+            continue
+
+        txt_by_lower_stem: dict[str, str] = {}
+        txt_exact_stems: dict[str, str] = {}
+        for fn in sorted(files):
+            stem, ext = os.path.splitext(fn)
+            if ext.lower() == ".txt":
+                txt_exact_stems.setdefault(stem, fn)
+                txt_by_lower_stem.setdefault(stem.lower(), fn)
+
+        paired_txt_names: set[str] = set()
+        for fn in sorted(files):
+            stem, ext = os.path.splitext(fn)
+            if ext.lower() not in SIDECAR_IMAGE_EXT:
+                continue
+            full_img = os.path.join(root, fn)
+            rel_img = os.path.relpath(full_img, abs_proj).replace("\\", "/")
+            txt_fn = txt_exact_stems.get(stem) or txt_by_lower_stem.get(stem.lower())
+            if txt_fn is None:
+                images_without_sidecar.append(rel_img)
+                continue
+            paired_txt_names.add(txt_fn)
+            full_txt = os.path.join(root, txt_fn)
+            rel_txt = os.path.relpath(full_txt, abs_proj).replace("\\", "/")
+            raw_pairs.append((stem, rel_img, full_img, rel_txt, full_txt))
+
+        for fn in sorted(files):
+            if os.path.splitext(fn)[1].lower() == ".txt" and fn not in paired_txt_names:
+                rel_orphan = os.path.relpath(os.path.join(root, fn), abs_proj).replace("\\", "/")
+                orphan_sidecars.append(rel_orphan)
+
+    stem_counts = Counter(stem for stem, *_rest in raw_pairs)
+    records: list[dict] = []
+    for stem, rel_img, full_img, rel_txt, full_txt in raw_pairs:
+        rid = (
+            stem
+            if stem_counts[stem] == 1
+            else os.path.splitext(rel_img)[0].replace("/", "__")
+        )
+        with open(full_txt, encoding="utf-8", errors="replace") as f:
+            sidecar_text = f.read().strip()
+        gen_prompt = wave_prompts.get(rel_img) or _extract_png_prompt_text(full_img)
+        records.append({
+            "id": rid,
+            "asset_path": rel_img,
+            "judgment": {
+                "status": "approved",
+                "explanation": sidecar_text,
+            },
+            "provenance": {
+                "prompt": gen_prompt,
+                "source": f"sidecar:{rel_txt}",
+            },
+            "_sidecar_file": rel_txt,
+        })
+
+    return {
+        "records": records,
+        "images_without_sidecar": images_without_sidecar,
+        "orphan_sidecars": orphan_sidecars,
+        "total_images": len(records) + len(images_without_sidecar),
+    }
+
+
+def save_sidecar_import(out_dir: str, scan_result: dict) -> tuple[str, str]:
+    """Persist imported sidecar records and missing-sidecar report under `out_dir` (never inside `project`)."""
+    os.makedirs(out_dir, exist_ok=True)
+    recs_path = os.path.join(out_dir, SIDECAR_RECORDS_FILENAME)
+    with open(recs_path, "w", encoding="utf-8") as f:
+        for rec in scan_result.get("records") or []:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    rep_path = os.path.join(out_dir, SIDECAR_REPORT_FILENAME)
+    rep_doc = {
+        "total_images": int(scan_result.get("total_images", 0)),
+        "paired_count": len(scan_result.get("records") or []),
+        "images_without_sidecar": list(scan_result.get("images_without_sidecar") or []),
+        "orphan_sidecars": list(scan_result.get("orphan_sidecars") or []),
+    }
+    with open(rep_path, "w", encoding="utf-8") as f:
+        json.dump(rep_doc, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    return recs_path, rep_path
+
+
+def load_sidecar_import(out_dir: str) -> tuple[list[dict], list[str]]:
+    """Load cached sidecar records and missing-sidecar paths from `out_dir` when present."""
+    recs_path = os.path.join(out_dir, SIDECAR_RECORDS_FILENAME)
+    rep_path = os.path.join(out_dir, SIDECAR_REPORT_FILENAME)
+    recs: list[dict] = []
+    missing: list[str] = []
+    if os.path.isfile(recs_path):
+        with open(recs_path, encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    doc = json.loads(line)
+                    if isinstance(doc, dict):
+                        recs.append(doc)
+    if os.path.isfile(rep_path):
+        try:
+            with open(rep_path, encoding="utf-8") as f:
+                rep_doc = json.load(f)
+            if isinstance(rep_doc, dict):
+                missing = [str(p) for p in (rep_doc.get("images_without_sidecar") or [])]
+        except (OSError, json.JSONDecodeError):
+            missing = []
+    return recs, missing
+
+
+def import_sidecars(
+    project: str,
+    out_dir: str,
+    *,
+    caption_rules: CaptionRules | dict | str | None = None,
+    drafter=None,
+    dhashes: dict[str, str] | None = None,
+    image_vecs: dict[str, Any] | None = None,
+    token_counter: Callable[[list[str]], list[int]] | dict[str, int] | None = None,
+) -> dict:
+    """Import `(image, .txt)` sidecar pairs from `project`, run the description gate, and write review files under `out_dir`."""
+    _ensure_out_outside_project(project, out_dir)
+    eff_rules = (
+        coerce_caption_rules(caption_rules, project=project)
+        if caption_rules is not None
+        else load_caption_rules(project=project)
+    )
+    scan_res = scan_sidecar_project(project)
+    recs_path, rep_path = save_sidecar_import(out_dir, scan_res)
+    audit = audit_records(
+        scan_res["records"],
+        token_counter=token_counter,
+        caption_rules=eff_rules,
+    )
+    audit["images_without_sidecar"] = list(scan_res["images_without_sidecar"])
+    if drafter is not None:
+        draft_flagged_records(project, audit, drafter)
+    rev_jsonl, rev_ws = write_review_files(
+        project,
+        out_dir,
+        audit,
+        dhashes=dhashes,
+        image_vecs=image_vecs,
+    )
+    return {
+        "total_images": scan_res["total_images"],
+        "paired": len(scan_res["records"]),
+        "images_without_sidecar": scan_res["images_without_sidecar"],
+        "orphan_sidecars": scan_res["orphan_sidecars"],
+        "passed_model_free_count": audit["passed_model_free_count"],
+        "flagged_count": audit["flagged_count"],
+        "sidecar_records_path": recs_path,
+        "sidecar_report_path": rep_path,
+        "review_jsonl_path": rev_jsonl,
+        "worksheet_path": rev_ws,
+        "audit": audit,
     }
 
 
@@ -1400,6 +1726,16 @@ def write_review_files(
                 f"| `{r['id']}` | {_fmt_link(r['asset_path'])} | `{r['gate_status']}` | `{r['author_kind']}` |"
             )
 
+    missing_sc = list(audit.get("images_without_sidecar") or [])
+    if missing_sc:
+        lines += [
+            "",
+            "## Images without `.txt` sidecar (reported, never invented)",
+            "",
+        ]
+        for rel_img in missing_sc:
+            lines.append(f"- {_fmt_link(rel_img)}")
+
     with open(ws_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return jsonl_path, ws_path
@@ -1614,15 +1950,16 @@ def compose_captions(
     image_vecs: dict[str, Any] | None = None,
     token_counter: Callable[[list[str]], list[int]] | dict[str, int] | None = None,
     manifest_name: str = CAPTION_MANIFEST_FILENAME,
+    sidecars: bool = False,
 ) -> dict:
     """Compose final training captions under `out_dir` (never inside `project`) and emit a lane-3 dataset manifest.
 
     Each final caption is assembled from:
     1. `prefix` verbatim from project config (`config:<file>:<line>`);
     2. `class` required terms verbatim from project config (`config:<file>:<line>`);
-    3. optional `backdrop` slot (`record:<file>` or `config:<file>:<line>`);
+    3. optional `backdrop` slot (`record:<file>`, `sidecar:<file>`, or `config:<file>:<line>`);
     4. free visible-content part from `seat:<name>` edit if one exists, else `drafter:<id>@<rev>:<prompt sha>`, else
-       the existing approved record description (`record:<file>`).
+       the existing approved record/sidecar description (`record:<file>` or `sidecar:<file>`).
 
     Edited drafter captions carry `author_kind: "captioner_assisted"`; unedited drafter captions carry
     `author_kind: "captioner_draft_unedited"`.
@@ -1633,13 +1970,26 @@ def compose_captions(
         if caption_rules is not None
         else load_caption_rules(project=project)
     )
-    if rules is None:
+    if rules is None or not rules.prefix:
         raise DeskError(
             "INPUT_BAD_ARGUMENT",
-            f"compose requires {CAPTION_RULES_FILENAME} in {project!r} or --caption-config <path>",
+            f"compose requires a non-empty 'prefix' in {CAPTION_RULES_FILENAME} or --caption-config <path>",
         )
 
-    raw_recs = load_project_records(project)
+    raw_recs = load_project_records(project) if not sidecars else []
+    missing_sidecars: list[str] = []
+    if not raw_recs:
+        cached_sc_recs, cached_missing = load_sidecar_import(out_dir)
+        if sidecars or not cached_sc_recs:
+            sc_scan = scan_sidecar_project(project)
+            if sidecars or sc_scan["records"]:
+                save_sidecar_import(out_dir, sc_scan)
+                raw_recs = sc_scan["records"]
+                missing_sidecars = sc_scan["images_without_sidecar"]
+        else:
+            raw_recs = cached_sc_recs
+            missing_sidecars = cached_missing
+
     extracted = [e for e in (_extract_record_fields(r) for r in raw_recs) if e["status"] == "approved"]
     if not extracted:
         raise DeskError("INPUT_BAD_ARGUMENT", f"no approved records found in {project!r}")
@@ -1725,7 +2075,9 @@ def compose_captions(
             leading_texts.append(req_term)
 
         # 3. Optional backdrop slot
-        b_text, b_writer = rules.resolve_backdrop(e["raw_record"], e["record_file"])
+        b_text, b_writer = rules.resolve_backdrop(
+            e["raw_record"], e["record_file"], record_writer=e["record_writer"]
+        )
         if b_text and b_writer:
             parts.append({
                 "part": "backdrop",
@@ -1734,7 +2086,7 @@ def compose_captions(
             })
             leading_texts.append(b_text)
 
-        # 4. Free visible-content part: seat edit > drafter > existing record
+        # 4. Free visible-content part: seat edit > drafter > existing record/sidecar
         ed = edits_map.get(rid)
         d_info = live_drafts.get(rid)
         if d_info is None:
@@ -1781,7 +2133,7 @@ def compose_captions(
                 parts.append({
                     "part": "free",
                     "text": free_clean,
-                    "writer": f"record:{e['record_file']}",
+                    "writer": e["record_writer"],
                 })
             stratum = (
                 e["existing_author_kind"]
@@ -1794,6 +2146,7 @@ def compose_captions(
         composed_by_id[rid] = final_caption
         meta_by_id[rid] = {
             "author_kind": stratum,
+            "source": e["record_writer"],
             "writers": writers,
             "parts": parts,
             "final_caption": final_caption,
@@ -1807,6 +2160,7 @@ def compose_captions(
             "asset_path": asset_path,
             "sha256": img_sha,
             "caption": final_caption,
+            "source": e["record_writer"],
             "author_kind": stratum,
             "writers": writers,
             "parts": parts,
@@ -1820,6 +2174,8 @@ def compose_captions(
         caption_rules=rules,
         allow_composed_source=True,
     )
+    if missing_sidecars:
+        audit["images_without_sidecar"] = list(missing_sidecars)
     first_d_info = next((m["draft_info"] for m in meta_by_id.values() if m["draft_info"] is not None), None)
     if first_d_info is not None:
         audit["drafter_id"] = first_d_info["drafter_id"]
@@ -1869,5 +2225,6 @@ def compose_captions(
         "review_jsonl_path": rev_jsonl,
         "worksheet_path": rev_ws,
         "items": manifest_items,
+        "images_without_sidecar": missing_sidecars,
         "audit": audit,
     }

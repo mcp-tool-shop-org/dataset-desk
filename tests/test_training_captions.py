@@ -18,19 +18,30 @@ import unittest
 from unittest import mock
 
 import numpy as np
-from PIL import Image
+from PIL import Image, PngImagePlugin
 
 from dataset_desk import backends, description_gate, desk, registry
 from dataset_desk.errors import EXIT_OK, EXIT_USER, DeskError
 from tests import fakes
 
 
-def _write_png(path: str, rgb: tuple[int, int, int], seed: int = 1) -> str:
+def _write_png(
+    path: str,
+    rgb: tuple[int, int, int],
+    seed: int = 1,
+    *,
+    comfy_prompt: str | None = None,
+) -> str:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     rng = np.random.default_rng(seed)
     base = np.array(rgb, dtype=np.int32)
     arr = np.clip(base + rng.integers(-15, 16, size=(16, 16, 3)), 0, 255).astype(np.uint8)
-    Image.fromarray(arr, mode="RGB").save(path)
+    pnginfo = None
+    if comfy_prompt is not None:
+        pnginfo = PngImagePlugin.PngInfo()
+        graph = {"1": {"class_type": "CLIPTextEncode", "inputs": {"text": comfy_prompt}}}
+        pnginfo.add_text("prompt", json.dumps(graph))
+    Image.fromarray(arr, mode="RGB").save(path, pnginfo=pnginfo)
     with open(path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
 
@@ -78,6 +89,9 @@ class DrafterSettingTests(unittest.TestCase):
         env = mock.patch.dict(os.environ)
         env.start()
         self.addCleanup(env.stop)
+        os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
+        os.environ.pop("DATASET_DESK_POOL_DIRS", None)
+        os.environ["DATASET_DESK_USER_CONFIG"] = ""
 
     def test_qwen3_vl_registry_pin_licence_and_default_drafter(self):
         self.assertEqual(registry.DEFAULT_DRAFTER, "plain-sight")
@@ -374,6 +388,9 @@ class CompositionAndProvenanceTests(unittest.TestCase):
         env = mock.patch.dict(os.environ)
         env.start()
         self.addCleanup(env.stop)
+        os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
+        os.environ.pop("DATASET_DESK_POOL_DIRS", None)
+        os.environ["DATASET_DESK_USER_CONFIG"] = ""
 
         # Multi-line config with known 1-based line numbers
         self.config_lines = [
@@ -607,6 +624,9 @@ class BlindWorksheetAndReimportTests(unittest.TestCase):
         env = mock.patch.dict(os.environ)
         env.start()
         self.addCleanup(env.stop)
+        os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
+        os.environ.pop("DATASET_DESK_POOL_DIRS", None)
+        os.environ["DATASET_DESK_USER_CONFIG"] = ""
 
     def test_blind_worksheet_uses_dinov2_and_dhash_siblings_hides_prompts_and_reimports_seat(self):
         items_list: list[desk.Item] = []
@@ -718,6 +738,310 @@ class BlindWorksheetAndReimportTests(unittest.TestCase):
         loaded_edits = description_gate.load_seat_edits(self.out)
         self.assertEqual(loaded_edits["sr_0"]["edited_text"], "stone courtyard archway | weathered timber bench")
         self.assertEqual(loaded_edits["sr_0"]["writer"], "seat:seat-alpha")
+
+
+class Addendum1SidecarAndPoolLockTests(unittest.TestCase):
+    """Synthetic tests for Addendum 1 (Parts A-D):
+    1. Tagged copy refused (`multimodal_pool: <name>`);
+    2. Renamed copy WITHOUT tag and with matching image sha256s refused fail-closed;
+    3. Renamed copy without tag and with no manifest configured emits explicit 'detection off' warning;
+    4. Sidecar import: pairs, missing sidecars (reported, never invented), gate rules, and `sidecar:<file>` provenance.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = self._tmp.name
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
+        os.environ.pop("DATASET_DESK_POOL_DIRS", None)
+        os.environ["DATASET_DESK_USER_CONFIG"] = ""
+
+    def test_tagged_copy_is_refused(self):
+        # Renamed training copy carrying explicit `multimodal_pool: "salt-road"` tag in caption-rules.json
+        tagged_dir = os.path.join(self.tmp, "lora-training-copy")
+        out_dir = os.path.join(self.tmp, "out-tagged")
+        os.makedirs(os.path.join(tagged_dir, "outputs", "w1"), exist_ok=True)
+        _write_png(os.path.join(tagged_dir, "outputs", "w1", "img_01.png"), (90, 110, 130), seed=31)
+        with open(os.path.join(tagged_dir, "caption-rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"multimodal_pool": "salt-road", "prefix": "etching plate,"}, f)
+
+        # Refuses multimodal description embeddings and arm-model acceptance on the tagged copy
+        with self.assertRaises(DeskError) as cm_eg2:
+            desk.check_multimodal_pool(tagged_dir, "eg2", images_only=False, allow_multimodal_pool=False)
+        self.assertEqual(cm_eg2.exception.code, "PERM_LOCKED_POOL")
+        self.assertIn("salt-road", cm_eg2.exception.message)
+
+        with self.assertRaises(DeskError) as cm_arm_s:
+            desk.ai_eyes_verify(tagged_dir, {"img_01": "synthetic description text"})
+        self.assertEqual(cm_arm_s.exception.code, "PERM_LOCKED_POOL")
+
+        with self.assertRaises(DeskError) as cm_arm_g:
+            desk.eg2_fit_accept(tagged_dir, {"img_01": "synthetic description text"})
+        self.assertEqual(cm_arm_g.exception.code, "PERM_LOCKED_POOL")
+
+        err_cli = io.StringIO()
+        with contextlib.redirect_stderr(err_cli):
+            rc = desk.run(["index", "--project", tagged_dir, "--out", out_dir, "--backend", "siglip2"])
+        self.assertEqual(rc, EXIT_USER)
+        self.assertIn("PERM_LOCKED_POOL", err_cli.getvalue())
+        self.assertIn("salt-road", err_cli.getvalue())
+
+        # Tag-only project.json (`multimodal_pool` without `prefix`) is also refused
+        proj_json_dir = os.path.join(self.tmp, "another-renamed-copy")
+        os.makedirs(proj_json_dir, exist_ok=True)
+        with open(os.path.join(proj_json_dir, "project.json"), "w", encoding="utf-8") as f:
+            json.dump({"multimodal_pool": "tallow-fen"}, f)
+        with self.assertRaises(DeskError) as cm_pjson:
+            desk.check_multimodal_pool(proj_json_dir, "siglip2", images_only=False)
+        self.assertEqual(cm_pjson.exception.code, "PERM_LOCKED_POOL")
+        self.assertIn("tallow-fen", cm_pjson.exception.message)
+
+        # Unknown pool tag is rejected as INPUT_BAD_ARGUMENT (typos never silently unlock)
+        typo_dir = os.path.join(self.tmp, "typo-copy")
+        os.makedirs(typo_dir, exist_ok=True)
+        with open(os.path.join(typo_dir, "project.json"), "w", encoding="utf-8") as f:
+            json.dump({"multimodal_pool": "not-a-valid-pool"}, f)
+        with self.assertRaises(DeskError) as cm_typo:
+            desk.check_multimodal_pool(typo_dir, "none")
+        self.assertEqual(cm_typo.exception.code, "INPUT_BAD_ARGUMENT")
+
+        # Image-only (`--backend none`, `dinov2`, `--images-only`) and `--allow-multimodal-pool` remain permitted
+        desk.check_multimodal_pool(tagged_dir, "none")
+        desk.check_multimodal_pool(tagged_dir, "dinov2")
+        desk.check_multimodal_pool(tagged_dir, "eg2", images_only=True)
+        desk.check_multimodal_pool(tagged_dir, "eg2", allow_multimodal_pool=True)
+
+    def test_untagged_renamed_copy_with_matching_shas_is_refused_fail_closed(self):
+        # Synthetic locked pool folder `salt-road` with 3 images
+        locked_sr = os.path.join(self.tmp, "salt-road")
+        sha_1 = _write_png(os.path.join(locked_sr, "outputs", "w1", "sr_01.png"), (120, 40, 60), seed=41)
+        sha_2 = _write_png(os.path.join(locked_sr, "outputs", "w1", "sr_02.png"), (40, 120, 60), seed=42)
+        sha_3 = _write_png(os.path.join(locked_sr, "outputs", "w1", "sr_03.png"), (60, 40, 120), seed=43)
+
+        # Untagged renamed copy containing 2 byte-identical images from `salt-road` + 1 unrelated image
+        untagged_copy = os.path.join(self.tmp, "renamed-training-copy")
+        os.makedirs(untagged_copy, exist_ok=True)
+        for src_name, dst_name in (("sr_01.png", "train_a.png"), ("sr_02.png", "train_b.png")):
+            with open(os.path.join(locked_sr, "outputs", "w1", src_name), "rb") as fsrc:
+                data = fsrc.read()
+            with open(os.path.join(untagged_copy, dst_name), "wb") as fdst:
+                fdst.write(data)
+        _write_png(os.path.join(untagged_copy, "train_c.png"), (200, 180, 50), seed=44)
+
+        # 1. Local manifest file via DATASET_DESK_POOL_MANIFEST env var (outside repo)
+        manifest_file = os.path.join(self.tmp, "local-pool-hashes.json")
+        with open(manifest_file, "w", encoding="utf-8") as f:
+            json.dump({"salt-road": [sha_1, sha_2, sha_3]}, f)
+        os.environ["DATASET_DESK_POOL_MANIFEST"] = manifest_file
+
+        # Refused fail-closed even when backend == "none" (lite pass)!
+        with self.assertRaises(DeskError) as cm_env:
+            desk.check_multimodal_pool(untagged_copy, "none")
+        self.assertEqual(cm_env.exception.code, "PERM_LOCKED_POOL")
+        self.assertIn("salt-road", cm_env.exception.message)
+        self.assertIn("2 matching images", cm_env.exception.message)
+
+        err_idx = io.StringIO()
+        with contextlib.redirect_stderr(err_idx):
+            rc_idx = desk.run([
+                "index", "--project", untagged_copy, "--out", os.path.join(self.tmp, "out-u1"),
+                "--backend", "none", "--sidecars",
+            ])
+        self.assertEqual(rc_idx, EXIT_USER)
+        self.assertIn("PERM_LOCKED_POOL", err_idx.getvalue())
+        self.assertIn("salt-road", err_idx.getvalue())
+        self.assertIn("2 matching images", err_idx.getvalue())
+
+        # 2. User config JSON via DATASET_DESK_USER_CONFIG
+        os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
+        user_cfg = os.path.join(self.tmp, "user-config.json")
+        with open(user_cfg, "w", encoding="utf-8") as f:
+            json.dump({"pool_manifest": "local-pool-hashes.json"}, f)
+        os.environ["DATASET_DESK_USER_CONFIG"] = user_cfg
+
+        with self.assertRaises(DeskError) as cm_ucfg:
+            desk.check_multimodal_pool(untagged_copy, "dinov2", images_only=True)
+        self.assertEqual(cm_ucfg.exception.code, "PERM_LOCKED_POOL")
+        self.assertIn("salt-road", cm_ucfg.exception.message)
+        self.assertIn("2 matching images", cm_ucfg.exception.message)
+
+        # 3. Hashes computed directly from the locked project's own folder via --locked-pool-dir
+        os.environ["DATASET_DESK_USER_CONFIG"] = ""
+        err_dir = io.StringIO()
+        with contextlib.redirect_stderr(err_dir):
+            rc_dir = desk.run([
+                "sidecar-import", "--project", untagged_copy, "--out", os.path.join(self.tmp, "out-u2"),
+                "--locked-pool-dir", locked_sr,
+            ])
+        self.assertEqual(rc_dir, EXIT_USER)
+        self.assertIn("PERM_LOCKED_POOL", err_dir.getvalue())
+        self.assertIn("salt-road", err_dir.getvalue())
+        self.assertIn("2 matching images", err_dir.getvalue())
+
+    def test_untagged_renamed_copy_without_manifest_emits_detection_off_warning(self):
+        untagged_dir = os.path.join(self.tmp, "untagged-without-manifest")
+        out_dir = os.path.join(self.tmp, "out-nomf")
+        _write_png(os.path.join(untagged_dir, "sample_01.png"), (80, 140, 100), seed=51)
+        with open(os.path.join(untagged_dir, "sample_01.txt"), "w", encoding="utf-8") as f:
+            f.write("carved wooden door set inside weathered limestone archway beside stone steps")
+
+        # Ensure zero manifest/folder sources are configured
+        os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
+        os.environ.pop("DATASET_DESK_POOL_DIRS", None)
+        os.environ["DATASET_DESK_USER_CONFIG"] = ""
+
+        err_direct = io.StringIO()
+        with contextlib.redirect_stderr(err_direct):
+            desk.check_multimodal_pool(untagged_dir, "none")
+        self.assertIn("renamed-copy detection is off", err_direct.getvalue())
+        self.assertIn("detection off", err_direct.getvalue())
+
+        err_cli = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err_cli):
+            rc = desk.run(["index", "--project", untagged_dir, "--out", out_dir, "--backend", "none", "--sidecars"])
+        self.assertEqual(rc, EXIT_OK)
+        self.assertIn("renamed-copy detection is off", err_cli.getvalue())
+        self.assertEqual(err_cli.getvalue().count("renamed-copy detection is off"), 1)
+
+    def test_sidecar_import_pairs_missing_sidecars_gate_and_provenance_source(self):
+        sidecar_proj = os.path.join(self.tmp, "sidecar-set")
+        os.makedirs(sidecar_proj, exist_ok=True)
+
+        rules_lines = [
+            "{",                                                        # line 1
+            '  "prefix": "woodcut print,",',                            # line 2
+            '  "drafter": "none",',                                     # line 3
+            '  "class_pattern": "^(?P<class>[a-z]+)_[0-9]+\\\\.png$",', # line 4
+            '  "classes": {',                                           # line 5
+            '    "harbor": {',                                          # line 6
+            '      "required_terms": ["timber pier"],',                 # line 7
+            '      "banned_words": ["neon"]',                           # line 8
+            "    }",                                                    # line 9
+            "  }",                                                      # line 10
+            "}",                                                        # line 11
+        ]
+        with open(os.path.join(sidecar_proj, "caption-rules.json"), "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(rules_lines) + "\n")
+
+        # 1. Clean paired sidecar
+        sha_h1 = _write_png(os.path.join(sidecar_proj, "harbor_01.png"), (100, 120, 140), seed=61)
+        with open(os.path.join(sidecar_proj, "harbor_01.txt"), "w", encoding="utf-8") as f:
+            f.write("woodcut print, timber pier, two moored skiffs resting beside coiled rope and stone steps")
+
+        # 2. Paired sidecar echoing embedded PNG generation prompt + missing prefix & term + banned word
+        embedded_prompt = "moonlit quay wooden wharf ink wash crosshatching study"
+        _write_png(
+            os.path.join(sidecar_proj, "harbor_02.png"),
+            (120, 90, 110),
+            seed=62,
+            comfy_prompt=embedded_prompt,
+        )
+        with open(os.path.join(sidecar_proj, "harbor_02.txt"), "w", encoding="utf-8") as f:
+            f.write("moonlit quay wooden wharf ink wash crosshatching beside neon lantern")
+
+        # 3 & 4. Duplicate paired sidecars
+        dup_sidecar = "woodcut print, timber pier, narrow stone quay beside calm dark water at low tide"
+        _write_png(os.path.join(sidecar_proj, "harbor_03.png"), (80, 130, 95), seed=63)
+        with open(os.path.join(sidecar_proj, "harbor_03.txt"), "w", encoding="utf-8") as f:
+            f.write(dup_sidecar)
+        _write_png(os.path.join(sidecar_proj, "harbor_04.png"), (85, 125, 100), seed=64)
+        with open(os.path.join(sidecar_proj, "harbor_04.txt"), "w", encoding="utf-8") as f:
+            f.write(dup_sidecar)
+
+        # 5. Unpaired image WITHOUT a .txt sidecar (must be reported, never invented)
+        _write_png(os.path.join(sidecar_proj, "harbor_05.png"), (150, 110, 70), seed=65)
+
+        before_snap = _snapshot_tree(sidecar_proj)
+
+        # Refuses --out inside --project
+        err_inside = io.StringIO()
+        with contextlib.redirect_stderr(err_inside):
+            rc_bad = desk.run([
+                "sidecar-import", "--project", sidecar_proj, "--out", os.path.join(sidecar_proj, "inside"),
+            ])
+        self.assertEqual(rc_bad, EXIT_USER)
+        self.assertIn("PERM_OUT_INSIDE_PROJECT", err_inside.getvalue())
+
+        # Flow A: `sidecar-import` CLI command
+        out_imp = os.path.join(self.tmp, "out-sidecar-import")
+        stdout_imp = io.StringIO()
+        with contextlib.redirect_stdout(stdout_imp), contextlib.redirect_stderr(io.StringIO()):
+            rc_imp = desk.run(["sidecar-import", "--project", sidecar_proj, "--out", out_imp])
+        self.assertEqual(rc_imp, EXIT_OK)
+        imp_doc = json.loads(stdout_imp.getvalue())
+        self.assertEqual(imp_doc["total_images"], 5)
+        self.assertEqual(imp_doc["paired"], 4)
+        self.assertEqual(imp_doc["images_without_sidecar"], ["harbor_05.png"])
+        self.assertEqual(imp_doc["passed_model_free_count"], 1)
+        self.assertEqual(imp_doc["flagged_count"], 3)
+
+        with open(os.path.join(out_imp, "description-review.jsonl"), encoding="utf-8") as f:
+            imp_rows = {r["id"]: r for r in (json.loads(line) for line in f if line.strip())}
+        self.assertEqual(set(imp_rows), {"harbor_01", "harbor_02", "harbor_03", "harbor_04"})
+        self.assertNotIn("harbor_05", imp_rows)
+        self.assertEqual(imp_rows["harbor_01"]["source"], "sidecar:harbor_01.txt")
+        self.assertEqual(imp_rows["harbor_01"]["writers"], ["sidecar:harbor_01.txt"])
+        self.assertTrue(imp_rows["harbor_01"]["passed_model_free"], imp_rows["harbor_01"]["flags"])
+        self.assertIn("prompt_echo", imp_rows["harbor_02"]["flags"])
+        self.assertIn("prefix_missing", imp_rows["harbor_02"]["flags"])
+        self.assertIn("required_term_missing", imp_rows["harbor_02"]["flags"])
+        self.assertIn("banned_word", imp_rows["harbor_02"]["flags"])
+        self.assertIn("exact_duplicate", imp_rows["harbor_03"]["flags"])
+        self.assertIn("exact_duplicate", imp_rows["harbor_04"]["flags"])
+
+        with open(os.path.join(out_imp, "description-worksheet.md"), encoding="utf-8") as f:
+            ws_imp = f.read()
+        self.assertIn("harbor_05.png", ws_imp)
+
+        # Flow B: `index --sidecars` -> `report` -> `compose` (verifying Part 4 provenance `sidecar:<file>`)
+        out_idx = os.path.join(self.tmp, "out-sidecar-index")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                desk.run(["index", "--project", sidecar_proj, "--out", out_idx, "--backend", "none", "--sidecars"]),
+                EXIT_OK,
+            )
+            self.assertEqual(
+                desk.run(["report", "--project", sidecar_proj, "--out", out_idx, "--backend", "none"]),
+                EXIT_OK,
+            )
+            self.assertEqual(
+                desk.run(["compose", "--project", sidecar_proj, "--out", out_idx, "--draft", "none"]),
+                EXIT_OK,
+            )
+
+        with open(os.path.join(out_idx, "report-none.md"), encoding="utf-8") as f:
+            rep_md = f.read()
+        self.assertIn("image without a .txt sidecar: harbor_05.png", rep_md)
+
+        with open(os.path.join(out_idx, "captions-manifest.json"), encoding="utf-8") as f:
+            manifest = json.load(f)
+        m_items = {it["id"]: it for it in manifest["items"]}
+        self.assertEqual(set(m_items), {"harbor_01", "harbor_02", "harbor_03", "harbor_04"})
+        self.assertNotIn("harbor_05", m_items)
+
+        h1 = m_items["harbor_01"]
+        self.assertEqual(h1["sha256"], sha_h1)
+        self.assertEqual(h1["source"], "sidecar:harbor_01.txt")
+        self.assertEqual(
+            h1["writers"],
+            [
+                "config:caption-rules.json:2",
+                "config:caption-rules.json:7",
+                "sidecar:harbor_01.txt",
+            ],
+        )
+        self.assertEqual(h1["parts"][-1]["writer"], "sidecar:harbor_01.txt")
+
+        with open(os.path.join(out_idx, "description-review.jsonl"), encoding="utf-8") as f:
+            comp_rev = {r["id"]: r for r in (json.loads(line) for line in f if line.strip())}
+        self.assertEqual(comp_rev["harbor_01"]["writers"], h1["writers"])
+        self.assertEqual(comp_rev["harbor_01"]["parts"][-1]["writer"], "sidecar:harbor_01.txt")
+
+        # Project folder untouched byte-for-byte
+        self.assertEqual(_snapshot_tree(sidecar_proj), before_snap)
 
 
 if __name__ == "__main__":

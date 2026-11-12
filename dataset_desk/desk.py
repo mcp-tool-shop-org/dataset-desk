@@ -72,6 +72,282 @@ DESC_CLUSTER_COSINE = 0.90  # provisional (rung 1): display-only description clu
 # Embedding their descriptions or running the embedding fit check on them is refused until the counted run finishes,
 # unless --images-only (or --backend none) or --allow-multimodal-pool is passed.
 MULTIMODAL_POOL = frozenset({"rustline", "tallow-fen", "salt-road", "hesperia"})
+POOL_MANIFEST_ENV = "DATASET_DESK_POOL_MANIFEST"
+POOL_DIRS_ENV = "DATASET_DESK_POOL_DIRS"
+USER_CONFIG_ENV = "DATASET_DESK_USER_CONFIG"
+PROJECT_CONFIG_FILENAMES = (description_gate.CAPTION_RULES_FILENAME, "project.json", "desk-config.json")
+POOL_DETECTION_OFF_WARNING = (
+    "warning: renamed-copy detection is off (detection off: no locked-pool sha256 manifest or "
+    "--locked-pool-dir configured; set DATASET_DESK_POOL_MANIFEST, user config pool_manifest, or --locked-pool-dir)"
+)
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _parse_pool_tag_value(raw_tag: object, source_label: str) -> str | None:
+    if raw_tag is None:
+        return None
+    if not isinstance(raw_tag, str):
+        raise DeskError("INPUT_BAD_ARGUMENT", f"project config {source_label!r} 'multimodal_pool' must be a string")
+    norm = raw_tag.strip().lower()
+    if not norm:
+        return None
+    if norm not in MULTIMODAL_POOL:
+        raise DeskError(
+            "INPUT_BAD_ARGUMENT",
+            f"project config {source_label!r} has unknown 'multimodal_pool' {raw_tag!r}; "
+            f"expected one of {sorted(MULTIMODAL_POOL)}",
+        )
+    return norm
+
+
+def _resolve_project_pool_tag(project: str, caption_config: str | None = None) -> str | None:
+    """Read explicit `multimodal_pool: <name>` tag from `--caption-config`, `caption-rules.json`, or `project.json`."""
+    candidates: list[tuple[str, bool]] = []
+    if caption_config is not None and caption_config != "":
+        candidates.append((os.path.abspath(caption_config), True))
+    if project:
+        for fn in PROJECT_CONFIG_FILENAMES:
+            p = os.path.join(project, fn)
+            if all(os.path.abspath(p) != os.path.abspath(existing) for existing, _req in candidates):
+                candidates.append((p, False))
+    for path, required in candidates:
+        if not os.path.isfile(path):
+            if required:
+                raise DeskError("INPUT_BAD_ARGUMENT", f"caption config file not found: {path}")
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, json.JSONDecodeError) as err:
+            raise DeskError("INPUT_BAD_ARGUMENT", f"cannot parse project config {path!r}: {err}", cause=err) from err
+        if not isinstance(doc, dict):
+            raise DeskError("INPUT_BAD_ARGUMENT", f"project config {path!r} must be a JSON object")
+        tag = _parse_pool_tag_value(doc.get("multimodal_pool"), os.path.basename(path))
+        if tag is not None:
+            return tag
+    return None
+
+
+def _collect_folder_image_shas(folder: str) -> set[str]:
+    """Compute SHA-256 hex digests for every image file inside `folder`."""
+    abs_dir = os.path.abspath(folder)
+    if not os.path.isdir(abs_dir):
+        return set()
+    shas: set[str] = set()
+    for root, dirs, files in os.walk(abs_dir):
+        dirs[:] = sorted(d for d in dirs if d != ".git")
+        for fn in sorted(files):
+            if os.path.splitext(fn)[1].lower() in IMAGE_EXT:
+                shas.add(sha256_file(os.path.join(root, fn)))
+    return shas
+
+
+def _normalize_pool_dir_specs(
+    specs: str | list[str] | tuple[str, ...] | dict[str, str] | None,
+    *,
+    base_dir: str | None = None,
+) -> list[str]:
+    if specs is None:
+        return []
+    raw_list: list[str] = []
+    if isinstance(specs, str):
+        raw_list.extend(s.strip() for s in specs.split(os.pathsep) if s.strip())
+    elif isinstance(specs, (list, tuple)):
+        for elem in specs:
+            if not isinstance(elem, str):
+                raise DeskError("INPUT_BAD_ARGUMENT", "locked_pool_dirs entries must be strings")
+            if elem.strip():
+                raw_list.append(elem.strip())
+    elif isinstance(specs, dict):
+        for k, v in specs.items():
+            if not isinstance(k, str) or not isinstance(v, str):
+                raise DeskError("INPUT_BAD_ARGUMENT", "locked_pool_dirs mapping keys and values must be strings")
+            if v.strip():
+                raw_list.append(f"{k.strip()}={v.strip()}")
+    else:
+        raise DeskError("INPUT_BAD_ARGUMENT", "locked_pool_dirs must be a path, list of paths, or {pool: path} mapping")
+
+    resolved: list[str] = []
+    for item in raw_list:
+        if "=" in item:
+            p_key, p_dir = item.split("=", 1)
+            p_dir = p_dir.strip()
+            if base_dir and not os.path.isabs(p_dir):
+                p_dir = os.path.normpath(os.path.join(base_dir, p_dir))
+            resolved.append(f"{p_key.strip()}={p_dir}")
+        else:
+            p_dir = item
+            if base_dir and not os.path.isabs(p_dir):
+                p_dir = os.path.normpath(os.path.join(base_dir, p_dir))
+            resolved.append(p_dir)
+    return resolved
+
+
+def _extract_hash_set(entry: object, pool_name: str, source_label: str) -> set[str]:
+    items_raw: object = entry
+    if isinstance(entry, dict):
+        if "hashes" in entry:
+            items_raw = entry["hashes"]
+        elif "sha256" in entry and isinstance(entry["sha256"], list):
+            items_raw = entry["sha256"]
+        elif "items" in entry:
+            items_raw = entry["items"]
+        else:
+            raise DeskError(
+                "INPUT_BAD_ARGUMENT",
+                f"pool manifest {source_label!r} entry for {pool_name!r} must be a list of sha256 strings",
+            )
+    if not isinstance(items_raw, list):
+        raise DeskError(
+            "INPUT_BAD_ARGUMENT",
+            f"pool manifest {source_label!r} entry for {pool_name!r} must be a list of sha256 strings",
+        )
+    out: set[str] = set()
+    for elem in items_raw:
+        val = elem.get("sha256") if isinstance(elem, dict) else elem
+        if not isinstance(val, str) or not _HEX64_RE.match(val.strip().lower()):
+            raise DeskError(
+                "INPUT_BAD_ARGUMENT",
+                f"pool manifest {source_label!r} has invalid 64-hex sha256 {val!r} under {pool_name!r}",
+            )
+        out.add(val.strip().lower())
+    return out
+
+
+def _parse_pool_manifest_doc(doc: object, source_label: str, *, base_dir: str | None = None) -> tuple[dict[str, set[str]], list[str]]:
+    if not isinstance(doc, dict):
+        raise DeskError("INPUT_BAD_ARGUMENT", f"pool manifest {source_label!r} must be a JSON object")
+    extra_dirs = _normalize_pool_dir_specs(
+        doc.get("locked_pool_dirs") if "locked_pool_dirs" in doc else doc.get("pool_dirs"),
+        base_dir=base_dir,
+    )
+    pools_raw = doc.get("pools") if isinstance(doc.get("pools"), dict) else doc
+    assert isinstance(pools_raw, dict)
+    hashes_by_pool: dict[str, set[str]] = {}
+    meta_keys = {"pools", "locked_pool_dirs", "pool_dirs", "version", "description"}
+    for key, val in pools_raw.items():
+        if pools_raw is doc and key in meta_keys:
+            continue
+        norm_pool = str(key).strip().lower()
+        if norm_pool not in MULTIMODAL_POOL:
+            raise DeskError(
+                "INPUT_BAD_ARGUMENT",
+                f"pool manifest {source_label!r} names unknown locked pool {key!r}; "
+                f"expected one of {sorted(MULTIMODAL_POOL)}",
+            )
+        hashes_by_pool[norm_pool] = _extract_hash_set(val, norm_pool, source_label)
+    return hashes_by_pool, extra_dirs
+
+
+def _load_user_pool_config() -> tuple[str | None, list[str]]:
+    cfg_path: str | None = None
+    if USER_CONFIG_ENV in os.environ:
+        env_val = os.environ[USER_CONFIG_ENV].strip()
+        if not env_val:
+            return None, []
+        cfg_path = os.path.abspath(os.path.expanduser(env_val))
+        if not os.path.isfile(cfg_path):
+            raise DeskError("INPUT_BAD_ARGUMENT", f"user config file in {USER_CONFIG_ENV} not found: {cfg_path}")
+    else:
+        default_candidates = [os.path.expanduser("~/.config/dataset-desk/config.json")]
+        appdata = os.environ.get("APPDATA", "").strip()
+        if appdata:
+            default_candidates.append(os.path.join(appdata, "dataset-desk", "config.json"))
+        for cand in default_candidates:
+            if os.path.isfile(cand):
+                cfg_path = os.path.abspath(cand)
+                break
+    if cfg_path is None:
+        return None, []
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, json.JSONDecodeError) as err:
+        raise DeskError("INPUT_BAD_ARGUMENT", f"cannot parse user config {cfg_path!r}: {err}", cause=err) from err
+    if not isinstance(doc, dict):
+        raise DeskError("INPUT_BAD_ARGUMENT", f"user config {cfg_path!r} must be a JSON object")
+    cfg_dir = os.path.dirname(cfg_path)
+    pm_raw = doc.get("pool_manifest")
+    manifest_path: str | None = None
+    if pm_raw is not None:
+        if not isinstance(pm_raw, str):
+            raise DeskError("INPUT_BAD_ARGUMENT", f"user config {cfg_path!r} 'pool_manifest' must be a string")
+        if pm_raw.strip():
+            pm_exp = os.path.expanduser(pm_raw.strip())
+            manifest_path = pm_exp if os.path.isabs(pm_exp) else os.path.normpath(os.path.join(cfg_dir, pm_exp))
+    dir_specs = _normalize_pool_dir_specs(
+        doc.get("locked_pool_dirs") if "locked_pool_dirs" in doc else doc.get("pool_dirs"),
+        base_dir=cfg_dir,
+    )
+    return manifest_path, dir_specs
+
+
+def _load_locked_pool_hashes(
+    *,
+    pool_manifest: str | None = None,
+    locked_pool_dirs: str | list[str] | tuple[str, ...] | dict[str, str] | None = None,
+) -> dict[str, set[str]] | None:
+    """Load locked-pool image sha256 sets from manifest path (arg, env var, or user config) and/or named pool folders.
+
+    Returns `None` when neither a manifest nor a locked-pool folder is configured.
+    """
+    user_manifest, user_dirs = _load_user_pool_config()
+    env_manifest = os.environ.get(POOL_MANIFEST_ENV, "").strip() or None
+    eff_manifest = (pool_manifest.strip() if isinstance(pool_manifest, str) and pool_manifest.strip() else None) or env_manifest or user_manifest
+
+    dir_specs: list[str] = []
+    dir_specs.extend(_normalize_pool_dir_specs(locked_pool_dirs))
+    env_dirs = os.environ.get(POOL_DIRS_ENV, "").strip()
+    if env_dirs:
+        dir_specs.extend(_normalize_pool_dir_specs(env_dirs))
+    dir_specs.extend(user_dirs)
+
+    if eff_manifest is None and not dir_specs:
+        return None
+
+    pools: dict[str, set[str]] = {p: set() for p in MULTIMODAL_POOL}
+    if eff_manifest is not None:
+        abs_m = os.path.abspath(os.path.expanduser(eff_manifest))
+        if not os.path.isfile(abs_m):
+            raise DeskError("INPUT_BAD_ARGUMENT", f"locked-pool sha256 manifest not found: {abs_m}")
+        try:
+            with open(abs_m, encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, json.JSONDecodeError) as err:
+            raise DeskError("INPUT_BAD_ARGUMENT", f"cannot parse pool manifest {abs_m!r}: {err}", cause=err) from err
+        parsed_hashes, manifest_dirs = _parse_pool_manifest_doc(doc, abs_m, base_dir=os.path.dirname(abs_m))
+        for p_name, h_set in parsed_hashes.items():
+            pools[p_name].update(h_set)
+        dir_specs.extend(manifest_dirs)
+
+    for spec in dir_specs:
+        explicit_pool: str | None = None
+        dir_str = spec
+        if "=" in spec:
+            raw_pool, dir_str = spec.split("=", 1)
+            explicit_pool = raw_pool.strip().lower()
+            if explicit_pool not in MULTIMODAL_POOL:
+                raise DeskError(
+                    "INPUT_BAD_ARGUMENT",
+                    f"unknown locked pool {raw_pool!r} in --locked-pool-dir; expected one of {sorted(MULTIMODAL_POOL)}",
+                )
+        abs_d = os.path.abspath(os.path.expanduser(dir_str.strip()))
+        if not os.path.isdir(abs_d):
+            raise DeskError("INPUT_BAD_ARGUMENT", f"locked-pool folder not found: {abs_d}")
+        inferred_pool = explicit_pool or _resolve_project_pool_tag(abs_d)
+        if inferred_pool is None:
+            bname = os.path.basename(abs_d).lower()
+            if bname in MULTIMODAL_POOL:
+                inferred_pool = bname
+        if inferred_pool not in MULTIMODAL_POOL:
+            raise DeskError(
+                "INPUT_BAD_ARGUMENT",
+                f"cannot determine locked pool name for folder {abs_d!r}; pass <pool>=<folder> where <pool> is in "
+                f"{sorted(MULTIMODAL_POOL)}",
+            )
+        pools[inferred_pool].update(_collect_folder_image_shas(abs_d))
+
+    return pools
 
 
 def check_multimodal_pool(
@@ -81,32 +357,78 @@ def check_multimodal_pool(
     allow_multimodal_pool: bool = False,
     *,
     arm_acceptance: bool = False,
+    caption_config: str | None = None,
+    pool_manifest: str | None = None,
+    locked_pool_dirs: str | list[str] | tuple[str, ...] | dict[str, str] | None = None,
+    _warn_unconfigured: bool = True,
 ) -> None:
-    """Enforce the peeking and arm-model acceptance guard on the four multimodal benchmark projects.
+    """Enforce the peeking, arm-acceptance, pool-tag, and fail-closed renamed-copy guards on locked benchmark pools.
 
-    On rustline, tallow-fen, salt-road and hesperia, before the experiment's counted run, no model that measures one
-    of its arms (EmbeddingGemma 2 = arm G; ai-eyes / SigLIP2 = arm S) may embed descriptions or accept/reject a
-    description unless --allow-multimodal-pool is passed."""
-    name = os.path.basename(os.path.abspath(project)).lower()
-    if name not in MULTIMODAL_POOL or allow_multimodal_pool:
+    1. Refuses description embeddings or arm-model acceptance when either the folder name OR the project config's
+       `multimodal_pool` tag names a locked pool (`rustline`, `tallow-fen`, `salt-road`, `hesperia`).
+    2. For untagged projects outside those folder names, checks image SHA-256s against configured locked-pool hashes
+       (from `DATASET_DESK_POOL_MANIFEST`, user config, or `--locked-pool-dir`) and refuses fail-closed when any image
+       matches a locked pool without carrying a tag. When no manifest/folder is configured, emits an explicit warning
+       to stderr that renamed-copy detection is off.
+    """
+    if allow_multimodal_pool:
         return
+    folder_name = os.path.basename(os.path.abspath(project)).lower()
+    pool_tag = _resolve_project_pool_tag(project, caption_config=caption_config)
+    if folder_name in MULTIMODAL_POOL and pool_tag is not None and pool_tag != folder_name:
+        raise DeskError(
+            "PERM_LOCKED_POOL",
+            f"REFUSED: project folder {folder_name!r} conflicts with multimodal_pool tag {pool_tag!r}",
+        )
+    locked_pool = folder_name if folder_name in MULTIMODAL_POOL else pool_tag
+
+    if locked_pool is None:
+        pool_hashes = _load_locked_pool_hashes(pool_manifest=pool_manifest, locked_pool_dirs=locked_pool_dirs)
+        if pool_hashes is None:
+            if _warn_unconfigured:
+                print(POOL_DETECTION_OFF_WARNING, file=sys.stderr)
+            return
+        proj_shas = _collect_folder_image_shas(project)
+        matches = [
+            (p_name, len(proj_shas & pool_hashes.get(p_name, set())))
+            for p_name in sorted(MULTIMODAL_POOL)
+        ]
+        matches = [(p_name, cnt) for p_name, cnt in matches if cnt > 0]
+        if matches:
+            matches.sort(key=lambda item: (-item[1], item[0]))
+            best_pool, best_count = matches[0]
+            img_word = "image" if best_count == 1 else "images"
+            raise DeskError(
+                "PERM_LOCKED_POOL",
+                f"REFUSED: untagged project {folder_name!r} matches locked multimodal pool {best_pool!r} "
+                f"({best_count} matching {img_word} by sha256) and carries no multimodal_pool tag. "
+                f"Tag the project config with '\"multimodal_pool\": \"{best_pool}\"' so the pool lock applies, "
+                "or pass --allow-multimodal-pool after the counted run.",
+            )
+        return
+
+    proj_label = (
+        f"{folder_name!r} (multimodal_pool={locked_pool!r})"
+        if folder_name != locked_pool
+        else f"{locked_pool!r}"
+    )
     if arm_acceptance:
         raise DeskError(
             "PERM_LOCKED_POOL",
-            f"REFUSED: project {name!r} is in the multimodal experiment pool {sorted(MULTIMODAL_POOL)}; "
+            f"REFUSED: project {proj_label} is in the multimodal experiment pool {sorted(MULTIMODAL_POOL)}; "
             f"arm-model acceptance step {backend!r} (EmbeddingGemma 2 = arm G, ai-eyes/SigLIP2 = arm S) is forbidden "
             "before the counted run. Only the model-free gate and human edit may accept descriptions unless "
-            "--allow-multimodal-pool is passed."
+            "--allow-multimodal-pool is passed.",
         )
     spec = registry.REGISTRY.get(backend)
     eff_images_only = bool(images_only or backend == "none" or (spec is not None and "text" not in spec.modalities))
     if not eff_images_only:
         raise DeskError(
             "PERM_LOCKED_POOL",
-            f"REFUSED: project {name!r} is in the multimodal experiment pool {sorted(MULTIMODAL_POOL)}; "
+            f"REFUSED: project {proj_label} is in the multimodal experiment pool {sorted(MULTIMODAL_POOL)}; "
             "description embeddings and fit checks are locked until its counted run. "
             "Pass --images-only (or --backend none) to run without description embeddings, "
-            "or --allow-multimodal-pool after the counted run."
+            "or --allow-multimodal-pool after the counted run.",
         )
 
 
@@ -115,6 +437,9 @@ def ai_eyes_verify(
     descriptions: dict[str, str] | list[dict],
     *,
     allow_multimodal_pool: bool = False,
+    caption_config: str | None = None,
+    pool_manifest: str | None = None,
+    locked_pool_dirs: str | list[str] | tuple[str, ...] | dict[str, str] | None = None,
 ) -> dict:
     """Stub for ai-eyes (SigLIP2, arm S) noun verification (image_contains).
 
@@ -125,6 +450,9 @@ def ai_eyes_verify(
         "ai-eyes (SigLIP2 / arm S image_contains)",
         allow_multimodal_pool=allow_multimodal_pool,
         arm_acceptance=True,
+        caption_config=caption_config,
+        pool_manifest=pool_manifest,
+        locked_pool_dirs=locked_pool_dirs,
     )
     return {"checked": len(descriptions), "backend": "ai-eyes", "status": "stub"}
 
@@ -134,6 +462,9 @@ def eg2_fit_accept(
     descriptions: dict[str, str] | list[dict],
     *,
     allow_multimodal_pool: bool = False,
+    caption_config: str | None = None,
+    pool_manifest: str | None = None,
+    locked_pool_dirs: str | list[str] | tuple[str, ...] | dict[str, str] | None = None,
 ) -> dict:
     """Stub for any acceptance step driven by EmbeddingGemma 2 (arm G) retrieval rank."""
     check_multimodal_pool(
@@ -141,6 +472,9 @@ def eg2_fit_accept(
         "eg2 (EmbeddingGemma 2 / arm G fit check)",
         allow_multimodal_pool=allow_multimodal_pool,
         arm_acceptance=True,
+        caption_config=caption_config,
+        pool_manifest=pool_manifest,
+        locked_pool_dirs=locked_pool_dirs,
     )
     return {"checked": len(descriptions), "backend": "eg2", "status": "stub"}
 
@@ -150,6 +484,10 @@ def check_drafter_pool(
     drafter,
     *,
     allow_multimodal_pool: bool = False,
+    caption_config: str | None = None,
+    pool_manifest: str | None = None,
+    locked_pool_dirs: str | list[str] | tuple[str, ...] | dict[str, str] | None = None,
+    _warn_unconfigured: bool = True,
 ) -> None:
     """Verify via `check_multimodal_pool` that `drafter` is a non-arm image-only drafter on locked pools."""
     if drafter is None:
@@ -162,6 +500,10 @@ def check_drafter_pool(
         images_only=True,
         allow_multimodal_pool=allow_multimodal_pool,
         arm_acceptance=is_arm,
+        caption_config=caption_config,
+        pool_manifest=pool_manifest,
+        locked_pool_dirs=locked_pool_dirs,
+        _warn_unconfigured=_warn_unconfigured,
     )
 
 
@@ -681,66 +1023,125 @@ def _save_scan_cache(out: str | None, rows: list[dict]) -> None:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def scan(project: str, strict: bool = False, out: str | None = None, threads: int = 1) -> tuple[list[Item], dict]:
-    """Every image under outputs/<folder>/, merged by content. Files at the top of outputs/ (contact sheets and
-    composites) are left out, as in the multimodal design. Joins records/*.json, outputs/<wave>/generation.json,
-    outputs/<wave>/_curation.json, and embedded ComfyUI PNG tEXt prompt metadata. Reuses <out>/scan.jsonl across
-    backends and runs so dHash, dhash_flip and the 30d native-resolution look channel are computed once per unique
-    sha256."""
+def scan(
+    project: str,
+    strict: bool = False,
+    out: str | None = None,
+    threads: int = 1,
+    *,
+    sidecars: bool = False,
+) -> tuple[list[Item], dict]:
+    """Every image under outputs/<folder>/ (or across `project` with same-stem `.txt` sidecars when `sidecars=True`),
+    merged by content. Files at the top of outputs/ (contact sheets and composites) are left out, as in the multimodal
+    design. Joins records/*.json, outputs/<wave>/generation.json, outputs/<wave>/_curation.json, and embedded ComfyUI
+    PNG tEXt prompt metadata. Reuses <out>/scan.jsonl across backends and runs so dHash, dhash_flip and the 30d
+    native-resolution look channel are computed once per unique sha256."""
     recs, problems = load_records(project)
     wave_meta = load_wave_metadata(project)
     scan_cache = _load_scan_cache(out)
     by_sha: dict[str, Item] = {}
     seen = set()
+    sidecar_scan: dict | None = None
+    sidecar_by_asset: dict[str, dict] = {}
+    if sidecars:
+        sidecar_scan = description_gate.scan_sidecar_project(project)
+        sidecar_by_asset = {r["asset_path"]: r for r in sidecar_scan["records"]}
+
+    def _attach_record_and_wave(it: Item, rel: str) -> None:
+        cand = recs.get(rel)
+        if cand is None and rel in sidecar_by_asset:
+            sc = sidecar_by_asset[rel]
+            sc_exp = (sc["judgment"].get("explanation") or "").strip() or None
+            cand = {
+                "id": sc["id"],
+                "status": "approved",
+                "explanation": sc_exp,
+                "judgment_note": sc_exp,
+                "canon_subject": None,
+                "source": f"sidecar:{sc['_sidecar_file']}",
+                "sidecar_file": sc["_sidecar_file"],
+                "prompt": sc["provenance"].get("prompt") or None,
+                "asset_id": None,
+                "render_id": None,
+                "recorded": True,
+            }
+        if cand is not None:
+            if it.record is None or not it.record.get("recorded"):
+                merged = dict(it.record or {})
+                merged.update({
+                    k: v for k, v in cand.items()
+                    if v is not None or k in ("explanation", "asset_id", "render_id")
+                })
+                it.record = merged
+            elif it.record.get("id") != cand.get("id"):
+                problems.append(
+                    f"{rel}: record collision on byte-identical file with record {it.record.get('id')}"
+                )
+                if _record_priority(cand) < _record_priority(it.record):
+                    merged = dict(it.record)
+                    for k in ("id", "status", "explanation", "judgment_note", "canon_subject", "source",
+                              "sidecar_file", "prompt", "asset_id", "render_id", "failure_modes", "recorded"):
+                        if k in cand:
+                            merged[k] = cand[k]
+                        else:
+                            merged.pop(k, None)
+                    it.record = merged
+        if rel in wave_meta:
+            w = wave_meta[rel]
+            if it.record is None:
+                it.record = {"id": w.get("subject_id"), "status": None, "explanation": None,
+                             "prompt": w.get("prompt"), "recorded": False}
+            for k in ("wave", "base", "unet", "style_prefix", "loras", "seed", "curation_status", "curation_issues"):
+                if w.get(k) is not None and not it.record.get(k):
+                    it.record[k] = w[k]
+            if w.get("prompt") and not it.record.get("prompt"):
+                it.record["prompt"] = w["prompt"]
+
     out_dir = os.path.join(project, "outputs")
-    for folder in sorted(os.listdir(out_dir)) if os.path.isdir(out_dir) else []:
-        fdir = os.path.join(out_dir, folder)
-        if not os.path.isdir(fdir):
-            continue
-        for root, dirs, files in os.walk(fdir):
-            dirs.sort()
+    if sidecars:
+        abs_proj = os.path.abspath(project)
+        skip_top_outputs = os.path.isdir(out_dir) and any(
+            os.path.isdir(os.path.join(out_dir, d)) for d in os.listdir(out_dir)
+        )
+        for root, dirs, files in os.walk(abs_proj):
+            dirs[:] = sorted(d for d in dirs if d not in (".git", "records", "__pycache__"))
+            if skip_top_outputs and os.path.abspath(root) == os.path.abspath(out_dir):
+                continue
             for f in sorted(files):
                 if os.path.splitext(f)[1].lower() not in IMAGE_EXT:
                     continue
                 full = os.path.join(root, f)
-                rel = os.path.relpath(full, project).replace("\\", "/")
+                rel = os.path.relpath(full, abs_proj).replace("\\", "/")
                 seen.add(rel)
                 sha = sha256_file(full)
                 it = by_sha.setdefault(sha, Item(sha, [], []))
                 it.paths.append(rel)
-                it.folders.append(folder)
-                if rel in recs:
-                    cand = recs[rel]
-                    if it.record is None or not it.record.get("recorded"):
-                        merged = dict(it.record or {})
-                        merged.update({
-                            k: v for k, v in cand.items()
-                            if v is not None or k in ("explanation", "asset_id", "render_id")
-                        })
-                        it.record = merged
-                    elif it.record.get("id") != cand.get("id"):
-                        problems.append(
-                            f"{rel}: record collision on byte-identical file with record {it.record.get('id')}"
-                        )
-                        if _record_priority(cand) < _record_priority(it.record):
-                            merged = dict(it.record)
-                            for k in ("id", "status", "explanation", "judgment_note", "canon_subject", "source",
-                                      "prompt", "asset_id", "render_id", "failure_modes", "recorded"):
-                                if k in cand:
-                                    merged[k] = cand[k]
-                                else:
-                                    merged.pop(k, None)
-                            it.record = merged
-                if rel in wave_meta:
-                    w = wave_meta[rel]
-                    if it.record is None:
-                        it.record = {"id": w.get("subject_id"), "status": None, "explanation": None,
-                                     "prompt": w.get("prompt"), "recorded": False}
-                    for k in ("wave", "base", "unet", "style_prefix", "loras", "seed", "curation_status", "curation_issues"):
-                        if w.get(k) is not None and not it.record.get(k):
-                            it.record[k] = w[k]
-                    if w.get("prompt") and not it.record.get("prompt"):
-                        it.record["prompt"] = w["prompt"]
+                rel_parts = rel.split("/")
+                folder_lbl = (
+                    rel_parts[1]
+                    if (len(rel_parts) >= 3 and rel_parts[0] == "outputs")
+                    else (rel_parts[0] if len(rel_parts) >= 2 else "root")
+                )
+                it.folders.append(folder_lbl)
+                _attach_record_and_wave(it, rel)
+    else:
+        for folder in sorted(os.listdir(out_dir)) if os.path.isdir(out_dir) else []:
+            fdir = os.path.join(out_dir, folder)
+            if not os.path.isdir(fdir):
+                continue
+            for root, dirs, files in os.walk(fdir):
+                dirs.sort()
+                for f in sorted(files):
+                    if os.path.splitext(f)[1].lower() not in IMAGE_EXT:
+                        continue
+                    full = os.path.join(root, f)
+                    rel = os.path.relpath(full, project).replace("\\", "/")
+                    seen.add(rel)
+                    sha = sha256_file(full)
+                    it = by_sha.setdefault(sha, Item(sha, [], []))
+                    it.paths.append(rel)
+                    it.folders.append(folder)
+                    _attach_record_and_wave(it, rel)
 
     valid_items: list[Item] = []
     cache_rows: list[dict] = []
@@ -817,22 +1218,29 @@ def scan(project: str, strict: bool = False, out: str | None = None, threads: in
         })
 
     _save_scan_cache(out, cache_rows)
+    if sidecar_scan is not None and out:
+        description_gate.save_sidecar_import(out, sidecar_scan)
     total_cached_look = sum(r["look_seconds"] for r in cache_rows)
     sec_per_img = (
         look_seconds / look_computed_now
         if look_computed_now
         else (total_cached_look / len(valid_items) if valid_items else 0.0)
     )
-    return valid_items, {
+    out_stats: dict = {
         "files": len(seen),
         "unique": len(valid_items),
-        "records": len(recs),
+        "records": len(recs) + (len(sidecar_scan["records"]) if sidecar_scan is not None else 0),
         "records_without_image": sorted(set(recs) - seen),
         "look_computed_now": look_computed_now,
         "look_seconds": round(look_seconds, 4),
         "look_seconds_per_image": round(sec_per_img, 6),
         "problems": problems,
     }
+    if sidecar_scan is not None:
+        out_stats["sidecars"] = True
+        out_stats["sidecar_pairs"] = len(sidecar_scan["records"])
+        out_stats["images_without_sidecar"] = list(sidecar_scan["images_without_sidecar"])
+    return valid_items, out_stats
 
 
 # ---- the cache: one folder per backend under --out ------------------------------------------------------------
@@ -932,15 +1340,39 @@ def load_cache(
     return items, img, dict(zip(t_shas, tv, strict=True)), meta
 
 
-def index(project: str, out: str, emb, limit: int | None = None, grant: str | None = None,
-          strict: bool = False, images_only: bool = False, allow_multimodal_pool: bool = False,
-          log=print, threads: int = 1) -> dict:
+def index(
+    project: str,
+    out: str,
+    emb,
+    limit: int | None = None,
+    grant: str | None = None,
+    strict: bool = False,
+    images_only: bool = False,
+    allow_multimodal_pool: bool = False,
+    log=print,
+    threads: int = 1,
+    *,
+    sidecars: bool = False,
+    caption_config: str | None = None,
+    pool_manifest: str | None = None,
+    locked_pool_dirs: str | list[str] | tuple[str, ...] | dict[str, str] | None = None,
+    _pool_checked: bool = False,
+) -> dict:
     """Embed every unique image, and every approved record's description as a search query. Reuses vectors already
     cached for the same backend, revision and settings, and shares scan.jsonl across backends."""
     can_text = "text" in getattr(emb, "modalities", ("text", "image"))
     eff_images_only = bool(images_only or emb.name == "none" or not can_text)
-    check_multimodal_pool(project, emb.name, images_only=eff_images_only, allow_multimodal_pool=allow_multimodal_pool)
-    items, stats = scan(project, strict=strict, out=out, threads=threads)
+    check_multimodal_pool(
+        project,
+        emb.name,
+        images_only=eff_images_only,
+        allow_multimodal_pool=allow_multimodal_pool,
+        caption_config=caption_config,
+        pool_manifest=pool_manifest,
+        locked_pool_dirs=locked_pool_dirs,
+        _warn_unconfigured=not _pool_checked,
+    )
+    items, stats = scan(project, strict=strict, out=out, threads=threads, sidecars=sidecars)
     if limit:
         items = items[:limit]
     old_img, old_txt, old_ctxt = {}, {}, {}
@@ -1508,6 +1940,9 @@ def _resolve_sibling_image_vecs(
     meta: dict | None = None,
     *,
     allow_multimodal_pool: bool = False,
+    caption_config: str | None = None,
+    pool_manifest: str | None = None,
+    locked_pool_dirs: str | list[str] | tuple[str, ...] | dict[str, str] | None = None,
 ) -> dict[str, np.ndarray] | None:
     """Return DINOv2 image-only vectors for blind worksheet sibling selection when available under `out`.
 
@@ -1522,7 +1957,16 @@ def _resolve_sibling_image_vecs(
         and img.ndim == 2
         and img.shape[1] > 0
     ):
-        check_multimodal_pool(project, "dinov2", images_only=True, allow_multimodal_pool=allow_multimodal_pool)
+        check_multimodal_pool(
+            project,
+            "dinov2",
+            images_only=True,
+            allow_multimodal_pool=allow_multimodal_pool,
+            caption_config=caption_config,
+            pool_manifest=pool_manifest,
+            locked_pool_dirs=locked_pool_dirs,
+            _warn_unconfigured=False,
+        )
         return {p.replace("\\", "/"): img[idx] for idx, it in enumerate(items) for p in it.paths}
     dino_dir = cache_dir(out, "dinov2")
     if os.path.isfile(os.path.join(dino_dir, "meta.json")):
@@ -1531,7 +1975,16 @@ def _resolve_sibling_image_vecs(
         except SystemExit:
             return None
         if d_img.ndim == 2 and d_img.shape[1] > 0:
-            check_multimodal_pool(project, "dinov2", images_only=True, allow_multimodal_pool=allow_multimodal_pool)
+            check_multimodal_pool(
+                project,
+                "dinov2",
+                images_only=True,
+                allow_multimodal_pool=allow_multimodal_pool,
+                caption_config=caption_config,
+                pool_manifest=pool_manifest,
+                locked_pool_dirs=locked_pool_dirs,
+                _warn_unconfigured=False,
+            )
             return {p.replace("\\", "/"): d_img[idx] for idx, it in enumerate(d_items) for p in it.paths}
     return None
 
@@ -1552,15 +2005,36 @@ def report(
     caption_rules=None,
     compose: bool = False,
     manifest_name: str = description_gate.CAPTION_MANIFEST_FILENAME,
+    sidecars: bool = False,
+    caption_config: str | None = None,
+    pool_manifest: str | None = None,
+    locked_pool_dirs: str | list[str] | tuple[str, ...] | dict[str, str] | None = None,
+    _pool_checked: bool = False,
 ) -> str:
     bname = meta.get("backend", "eg2")
     spec = registry.REGISTRY.get(bname)
     can_text = spec is None or "text" in spec.modalities
     eff_images_only = bool(images_only or meta.get("images_only") or bname == "none" or not can_text)
-    check_multimodal_pool(project, bname, images_only=eff_images_only,
-                          allow_multimodal_pool=allow_multimodal_pool)
+    check_multimodal_pool(
+        project,
+        bname,
+        images_only=eff_images_only,
+        allow_multimodal_pool=allow_multimodal_pool,
+        caption_config=caption_config,
+        pool_manifest=pool_manifest,
+        locked_pool_dirs=locked_pool_dirs,
+        _warn_unconfigured=not _pool_checked,
+    )
     if drafter is not None:
-        check_drafter_pool(project, drafter, allow_multimodal_pool=allow_multimodal_pool)
+        check_drafter_pool(
+            project,
+            drafter,
+            allow_multimodal_pool=allow_multimodal_pool,
+            caption_config=caption_config,
+            pool_manifest=pool_manifest,
+            locked_pool_dirs=locked_pool_dirs,
+            _warn_unconfigured=False,
+        )
     has_vecs = img.ndim == 2 and img.shape[1] > 0
     d = dupes(items, img, backend=meta.get("backend"))
     o = outliers(items, img) if has_vecs else {"approved": len(approved_idx(items)), "least_typical": [],
@@ -1569,20 +2043,51 @@ def report(
     eff_rules = (
         description_gate.coerce_caption_rules(caption_rules, project=project)
         if caption_rules is not None
-        else description_gate.load_caption_rules(project=project)
+        else description_gate.load_caption_rules(project=project, config_path=caption_config)
     )
-    raw_recs = description_gate.load_project_records(project)
+    eff_sidecars = bool(sidecars or meta.get("sidecars"))
+    raw_recs = description_gate.load_project_records(project) if not eff_sidecars else []
+    if not raw_recs:
+        sc_recs, sc_missing = description_gate.load_sidecar_import(out)
+        if sc_recs:
+            raw_recs = sc_recs
+            if sc_missing and not meta.get("images_without_sidecar"):
+                meta = {**meta, "images_without_sidecar": sc_missing}
+        elif eff_sidecars:
+            sc_scan = description_gate.scan_sidecar_project(project)
+            description_gate.save_sidecar_import(out, sc_scan)
+            raw_recs = sc_scan["records"]
+            if sc_scan["images_without_sidecar"] and not meta.get("images_without_sidecar"):
+                meta = {**meta, "images_without_sidecar": sc_scan["images_without_sidecar"]}
     if raw_recs:
         desc_audit = description_gate.audit_records(raw_recs, token_counter=token_counter, caption_rules=eff_rules)
     else:
-        synth = [{"id": it.record.get("id") or it.paths[0], "asset_path": it.paths[0], **it.record}
-                 for it in items if it.record and it.record.get("recorded")]
+        synth = [
+            {
+                "id": it.record.get("id") or it.paths[0],
+                "asset_path": it.paths[0],
+                **({"_sidecar_file": it.record["sidecar_file"]} if it.record.get("sidecar_file") else {}),
+                **it.record,
+            }
+            for it in items
+            if it.record and it.record.get("recorded")
+        ]
         desc_audit = description_gate.audit_records(synth, token_counter=token_counter, caption_rules=eff_rules)
+    if meta.get("images_without_sidecar"):
+        desc_audit["images_without_sidecar"] = list(meta["images_without_sidecar"])
     if drafter is not None:
         description_gate.draft_flagged_records(project, desc_audit, drafter)
     dhashes = {p: it.dhash for it in items for p in it.paths if it.dhash}
     sib_vecs = _resolve_sibling_image_vecs(
-        project, out, items=items, img=img, meta=meta, allow_multimodal_pool=allow_multimodal_pool
+        project,
+        out,
+        items=items,
+        img=img,
+        meta=meta,
+        allow_multimodal_pool=allow_multimodal_pool,
+        caption_config=caption_config,
+        pool_manifest=pool_manifest,
+        locked_pool_dirs=locked_pool_dirs,
     )
     rev_jsonl, rev_ws = description_gate.write_review_files(
         project, out, desc_audit, dhashes=dhashes, image_vecs=sib_vecs
@@ -1598,6 +2103,7 @@ def report(
             image_vecs=sib_vecs,
             token_counter=token_counter,
             manifest_name=manifest_name,
+            sidecars=eff_sidecars,
         )
         composed_manifest_path = comp["manifest_path"]
 
@@ -1606,9 +2112,15 @@ def report(
          f"{len(approved_idx(items))} approved. Index: {meta['backend']} @ {meta['revision'][:7]}, "
          f"{meta['dim']} dimensions, look channel {meta.get('look_seconds_per_image', 0.0):.4f} s/image, "
          f"{meta['created']}. Every line below is a prompt to look, not a verdict.", ""]
-    if meta.get("problems") or meta.get("records_without_image"):
-        L += ["## Problems", ""] + [f"- {p}" for p in meta.get("problems", [])] + \
-             [f"- record without an image file: {p}" for p in meta.get("records_without_image", [])] + [""]
+    missing_sidecars = list(meta.get("images_without_sidecar") or [])
+    if meta.get("problems") or meta.get("records_without_image") or missing_sidecars:
+        L += (
+            ["## Problems", ""]
+            + [f"- {p}" for p in meta.get("problems", [])]
+            + [f"- record without an image file: {p}" for p in meta.get("records_without_image", [])]
+            + [f"- image without a .txt sidecar: {p}" for p in missing_sidecars]
+            + [""]
+        )
     link = lambda it: _link(project, out, it)  # noqa: E731
     L += ["## Duplicates", "", f"- **Byte-identical copies:** {len(d['exact'])} images have more than one file."]
     L += [f"  - {', '.join(it.paths)} ({_status_label(it)})" for it in d["exact"][:20]]
@@ -2464,7 +2976,7 @@ def _token_counter():
 
 def main(argv: list[str] | None = None, make=backends.make) -> int:
     image_cmds = ("index", "dupes", "search", "coverage", "report")
-    caption_cmds = ("compose", "import-edits")
+    caption_cmds = ("compose", "import-edits", "sidecar-import")
     text_cmds = ("text-index", "text-dupes", "text-search", "lineage")
     all_cmds = [*image_cmds, *caption_cmds, *text_cmds]
     all_backends = [*registry.REGISTRY, "none", "fake"]
@@ -2473,17 +2985,18 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         prog="dataset-desk", description=__doc__.split("\n\n")[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=("commands:\n"
-                "  index        scan the project and embed its images (and descriptions) into the cache under --out\n"
-                "  dupes        exact, near and semantic duplicates, as JSON\n"
-                "  search       the nearest images to --text, --image, or both\n"
-                "  coverage     the best images for each subject in --subjects\n"
-                "  report       the Markdown report: duplicates, outliers, descriptions, coverage\n"
-                "  compose      compose final training captions into --out with per-part provenance\n"
-                "  import-edits re-import blind worksheet edits under --out with a seat:<name> writer id\n"
-                "  text-index   scan --source or --rnd-data and embed text/code files into <out>/<backend>/text/\n"
-                "  text-dupes   text pairs at or above --semantic, as JSON\n"
-                "  text-search  the nearest text/code files to --text\n"
-                "  lineage      for code files, the nearest same-name versions across runs\n\n"
+                "  index          scan the project and embed its images (and descriptions) into the cache under --out\n"
+                "  dupes          exact, near and semantic duplicates, as JSON\n"
+                "  search         the nearest images to --text, --image, or both\n"
+                "  coverage       the best images for each subject in --subjects\n"
+                "  report         the Markdown report: duplicates, outliers, descriptions, coverage\n"
+                "  sidecar-import import image + same-stem .txt sidecar pairs into --out and run the description gate\n"
+                "  compose        compose final training captions into --out with per-part provenance\n"
+                "  import-edits   re-import blind worksheet edits under --out with a seat:<name> writer id\n"
+                "  text-index     scan --source or --rnd-data and embed text/code files into <out>/<backend>/text/\n"
+                "  text-dupes     text pairs at or above --semantic, as JSON\n"
+                "  text-search    the nearest text/code files to --text\n"
+                "  lineage        for code files, the nearest same-name versions across runs\n\n"
                 "exit codes: 0 ok, 1 user error or refusal, 2 unexpected error"))
     ap.add_argument("command", choices=all_cmds, help="what to do")
     ap.add_argument("--version", action="version", version=f"dataset-desk {__version__}")
@@ -2527,6 +3040,12 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
                     help="override the drafter prompt string (defaults to drafter_prompt in caption-rules.json)")
     ap.add_argument("--caption-config", dest="caption_config", default=None,
                     help=f"per-project caption rules JSON (defaults to <project>/{description_gate.CAPTION_RULES_FILENAME} when present)")
+    ap.add_argument("--sidecars", action="store_true",
+                    help="index/report/compose: read images with same-stem .txt caption sidecars when records/ is absent")
+    ap.add_argument("--pool-manifest", dest="pool_manifest", default=None,
+                    help=f"local locked-pool image sha256 manifest JSON (or set {POOL_MANIFEST_ENV} / user config)")
+    ap.add_argument("--locked-pool-dir", dest="locked_pool_dirs", action="append", default=None,
+                    help="locked project folder (<path> or <pool>=<path>, repeatable) to compute locked-pool image sha256s from")
     ap.add_argument("--compose", action="store_true",
                     help="report: also compose final captions and write the lane-3 dataset manifest under --out")
     ap.add_argument("--manifest-name", dest="manifest_name", default=description_gate.CAPTION_MANIFEST_FILENAME,
@@ -2613,6 +3132,15 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
     eff_prompt = a.drafter_prompt if a.drafter_prompt is not None else (rules.drafter_prompt if rules else None)
 
     if a.command == "import-edits":
+        check_multimodal_pool(
+            project,
+            "none",
+            images_only=True,
+            allow_multimodal_pool=a.allow_multimodal_pool,
+            caption_config=a.caption_config,
+            pool_manifest=a.pool_manifest,
+            locked_pool_dirs=a.locked_pool_dirs,
+        )
         ws_path = os.path.abspath(a.worksheet) if a.worksheet else os.path.join(out, "description-worksheet.md")
         res = description_gate.import_worksheet_edits(ws_path, out, seat=a.seat, project=project)
         print(json.dumps({
@@ -2622,7 +3150,80 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         }, indent=1))
         return 0
 
+    if a.command == "sidecar-import":
+        check_multimodal_pool(
+            project,
+            "none",
+            images_only=True,
+            allow_multimodal_pool=a.allow_multimodal_pool,
+            caption_config=a.caption_config,
+            pool_manifest=a.pool_manifest,
+            locked_pool_dirs=a.locked_pool_dirs,
+        )
+        eff_draft = a.draft if a.draft is not None else "none"
+        if eff_draft not in ("fake", "none", "", None):
+            lower_priority()
+        drafter = backends.make_drafter(
+            eff_draft,
+            device=a.device,
+            threads=a.threads,
+            grant=a.grant,
+            prompt=eff_prompt,
+            vram_budget=a.vram_budget,
+            wait=a.wait,
+        )
+        check_drafter_pool(
+            project,
+            drafter,
+            allow_multimodal_pool=a.allow_multimodal_pool,
+            caption_config=a.caption_config,
+            pool_manifest=a.pool_manifest,
+            locked_pool_dirs=a.locked_pool_dirs,
+            _warn_unconfigured=False,
+        )
+        scanned_items, _scan_stats = scan(project, strict=a.strict, out=out, threads=a.threads, sidecars=True)
+        dhashes = {p: it.dhash for it in scanned_items for p in it.paths if it.dhash}
+        sib_vecs = _resolve_sibling_image_vecs(
+            project,
+            out,
+            allow_multimodal_pool=a.allow_multimodal_pool,
+            caption_config=a.caption_config,
+            pool_manifest=a.pool_manifest,
+            locked_pool_dirs=a.locked_pool_dirs,
+        )
+        imp = description_gate.import_sidecars(
+            project,
+            out,
+            caption_rules=rules,
+            drafter=drafter,
+            dhashes=dhashes,
+            image_vecs=sib_vecs,
+            token_counter=_token_counter() if a.count_tokens else None,
+        )
+        print(json.dumps({
+            "total_images": imp["total_images"],
+            "paired": imp["paired"],
+            "images_without_sidecar": imp["images_without_sidecar"],
+            "orphan_sidecars": imp["orphan_sidecars"],
+            "passed_model_free_count": imp["passed_model_free_count"],
+            "flagged_count": imp["flagged_count"],
+            "sidecar_records_path": imp["sidecar_records_path"],
+            "sidecar_report_path": imp["sidecar_report_path"],
+            "review_jsonl_path": imp["review_jsonl_path"],
+            "worksheet_path": imp["worksheet_path"],
+        }, indent=1))
+        return 0
+
     if a.command == "compose":
+        check_multimodal_pool(
+            project,
+            "none",
+            images_only=True,
+            allow_multimodal_pool=a.allow_multimodal_pool,
+            caption_config=a.caption_config,
+            pool_manifest=a.pool_manifest,
+            locked_pool_dirs=a.locked_pool_dirs,
+        )
         eff_draft = (
             a.draft
             if a.draft is not None
@@ -2639,10 +3240,28 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
             vram_budget=a.vram_budget,
             wait=a.wait,
         )
-        check_drafter_pool(project, drafter, allow_multimodal_pool=a.allow_multimodal_pool)
-        scanned_items, _scan_stats = scan(project, strict=a.strict, out=out, threads=a.threads)
+        check_drafter_pool(
+            project,
+            drafter,
+            allow_multimodal_pool=a.allow_multimodal_pool,
+            caption_config=a.caption_config,
+            pool_manifest=a.pool_manifest,
+            locked_pool_dirs=a.locked_pool_dirs,
+            _warn_unconfigured=False,
+        )
+        use_sidecars = bool(a.sidecars or not os.path.isdir(os.path.join(project, "records")))
+        scanned_items, _scan_stats = scan(
+            project, strict=a.strict, out=out, threads=a.threads, sidecars=use_sidecars
+        )
         dhashes = {p: it.dhash for it in scanned_items for p in it.paths if it.dhash}
-        sib_vecs = _resolve_sibling_image_vecs(project, out, allow_multimodal_pool=a.allow_multimodal_pool)
+        sib_vecs = _resolve_sibling_image_vecs(
+            project,
+            out,
+            allow_multimodal_pool=a.allow_multimodal_pool,
+            caption_config=a.caption_config,
+            pool_manifest=a.pool_manifest,
+            locked_pool_dirs=a.locked_pool_dirs,
+        )
         comp = description_gate.compose_captions(
             project,
             out,
@@ -2652,13 +3271,21 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
             image_vecs=sib_vecs,
             token_counter=_token_counter() if a.count_tokens else None,
             manifest_name=a.manifest_name,
+            sidecars=a.sidecars,
         )
         print(comp["manifest_path"])
         return 0
 
     if a.command in ("index", "report"):
-        check_multimodal_pool(project, backend, images_only=a.images_only,
-                              allow_multimodal_pool=a.allow_multimodal_pool)
+        check_multimodal_pool(
+            project,
+            backend,
+            images_only=a.images_only,
+            allow_multimodal_pool=a.allow_multimodal_pool,
+            caption_config=a.caption_config,
+            pool_manifest=a.pool_manifest,
+            locked_pool_dirs=a.locked_pool_dirs,
+        )
     if backend == "none" and a.command in ("search", "coverage"):
         raise DeskError("INPUT_BAD_ARGUMENT",
                         f"command {a.command!r} requires an embedding backend (eg2, siglip2, or fake), not 'none'")
@@ -2671,7 +3298,9 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
     if a.command == "index":
         index(project, out, emb, limit=a.limit, grant=a.grant, strict=a.strict,
               images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool,
-              threads=a.threads)
+              threads=a.threads, sidecars=a.sidecars, caption_config=a.caption_config,
+              pool_manifest=a.pool_manifest, locked_pool_dirs=a.locked_pool_dirs,
+              _pool_checked=True)
         return 0
     items, img, txt, meta = load_cache(out, backend, dim=a.dim, vision_tokens=a.vision_tokens, project=a.project)
     subjects = None
@@ -2726,7 +3355,10 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         print(report(project, out, items, img, txt, meta, cov,
                      images_only=a.images_only, allow_multimodal_pool=a.allow_multimodal_pool, drafter=drafter,
                      token_counter=_token_counter() if a.count_tokens else None,
-                     caption_rules=rules, compose=a.compose, manifest_name=a.manifest_name))
+                     caption_rules=rules, compose=a.compose, manifest_name=a.manifest_name,
+                     sidecars=a.sidecars, caption_config=a.caption_config,
+                     pool_manifest=a.pool_manifest, locked_pool_dirs=a.locked_pool_dirs,
+                     _pool_checked=True))
     return 0
 
 

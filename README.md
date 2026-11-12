@@ -37,6 +37,7 @@ dataset-desk finds both, on a project folder, without changing it. It writes a r
 | `search` | The nearest images to a description (`--text`), a picture (`--image`), or both together |
 | `coverage` | The best images for each subject in a wanted-subjects list, so gaps show |
 | `report` | A Markdown report: duplicates, the least typical approved images by content and by look, the description audit, and whether each description finds its own image |
+| `sidecar-import` | Imports folders of images paired with same-stem `.txt` caption sidecars (`--sidecars` on `index`/`report`/`compose` does the same), runs the description gate, reports images without a `.txt` sidecar without inventing text, and writes everything under `--out` |
 | `compose` | Composes final training captions into `--out` from per-project rules, blind drafts and seat edits, writing a lane-3 dataset manifest (`{"items":[{"image","sha256","caption"}]}`) with per-part provenance |
 | `import-edits` | Re-imports edited rows from `description-worksheet.md` into `--out/seat-edits.jsonl` with a `seat:<name>` writer id |
 | `text-index` | Embeds the text and code files of a `--source` folder (or an rnd-data checkout), counting chunks with the model's own tokenizer |
@@ -127,6 +128,11 @@ dataset-desk index        --project path/to/project --backend dinov2 --out desk-
 dataset-desk report       --project path/to/project --backend dinov2 --out desk-out/project --draft qwen3-vl --device cuda --grant g1
 dataset-desk import-edits --project path/to/project --out desk-out/project --seat studio-1
 dataset-desk compose      --project path/to/project --out desk-out/project --draft qwen3-vl --device cuda --grant g1
+
+# Training folders with image + same-stem .txt sidecars (no records/ directory)
+dataset-desk sidecar-import --project path/to/training-copy --out desk-out/training-copy
+dataset-desk index          --project path/to/training-copy --out desk-out/training-copy --backend none --sidecars
+dataset-desk report         --project path/to/training-copy --out desk-out/training-copy --backend none
 ```
 
 ### Per-project caption rules (`caption-rules.json`) and provenance
@@ -135,6 +141,7 @@ Place `caption-rules.json` at `<project>/caption-rules.json` (or pass `--caption
 
 ```json
 {
+  "multimodal_pool": "salt-road",
   "prefix": "linocut print,",
   "drafter": "qwen3-vl",
   "drafter_prompt": "Describe only the visible pose, props, backdrop, and floor in 12 to 25 words.",
@@ -158,7 +165,9 @@ Place `caption-rules.json` at `<project>/caption-rules.json` (or pass `--caption
 
 - **Gate checks (model-free, reported in `description-review.jsonl`):** `prefix_missing` (caption does not start with `prefix`), `required_term_missing` (any `required_terms` entry for the record's class — resolved from `class_field` or `class_pattern` — or a `required` backdrop is absent), `banned_word` (any global, backdrop, or class `banned_words` phrase appears), plus pool `exact_duplicate` and `near_duplicate` (Jaccard ≥ 0.85).
 - **Composition (`compose` or `report --compose`):** writes `<out>/captions-manifest.json` (`--manifest-name` overrides the filename) in `style-dataset-lab` lane-3 `run_dataset` format `{"items":[{"image","sha256","caption",...}]}` — never inside `--project`. Each caption is assembled from `prefix`, verbatim `class` required terms, optional `backdrop`, and the free visible-content part (`seat` edit when imported, else `drafter` output, else the approved record text).
-- **Provenance record:** every final caption in both `captions-manifest.json` and `description-review.jsonl` carries a per-part `writers` list using `config:<file>:<line>`, `drafter:<id>@<rev>:<prompt sha>`, `seat:<name>`, and `record:<file>`, with stratum `captioner_assisted` when edited by a seat and `captioner_draft_unedited` when unedited.
+- **Provenance record:** every final caption in both `captions-manifest.json` and `description-review.jsonl` carries a per-part `writers` list using `config:<file>:<line>`, `drafter:<id>@<rev>:<prompt sha>`, `seat:<name>`, `record:<file>`, and `sidecar:<file>`, with stratum `captioner_assisted` when edited by a seat and `captioner_draft_unedited` when unedited.
+- **Sidecar import (`sidecar-import` or `--sidecars`):** pairs each image with its same-stem `.txt` sidecar, extracts embedded ComfyUI PNG generation prompts when present, runs the full description gate (prompt echo, exact/Jaccard duplicates, and `caption-rules.json`), reports any image without a `.txt` sidecar instead of inventing text, and writes all imported records and review files strictly under `--out`.
+- **Pool lock by tag and fail-closed renamed-copy guard:** `check_multimodal_pool` enforces the benchmark lock when either the folder name or `"multimodal_pool"` in project config (`caption-rules.json` or `project.json`) names a locked pool. For untagged projects outside those folder names, it compares image SHA-256 digests against a local manifest (`DATASET_DESK_POOL_MANIFEST` or `pool_manifest` in `~/.config/dataset-desk/config.json`, kept outside the repo) or `--locked-pool-dir <path>` and refuses fail-closed (`PERM_LOCKED_POOL`) naming the matching pool and matching image count; if no manifest or locked-pool folder is configured, it warns on stderr that renamed-copy detection is off.
 
 `dataset-desk --help` lists every flag. Exit codes: `0` ok, `1` a user error or a refusal, `2` an unexpected error. Errors print as `error <CODE>: <message>` with a `hint:` line; `--debug` adds the stack trace.
 
