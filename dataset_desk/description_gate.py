@@ -1487,8 +1487,8 @@ def draft_flagged_records(project: str, audit: dict, drafter) -> dict:
     Stores the prompt text, prompt SHA-256, and full raw output with each draft.
     """
     flagged = audit.get("flagged") or []
-    drafter_id = getattr(drafter, "drafter_id", getattr(drafter, "name", "plain-sight"))
-    drafter_rev = getattr(drafter, "revision", "unknown")
+    drafter_id = getattr(drafter, "drafter_id", getattr(drafter, "name", None))
+    drafter_rev = getattr(drafter, "revision", None)
     d_prompt = getattr(drafter, "prompt", None)
     d_prompt_sha = prompt_sha256(d_prompt)
     if not flagged:
