@@ -18,6 +18,11 @@ from PIL import Image
 from dataset_desk import backends, desk
 from dataset_desk.errors import CODES, EXIT_OK, EXIT_RUNTIME, EXIT_USER, DeskError
 
+try:
+    import fakes
+except ImportError:
+    from tests import fakes
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -38,7 +43,7 @@ def make_project(root):
     return proj
 
 
-class DeskErrorTests(unittest.TestCase):
+class DeskErrorTests(fakes.IsolatedDeskTestCase):
     def test_registry_codes_have_hints(self):
         self.assertTrue(CODES)
         self.assertTrue(all(h for h in CODES.values()))
@@ -71,7 +76,7 @@ class DeskErrorTests(unittest.TestCase):
         self.assertEqual(lines[-1], "cause: ValueError: why")
 
 
-class RunBoundary(unittest.TestCase):
+class RunBoundary(fakes.IsolatedDeskTestCase):
     def call(self, side_effect=None, argv=None, return_value=0):
         err = io.StringIO()
         with mock.patch.object(desk, "main", side_effect=side_effect, return_value=return_value) as m, \
@@ -124,16 +129,14 @@ class RunBoundary(unittest.TestCase):
         self.assertNotIn("Traceback", err)
 
 
-class MainWiring(unittest.TestCase):
+class MainWiring(fakes.IsolatedDeskTestCase):
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.tmp = self._tmp.name
         self.proj = make_project(self.tmp)
         self.out = os.path.join(self.tmp, "out")
-        env = mock.patch.dict(os.environ)
-        env.start()
-        self.addCleanup(env.stop)
 
     def run_cli(self, *args, **kw):
         out, err = io.StringIO(), io.StringIO()
@@ -254,7 +257,7 @@ class MainWiring(unittest.TestCase):
         self.assertTrue(os.path.isdir(os.path.join(self.tmp, "desk-out", "proj")))
 
 
-class LowerPriority(unittest.TestCase):
+class LowerPriority(fakes.IsolatedDeskTestCase):
     def test_windows_sets_below_normal_class(self):
         k32 = mock.Mock()
         k32.GetCurrentProcess.return_value = 99
@@ -269,7 +272,7 @@ class LowerPriority(unittest.TestCase):
         nice.assert_called_once_with(10)
 
 
-class ModuleEntryPoint(unittest.TestCase):
+class ModuleEntryPoint(fakes.IsolatedDeskTestCase):
     def test_runpy_exit_code_comes_from_run(self):
         err = io.StringIO()
         with tempfile.TemporaryDirectory() as tmp:
@@ -321,12 +324,13 @@ class FakeTokenizer:
         return {"input_ids": list(range(n))}
 
 
-class CountTokens(unittest.TestCase):
+class CountTokens(fakes.IsolatedDeskTestCase):
     """report --count-tokens runs the gate's 64-token test; without it, model-free passes stay 'unchecked'."""
 
     GOOD = "A hunched grey heron stands in brown reeds at dusk, one leg raised, watching the still water below."
 
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         root = self._tmp.name
@@ -379,7 +383,7 @@ class CountTokens(unittest.TestCase):
         self.assertIn("error DEP_TOKENIZER_MISSING", err.getvalue())
 
 
-class LinkTarget(unittest.TestCase):
+class LinkTarget(fakes.IsolatedDeskTestCase):
     def test_relative_when_it_can_be(self):
         base = tempfile.gettempdir()
         got = desk.description_gate.link_target(os.path.join(base, "p", "a b.png"), os.path.join(base, "out"))

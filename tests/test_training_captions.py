@@ -13,6 +13,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import tempfile
 import types
 import unittest
@@ -23,7 +24,11 @@ from PIL import Image, PngImagePlugin
 
 from dataset_desk import backends, description_gate, desk, registry
 from dataset_desk.errors import EXIT_OK, EXIT_USER, DeskError
-from tests import fakes
+
+try:
+    import fakes
+except ImportError:
+    from tests import fakes
 
 
 def _write_png(
@@ -82,17 +87,12 @@ class _FakeQwenProcessor(fakes.FakeProcessor):
         return [self.raw_reply]
 
 
-class DrafterSettingTests(unittest.TestCase):
+class DrafterSettingTests(fakes.IsolatedDeskTestCase):
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.tmp = self._tmp.name
-        env = mock.patch.dict(os.environ)
-        env.start()
-        self.addCleanup(env.stop)
-        os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
-        os.environ.pop("DATASET_DESK_POOL_DIRS", None)
-        os.environ["DATASET_DESK_USER_CONFIG"] = ""
 
     def test_qwen3_vl_registry_pin_licence_and_default_drafter(self):
         self.assertEqual(registry.DEFAULT_DRAFTER, "plain-sight")
@@ -239,8 +239,9 @@ class DrafterSettingTests(unittest.TestCase):
         self.assertEqual(cm.exception.code, "PERM_LOCKED_POOL")
 
 
-class CaptionRulesGateTests(unittest.TestCase):
+class CaptionRulesGateTests(fakes.IsolatedDeskTestCase):
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.tmp = self._tmp.name
@@ -377,8 +378,9 @@ class CaptionRulesGateTests(unittest.TestCase):
             self.assertEqual(cm_bad.exception.code, "INPUT_BAD_ARGUMENT")
 
 
-class CompositionAndProvenanceTests(unittest.TestCase):
+class CompositionAndProvenanceTests(fakes.IsolatedDeskTestCase):
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.tmp = self._tmp.name
@@ -386,12 +388,6 @@ class CompositionAndProvenanceTests(unittest.TestCase):
         self.out = os.path.join(self.tmp, "out")
         os.makedirs(os.path.join(self.proj, "records"), exist_ok=True)
         os.makedirs(os.path.join(self.proj, "outputs", "w1"), exist_ok=True)
-        env = mock.patch.dict(os.environ)
-        env.start()
-        self.addCleanup(env.stop)
-        os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
-        os.environ.pop("DATASET_DESK_POOL_DIRS", None)
-        os.environ["DATASET_DESK_USER_CONFIG"] = ""
 
         # Multi-line config with known 1-based line numbers
         self.config_lines = [
@@ -612,8 +608,9 @@ class CompositionAndProvenanceTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(out2, "captions-manifest.json")))
 
 
-class BlindWorksheetAndReimportTests(unittest.TestCase):
+class BlindWorksheetAndReimportTests(fakes.IsolatedDeskTestCase):
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.tmp = self._tmp.name
@@ -622,12 +619,6 @@ class BlindWorksheetAndReimportTests(unittest.TestCase):
         self.out = os.path.join(self.tmp, "out")
         os.makedirs(os.path.join(self.proj, "records"), exist_ok=True)
         os.makedirs(os.path.join(self.proj, "outputs", "w1"), exist_ok=True)
-        env = mock.patch.dict(os.environ)
-        env.start()
-        self.addCleanup(env.stop)
-        os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
-        os.environ.pop("DATASET_DESK_POOL_DIRS", None)
-        os.environ["DATASET_DESK_USER_CONFIG"] = ""
 
     def test_blind_worksheet_uses_dinov2_and_dhash_siblings_hides_prompts_and_reimports_seat(self):
         items_list: list[desk.Item] = []
@@ -741,7 +732,7 @@ class BlindWorksheetAndReimportTests(unittest.TestCase):
         self.assertEqual(loaded_edits["sr_0"]["writer"], "seat:seat-alpha")
 
 
-class Addendum1SidecarAndPoolLockTests(unittest.TestCase):
+class Addendum1SidecarAndPoolLockTests(fakes.IsolatedDeskTestCase):
     """Synthetic tests for Addendum 1 (Parts A-D):
     1. Tagged copy refused (`multimodal_pool: <name>`);
     2. Renamed copy WITHOUT tag and with matching image sha256s refused fail-closed;
@@ -750,15 +741,10 @@ class Addendum1SidecarAndPoolLockTests(unittest.TestCase):
     """
 
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.tmp = self._tmp.name
-        env = mock.patch.dict(os.environ)
-        env.start()
-        self.addCleanup(env.stop)
-        os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
-        os.environ.pop("DATASET_DESK_POOL_DIRS", None)
-        os.environ["DATASET_DESK_USER_CONFIG"] = ""
 
     def test_tagged_copy_is_refused(self):
         # Renamed training copy carrying explicit `multimodal_pool: "salt-road"` tag in caption-rules.json
@@ -984,6 +970,7 @@ class Addendum1SidecarAndPoolLockTests(unittest.TestCase):
         self.assertEqual(set(imp_rows), {"harbor_01", "harbor_02", "harbor_03", "harbor_04"})
         self.assertNotIn("harbor_05", imp_rows)
         self.assertEqual(imp_rows["harbor_01"]["source"], "sidecar:harbor_01.txt")
+        self.assertEqual(imp_rows["harbor_01"]["author_kind"], "sidecar")
         self.assertEqual(imp_rows["harbor_01"]["writers"], ["sidecar:harbor_01.txt"])
         self.assertTrue(imp_rows["harbor_01"]["passed_model_free"], imp_rows["harbor_01"]["flags"])
         self.assertIn("prompt_echo", imp_rows["harbor_02"]["flags"])
@@ -1026,6 +1013,7 @@ class Addendum1SidecarAndPoolLockTests(unittest.TestCase):
         h1 = m_items["harbor_01"]
         self.assertEqual(h1["sha256"], sha_h1)
         self.assertEqual(h1["source"], "sidecar:harbor_01.txt")
+        self.assertEqual(h1["author_kind"], "sidecar")
         self.assertEqual(
             h1["writers"],
             [
@@ -1045,7 +1033,7 @@ class Addendum1SidecarAndPoolLockTests(unittest.TestCase):
         self.assertEqual(_snapshot_tree(sidecar_proj), before_snap)
 
 
-class Addendum2PoolDetectionStatusTests(unittest.TestCase):
+class Addendum2PoolDetectionStatusTests(fakes.IsolatedDeskTestCase):
     """Synthetic tests for Addendum 2 (Parts A-C):
     1. With nothing configured, each command's output file carries `status: "off"` and `stderr` carries the warning once;
     2. With a manifest or a pool dir configured, the output carries `status: "on"` with per-pool counts, and `stderr`
@@ -1055,15 +1043,10 @@ class Addendum2PoolDetectionStatusTests(unittest.TestCase):
     """
 
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.tmp = self._tmp.name
-        env = mock.patch.dict(os.environ)
-        env.start()
-        self.addCleanup(env.stop)
-        os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
-        os.environ.pop("DATASET_DESK_POOL_DIRS", None)
-        os.environ["DATASET_DESK_USER_CONFIG"] = ""
 
     def _build_synthetic_projects(self, tag: str) -> tuple[str, str, str]:
         proj = os.path.join(self.tmp, f"proj-{tag}")
@@ -1482,9 +1465,9 @@ class Addendum2PoolDetectionStatusTests(unittest.TestCase):
         empty_mf = os.path.join(self.tmp, "empty-manifest.json")
         with open(empty_mf, "w", encoding="utf-8") as f:
             json.dump({}, f)
-        pd_empty, _ = desk.resolve_pool_detection(pool_manifest=empty_mf, emit_warning=False)
-        self.assertEqual(pd_empty["status"], "on")
-        self.assertEqual(pd_empty["counts"], {"hesperia": 0, "rustline": 0, "salt-road": 0, "tallow-fen": 0})
+        with self.assertRaises(DeskError) as cm_empty_mf:
+            desk.resolve_pool_detection(pool_manifest=empty_mf, emit_warning=False)
+        self.assertEqual(cm_empty_mf.exception.code, "INPUT_EMPTY_POOL_SOURCE")
 
         os.environ["DATASET_DESK_POOL_DIRS"] = f"rustline={locked_rust}"
         ucfg_dirs = os.path.join(self.tmp, "ucfg-dirs.json")
@@ -1585,6 +1568,550 @@ class Addendum2PoolDetectionStatusTests(unittest.TestCase):
         ):
             with self.assertRaises(DeskError):
                 description_gate._build_caption_rules(bad_rules)  # type: ignore[arg-type]
+
+
+class Addendum3LockAndProvenanceTests(fakes.IsolatedDeskTestCase):
+    """Synthetic tests for Addendum 3 (Parts A-E); every test fails at 5248711."""
+
+    def setUp(self):
+        super().setUp()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = self._tmp.name
+
+    def test_part_a_pools_non_object_refused(self):
+        # Fails at 5248711 dataset_desk/desk.py:232-238 (fell back to doc and skipped 'pools', returning 0 hashes + on)
+        mf_path = os.path.join(self.tmp, "pools-list.json")
+        for bad_pools in ([], ["salt-road"], "salt-road", 42):
+            with open(mf_path, "w", encoding="utf-8") as f:
+                json.dump({"pools": bad_pools}, f)
+            with self.assertRaises(DeskError) as cm:
+                desk.resolve_pool_detection(pool_manifest=mf_path, emit_warning=False)
+            self.assertEqual(cm.exception.code, "INPUT_BAD_ARGUMENT")
+            self.assertIn("'pools' must be a JSON object", cm.exception.message)
+
+    def test_part_a_empty_manifest_or_empty_pool_dir_refused_and_on_records_source_counts(self):
+        # Fails at 5248711 dataset_desk/desk.py:368-372, 401-421 (returned status 'on' with 0 hashes)
+        mf_path = os.path.join(self.tmp, "empty-source.json")
+        for empty_doc in (
+            {},
+            {"version": 1},
+            {"pools": {}},
+            {"salt-road": []},
+            {"pools": {"salt-road": []}},
+            {"salt-road": {"hashes": []}},
+            {"salt-road": {"items": []}},
+            {"locked_pool_dirs": []},
+        ):
+            with open(mf_path, "w", encoding="utf-8") as f:
+                json.dump(empty_doc, f)
+            with self.assertRaises(DeskError) as cm_mf:
+                desk.resolve_pool_detection(pool_manifest=mf_path, emit_warning=False)
+            self.assertEqual(cm_mf.exception.code, "INPUT_EMPTY_POOL_SOURCE")
+            self.assertIn("empty-source.json", cm_mf.exception.message)
+
+        with self.assertRaises(DeskError) as cm_empty_arg:
+            desk.resolve_pool_detection(locked_pool_dirs=[], emit_warning=False)
+        self.assertEqual(cm_empty_arg.exception.code, "INPUT_EMPTY_POOL_SOURCE")
+
+        empty_pool_dir = os.path.join(self.tmp, "salt-road")
+        os.makedirs(os.path.join(empty_pool_dir, "outputs", "w1"), exist_ok=True)
+        with self.assertRaises(DeskError) as cm_dir:
+            desk.resolve_pool_detection(locked_pool_dirs=[empty_pool_dir], emit_warning=False)
+        self.assertEqual(cm_dir.exception.code, "INPUT_EMPTY_POOL_SOURCE")
+        self.assertIn("salt-road", cm_dir.exception.message)
+
+        # Valid multi-source configuration: status == "on" guarantees >= 1 hash per configured pool + per-source counts
+        rust_dir = os.path.join(self.tmp, "rustline")
+        _write_png(os.path.join(rust_dir, "outputs", "w1", "rl_01.png"), (120, 60, 40), seed=101)
+        sha_sr_a = hashlib.sha256(b"synthetic-sr-a").hexdigest()
+        sha_sr_b = hashlib.sha256(b"synthetic-sr-b").hexdigest()
+        valid_mf = os.path.join(self.tmp, "valid-pools.json")
+        with open(valid_mf, "w", encoding="utf-8") as f:
+            json.dump({"pools": {"salt-road": [sha_sr_a, sha_sr_b]}}, f)
+
+        pd_on, hashes_on = desk.resolve_pool_detection(
+            pool_manifest=valid_mf,
+            locked_pool_dirs=[rust_dir],
+            emit_warning=False,
+        )
+        self.assertEqual(pd_on["status"], "on")
+        self.assertEqual(pd_on["configured_pools"], ["rustline", "salt-road"])
+        self.assertIsNotNone(hashes_on)
+        for p_cfg in pd_on["configured_pools"]:
+            self.assertGreaterEqual(pd_on["counts"][p_cfg], 1)
+        self.assertEqual(pd_on["pools"]["salt-road"]["sources"][0]["count"], 2)
+        self.assertEqual(pd_on["pools"]["rustline"]["sources"][0]["count"], 1)
+        by_pool_src = {s["pool"]: s["count"] for s in pd_on["sources"]}
+        self.assertEqual(by_pool_src, {"rustline": 1, "salt-road": 2})
+
+    def _setup_locked_pool_for_links(self) -> tuple[str, str, str]:
+        locked_sr = os.path.join(self.tmp, "salt-road")
+        locked_wave = os.path.join(locked_sr, "outputs", "w1")
+        sha_1 = _write_png(os.path.join(locked_wave, "sr_link_01.png"), (95, 45, 135), seed=111)
+        return locked_sr, locked_wave, sha_1
+
+    def test_part_b_symlink_wave_and_realpath_folder_refused(self):
+        # Fails at 5248711 dataset_desk/desk.py:145 (os.walk followlinks=False) and :471 (abspath vs realpath)
+        locked_sr, locked_wave, sha_1 = self._setup_locked_pool_for_links()
+        sym_proj = os.path.join(self.tmp, "untagged-sym-proj")
+        os.makedirs(os.path.join(sym_proj, "outputs"), exist_ok=True)
+        sym_wave = os.path.join(sym_proj, "outputs", "w1")
+        alias_sr = os.path.join(self.tmp, "alias-to-locked")
+        try:
+            os.symlink(locked_wave, sym_wave, target_is_directory=True)
+            os.symlink(locked_sr, alias_sr, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            if os.name == "nt":
+                self.skipTest(
+                    f"directory symlinks require Developer Mode or SeCreateSymbolicLinkPrivilege on Windows: {exc}"
+                )
+            raise
+
+        enum_rels = [rel for rel, _full, _lbl in desk.enumerate_project_images(sym_proj)]
+        self.assertEqual(enum_rels, ["outputs/w1/sr_link_01.png"])
+        self.assertEqual(desk._collect_folder_image_shas(sym_proj), {sha_1})
+
+        with self.assertRaises(DeskError) as cm_sym:
+            desk.check_multimodal_pool(sym_proj, "none", locked_pool_dirs=[locked_sr])
+        self.assertEqual(cm_sym.exception.code, "PERM_LOCKED_POOL")
+        self.assertIn("salt-road", cm_sym.exception.message)
+
+        err_scan = io.StringIO()
+        with contextlib.redirect_stderr(err_scan):
+            rc_scan = desk.run([
+                "scan", "--project", sym_proj, "--out", os.path.join(self.tmp, "out-sym"),
+                "--locked-pool-dir", locked_sr,
+            ])
+        self.assertEqual(rc_scan, EXIT_USER)
+        self.assertIn("PERM_LOCKED_POOL", err_scan.getvalue())
+
+        # realpath basename check catches symlinked project folder even when detection is off
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(DeskError) as cm_alias:
+            desk.check_multimodal_pool(alias_sr, "eg2", images_only=False)
+        self.assertEqual(cm_alias.exception.code, "PERM_LOCKED_POOL")
+        self.assertIn("salt-road", cm_alias.exception.message)
+
+        # Symlink cycle safety
+        cyc = os.path.join(self.tmp, "sym-cycle")
+        os.makedirs(os.path.join(cyc, "outputs", "w1"), exist_ok=True)
+        _write_png(os.path.join(cyc, "outputs", "w1", "c.png"), (30, 60, 90), seed=112)
+        os.symlink(os.path.join(cyc, "outputs", "w1"), os.path.join(cyc, "outputs", "w1", "loop"), target_is_directory=True)
+        self.assertEqual(len(desk.enumerate_project_images(cyc)), 1)
+
+    def test_part_b_windows_junction_wave_and_realpath_folder_refused(self):
+        # Fails at 5248711 dataset_desk/desk.py:145 (os.walk followlinks=False) and :471 (abspath vs realpath)
+        if os.name != "nt":
+            self.skipTest("Windows NTFS directory junctions (mklink /J) apply on Windows only")
+        locked_sr, locked_wave, sha_1 = self._setup_locked_pool_for_links()
+        junc_proj = os.path.join(self.tmp, "untagged-junction-proj")
+        os.makedirs(os.path.join(junc_proj, "outputs"), exist_ok=True)
+        junc_wave = os.path.join(junc_proj, "outputs", "w1")
+        alias_junc = os.path.join(self.tmp, "junction-to-locked")
+
+        for link_p, target_p in ((junc_wave, locked_wave), (alias_junc, locked_sr)):
+            res = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", link_p, target_p],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if res.returncode != 0:
+                self.skipTest(f"mklink /J unavailable in this environment: {res.stderr or res.stdout}")
+            self.addCleanup(lambda p=link_p: os.rmdir(p) if os.path.lexists(p) else None)
+
+        enum_rels = [rel for rel, _full, _lbl in desk.enumerate_project_images(junc_proj)]
+        self.assertEqual(enum_rels, ["outputs/w1/sr_link_01.png"])
+        self.assertEqual(desk._collect_folder_image_shas(junc_proj), {sha_1})
+
+        with self.assertRaises(DeskError) as cm_junc:
+            desk.check_multimodal_pool(junc_proj, "none", locked_pool_dirs=[locked_sr])
+        self.assertEqual(cm_junc.exception.code, "PERM_LOCKED_POOL")
+        self.assertIn("salt-road", cm_junc.exception.message)
+
+        err_idx = io.StringIO()
+        with contextlib.redirect_stderr(err_idx):
+            rc_idx = desk.run([
+                "index", "--project", junc_proj, "--out", os.path.join(self.tmp, "out-junc"),
+                "--backend", "none", "--locked-pool-dir", locked_sr,
+            ])
+        self.assertEqual(rc_idx, EXIT_USER)
+        self.assertIn("PERM_LOCKED_POOL", err_idx.getvalue())
+
+        # realpath basename check catches directory junction to salt-road even when detection is off
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(DeskError) as cm_alias:
+            desk.check_multimodal_pool(alias_junc, "eg2", images_only=False)
+        self.assertEqual(cm_alias.exception.code, "PERM_LOCKED_POOL")
+        self.assertIn("salt-road", cm_alias.exception.message)
+
+        # Self-referencing junction cycle terminates cleanly
+        cyc_dir = os.path.join(self.tmp, "junc-cycle")
+        cyc_w1 = os.path.join(cyc_dir, "outputs", "w1")
+        os.makedirs(cyc_w1, exist_ok=True)
+        _write_png(os.path.join(cyc_w1, "only.png"), (55, 85, 115), seed=113)
+        cyc_loop = os.path.join(cyc_w1, "loop")
+        res_cyc = subprocess.run(["cmd", "/c", "mklink", "/J", cyc_loop, cyc_w1], capture_output=True, text=True, check=False)
+        if res_cyc.returncode == 0:
+            self.addCleanup(lambda p=cyc_loop: os.rmdir(p) if os.path.lexists(p) else None)
+            self.assertEqual([r for r, _, _ in desk.enumerate_project_images(cyc_dir)], ["outputs/w1/only.png"])
+
+    def test_part_c_text_commands_locked_pool_images_sidecar_stems_and_pool_detection(self):
+        # Fails at 5248711 dataset_desk/desk.py:3258-3297 (text_cmds ran no pool check and wrote no pool_detection)
+        locked_sr = os.path.join(self.tmp, "salt-road")
+        sha_sr = _write_png(os.path.join(locked_sr, "outputs", "w1", "sr_plate_01.png"), (110, 70, 50), seed=121)
+        with open(os.path.join(locked_sr, "notes.py"), "w", encoding="utf-8") as f:
+            f.write("def helper():\n    return 1\n")
+
+        made_backends: list[str] = []
+
+        def spy_make(bname: str, **kw):
+            made_backends.append(bname)
+            emb = backends.FakeEmbedder()
+            emb.name = bname
+            return emb
+
+        # 1. Folder named salt-road (including --task code defaulting to eg2) refused BEFORE model load
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(DeskError) as cm_named:
+            desk.main(
+                ["text-index", "--source", locked_sr, "--out", os.path.join(self.tmp, "out-t1"), "--task", "code"],
+                make=spy_make,
+            )
+        self.assertEqual(cm_named.exception.code, "PERM_LOCKED_POOL")
+        self.assertEqual(made_backends, [])
+
+        # 2. Tagged source folder refused on text-index and text-search
+        tagged_src = os.path.join(self.tmp, "tagged-text-src")
+        os.makedirs(tagged_src, exist_ok=True)
+        with open(os.path.join(tagged_src, "project.json"), "w", encoding="utf-8") as f:
+            json.dump({"multimodal_pool": "salt-road"}, f)
+        with open(os.path.join(tagged_src, "doc.txt"), "w", encoding="utf-8") as f:
+            f.write("harbour lantern beside stone steps")
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(DeskError) as cm_tsearch:
+            desk.main(
+                [
+                    "text-search", "--source", tagged_src, "--out", os.path.join(self.tmp, "out-t2"),
+                    "--backend", "fake", "--text", "lantern",
+                ],
+                make=spy_make,
+            )
+        self.assertEqual(cm_tsearch.exception.code, "PERM_LOCKED_POOL")
+        self.assertEqual(made_backends, [])
+
+        # 3. Untagged --source containing a locked-pool image by sha256 is refused
+        img_copy_src = os.path.join(self.tmp, "untagged-img-text-src")
+        os.makedirs(img_copy_src, exist_ok=True)
+        with open(os.path.join(locked_sr, "outputs", "w1", "sr_plate_01.png"), "rb") as fsrc, \
+                open(os.path.join(img_copy_src, "renamed_pic.png"), "wb") as fdst:
+            fdst.write(fsrc.read())
+        with open(os.path.join(img_copy_src, "readme.md"), "w", encoding="utf-8") as f:
+            f.write("plain notes")
+        with self.assertRaises(DeskError) as cm_img_src:
+            desk.main([
+                "text-index", "--source", img_copy_src, "--out", os.path.join(self.tmp, "out-t3"),
+                "--backend", "fake", "--locked-pool-dir", locked_sr,
+            ])
+        self.assertEqual(cm_img_src.exception.code, "PERM_LOCKED_POOL")
+        self.assertIn("salt-road", cm_img_src.exception.message)
+
+        # 4. Untagged --source containing ONLY a .txt sidecar whose stem matches a locked-pool image is refused
+        sidecar_only_src = os.path.join(self.tmp, "sidecar-only-text-src")
+        os.makedirs(sidecar_only_src, exist_ok=True)
+        with open(os.path.join(sidecar_only_src, "sr_plate_01.txt"), "w", encoding="utf-8") as f:
+            f.write("carved timber skiff beside stone quay steps")
+
+        with self.assertRaises(DeskError) as cm_txt_dir:
+            desk.main([
+                "text-index", "--source", sidecar_only_src, "--out", os.path.join(self.tmp, "out-t4"),
+                "--backend", "fake", "--locked-pool-dir", locked_sr,
+            ])
+        self.assertEqual(cm_txt_dir.exception.code, "PERM_LOCKED_POOL")
+        self.assertIn(".txt caption sidecar", cm_txt_dir.exception.message)
+        self.assertIn("salt-road", cm_txt_dir.exception.message)
+
+        # Also refused via --pool-manifest item image filename / stems on both text-index and text-search
+        stem_mf = os.path.join(self.tmp, "stem-manifest.json")
+        with open(stem_mf, "w", encoding="utf-8") as f:
+            json.dump({"pools": {"salt-road": {"items": [{"image": "sr_plate_01.png", "sha256": sha_sr}]}}}, f)
+        with self.assertRaises(DeskError) as cm_txt_mf:
+            desk.main([
+                "text-search", "--source", sidecar_only_src, "--out", os.path.join(self.tmp, "out-t5"),
+                "--backend", "fake", "--text", "skiff", "--pool-manifest", stem_mf,
+            ])
+        self.assertEqual(cm_txt_mf.exception.code, "PERM_LOCKED_POOL")
+
+        # 5. Clean text commands record pool_detection ('off' warns once; 'on' records counts with empty stderr)
+        clean_src = os.path.join(self.tmp, "clean-code-src")
+        os.makedirs(clean_src, exist_ok=True)
+        with open(os.path.join(clean_src, "mod_a.py"), "w", encoding="utf-8") as f:
+            f.write("def alpha():\n    return 'red'\n")
+        with open(os.path.join(clean_src, "caption_ok.txt"), "w", encoding="utf-8") as f:
+            f.write("unrelated studio notes on wooden joinery")
+
+        out_off = os.path.join(self.tmp, "out-text-off")
+        err_off = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err_off):
+            self.assertEqual(
+                desk.run(["text-index", "--source", clean_src, "--out", out_off, "--backend", "fake"]),
+                EXIT_OK,
+            )
+        self.assertEqual(err_off.getvalue().count("renamed-copy detection is off"), 1)
+        with open(os.path.join(out_off, "fake", "text", "meta.json"), encoding="utf-8") as f:
+            t_meta_off = json.load(f)
+        self.assertEqual(t_meta_off["pool_detection"]["status"], "off")
+
+        out_on = os.path.join(self.tmp, "out-text-on")
+        for argv in (
+            ["text-index", "--source", clean_src, "--out", out_on, "--backend", "fake", "--locked-pool-dir", locked_sr],
+            [
+                "text-dupes", "--source", clean_src, "--out", out_on, "--backend", "fake",
+                "--semantic", "0.9", "--locked-pool-dir", locked_sr,
+            ],
+            [
+                "text-search", "--source", clean_src, "--out", out_on, "--backend", "fake",
+                "--text", "red", "--locked-pool-dir", locked_sr,
+            ],
+            ["lineage", "--source", clean_src, "--out", out_on, "--backend", "fake", "--locked-pool-dir", locked_sr],
+        ):
+            err_on = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err_on):
+                self.assertEqual(desk.run(argv), EXIT_OK)
+            self.assertEqual(err_on.getvalue(), "")
+
+        for rel_json in (
+            os.path.join("fake", "text", "meta.json"),
+            "text-dupes-fake.json",
+            "text-search-fake.json",
+            "lineage-fake.json",
+            "pool-detection.json",
+        ):
+            with open(os.path.join(out_on, rel_json), encoding="utf-8") as f:
+                doc = json.load(f)
+            self.assertEqual(doc["pool_detection"]["status"], "on", rel_json)
+            self.assertEqual(doc["pool_detection"]["counts"]["salt-road"], 1, rel_json)
+
+    def test_part_d1_sidecar_author_kind_is_sidecar_never_human_and_in_strata_counts(self):
+        # Fails at 5248711 dataset_desk/description_gate.py:1031-1035, :2221-2225 (gave sidecars author_kind 'human')
+        self.assertIn("sidecar", description_gate.KNOWN_AUTHOR_STRATA)
+        sc_proj = os.path.join(self.tmp, "sc-honest")
+        os.makedirs(sc_proj, exist_ok=True)
+        with open(os.path.join(sc_proj, "caption-rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"prefix": "ink plate,", "drafter": "none"}, f)
+        _write_png(os.path.join(sc_proj, "plate_01.png"), (85, 115, 145), seed=131)
+        with open(os.path.join(sc_proj, "plate_01.txt"), "w", encoding="utf-8") as f:
+            f.write("ink plate, weathered stone bridge spanning narrow millstream beside reeds")
+
+        out_sc = os.path.join(self.tmp, "out-sc-honest")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(desk.run(["sidecar-import", "--project", sc_proj, "--out", out_sc]), EXIT_OK)
+            self.assertEqual(
+                desk.run(["compose", "--project", sc_proj, "--out", out_sc, "--sidecars", "--draft", "none"]),
+                EXIT_OK,
+            )
+
+        with open(os.path.join(out_sc, "sidecar-import.json"), encoding="utf-8") as f:
+            sc_imp = json.load(f)
+        self.assertEqual(sc_imp["strata_counts"]["sidecar"], 1)
+        self.assertEqual(sc_imp["strata_counts"]["human"], 0)
+
+        with open(os.path.join(out_sc, "captions-manifest.json"), encoding="utf-8") as f:
+            mf = json.load(f)
+        self.assertEqual(mf["items"][0]["author_kind"], "sidecar")
+        self.assertEqual(mf["strata_counts"]["sidecar"], 1)
+        self.assertEqual(mf["strata_counts"]["human"], 0)
+
+        # Even if a synthetic sidecar record claims author_kind='human', audit_records never reports it as 'human'
+        forged = sc_imp
+        self.assertIsNotNone(forged)
+        audit_forged = description_gate.audit_records([{
+            "id": "plate_01",
+            "asset_path": "plate_01.png",
+            "sidecar_file": "plate_01.txt",
+            "author_kind": "human",
+            "judgment": {
+                "status": "approved",
+                "explanation": "ink plate, weathered stone bridge spanning narrow millstream beside reeds",
+            },
+        }])
+        self.assertEqual(audit_forged["records"][0]["author_kind"], "sidecar")
+
+    def test_part_d2_seat_edits_record_draft_and_rerun_report_preserves_captioner_assisted(self):
+        # Fails at 5248711 dataset_desk/description_gate.py:1924-1931 and :2202-2203 (re-running report turned draft edit into 'human')
+        proj = os.path.join(self.tmp, "rerun-proj")
+        out_dir = os.path.join(self.tmp, "out-rerun")
+        os.makedirs(os.path.join(proj, "records"), exist_ok=True)
+        _write_png(os.path.join(proj, "outputs", "w1", "item_01.png"), (130, 80, 70), seed=141)
+        with open(os.path.join(proj, "caption-rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"prefix": "woodblock print,"}, f)
+        with open(os.path.join(proj, "records", "item_01.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "id": "item_01",
+                "asset_path": "outputs/w1/item_01.png",
+                "judgment": {"status": "approved", "explanation": "bad short"},
+                "provenance": {"prompt": "unrelated prompt words"},
+            }, f)
+
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(desk.run(["index", "--project", proj, "--out", out_dir, "--backend", "none"]), EXIT_OK)
+            self.assertEqual(
+                desk.run(["report", "--project", proj, "--out", out_dir, "--backend", "none", "--draft", "fake"]),
+                EXIT_OK,
+            )
+
+        ws_path = os.path.join(out_dir, "description-worksheet.md")
+        with open(ws_path, encoding="utf-8") as f:
+            ws_lines = f.read().splitlines()
+        new_lines = []
+        for ln in ws_lines:
+            if ln.startswith("| `item_01` |"):
+                cells = ln.split("|")
+                cells[7] = " stone wellhead beside stacked cedar buckets in courtyard "
+                ln = "|".join(cells)
+            new_lines.append(ln)
+        with open(ws_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(new_lines) + "\n")
+
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                desk.run(["import-edits", "--project", proj, "--out", out_dir, "--seat", "seat-r1"]),
+                EXIT_OK,
+            )
+
+        edits = description_gate.load_seat_edits(out_dir)
+        self.assertTrue(edits["item_01"].get("draft_text"))
+        self.assertIn("drafter:fake-drafter@", str(edits["item_01"].get("draft_writer")))
+
+        # Re-run `report` WITHOUT `--draft` (overwriting description-review.jsonl without live drafts), then `compose --draft none`
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(desk.run(["report", "--project", proj, "--out", out_dir, "--backend", "none"]), EXIT_OK)
+            self.assertEqual(desk.run(["compose", "--project", proj, "--out", out_dir, "--draft", "none"]), EXIT_OK)
+
+        with open(os.path.join(out_dir, "captions-manifest.json"), encoding="utf-8") as f:
+            mf = json.load(f)
+        self.assertEqual(mf["items"][0]["author_kind"], "captioner_assisted")
+        self.assertIn("drafter:fake-drafter@", str(mf["items"][0]["drafter_writer"]))
+
+        with open(os.path.join(out_dir, "description-review.jsonl"), encoding="utf-8") as f:
+            rev_row = json.loads(f.readline())
+        self.assertEqual(rev_row["author_kind"], "captioner_assisted")
+
+    def test_part_d3_drafted_review_rows_carry_writers_and_import_edits_appends(self):
+        # Fails at 5248711 dataset_desk/description_gate.py:1038, :1519-1529, :1959-1962 (writers None, then overwritten)
+        proj = os.path.join(self.tmp, "writers-proj")
+        out_dir = os.path.join(self.tmp, "out-writers")
+        os.makedirs(os.path.join(proj, "records"), exist_ok=True)
+        _write_png(os.path.join(proj, "outputs", "w1", "w_01.png"), (65, 125, 95), seed=151)
+        with open(os.path.join(proj, "records", "w_01.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "id": "w_01",
+                "asset_path": "outputs/w1/w_01.png",
+                "judgment": {"status": "approved", "explanation": "too short"},
+                "provenance": {"prompt": "prompt words"},
+            }, f)
+
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(desk.run(["index", "--project", proj, "--out", out_dir, "--backend", "none"]), EXIT_OK)
+            self.assertEqual(
+                desk.run(["report", "--project", proj, "--out", out_dir, "--backend", "none", "--draft", "fake"]),
+                EXIT_OK,
+            )
+
+        rev_path = os.path.join(out_dir, "description-review.jsonl")
+        with open(rev_path, encoding="utf-8") as f:
+            before_row = json.loads(f.readline())
+        expected_d_writer = description_gate.drafter_writer_id("fake-drafter", "fake-drafter-v1", None)
+        self.assertEqual(before_row["writers"], ["record:records/w_01.json", expected_d_writer])
+
+        ws_path = os.path.join(out_dir, "description-worksheet.md")
+        with open(ws_path, encoding="utf-8") as f:
+            ws_text = f.read()
+        edited_lines = []
+        for ln in ws_text.splitlines():
+            if ln.startswith("| `w_01` |"):
+                cells = ln.split("|")
+                cells[7] = " stone parapet overlooking calm harbour water at dusk "
+                ln = "|".join(cells)
+            edited_lines.append(ln)
+        with open(ws_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(edited_lines) + "\n")
+
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                desk.run(["import-edits", "--project", proj, "--out", out_dir, "--seat", "seat-append"]),
+                EXIT_OK,
+            )
+
+        with open(rev_path, encoding="utf-8") as f:
+            after_row = json.loads(f.readline())
+        self.assertEqual(
+            after_row["writers"],
+            ["record:records/w_01.json", expected_d_writer, "seat:seat-append"],
+        )
+
+    def test_part_d4_unknown_drafter_defaults_is_arm_model_true_on_locked_pool(self):
+        # Fails at 5248711 dataset_desk/desk.py:627 (getattr(drafter, 'is_arm_model', False) defaulted to False)
+        locked_sr = os.path.join(self.tmp, "salt-road")
+        os.makedirs(locked_sr, exist_ok=True)
+        unknown_drafter = types.SimpleNamespace(name="mystery-vlm-drafter")
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(DeskError) as cm:
+            desk.check_drafter_pool(locked_sr, unknown_drafter, allow_multimodal_pool=False)
+        self.assertEqual(cm.exception.code, "PERM_LOCKED_POOL")
+
+    def test_part_e_all_testcases_inherit_isolated_env_and_ignore_real_user_config(self):
+        # Fails at 5248711 tests/fakes.py & tests/test_*.py (no IsolatedDeskTestCase; real user config read from HOME/APPDATA)
+        import importlib
+
+        fake_home = os.path.join(self.tmp, "fake-home")
+        fake_appdata = os.path.join(self.tmp, "fake-appdata")
+        for bad_cfg in (
+            os.path.join(fake_home, ".config", "dataset-desk", "config.json"),
+            os.path.join(fake_appdata, "dataset-desk", "config.json"),
+        ):
+            os.makedirs(os.path.dirname(bad_cfg), exist_ok=True)
+            with open(bad_cfg, "w", encoding="utf-8") as f:
+                f.write("{malformed real developer user config")
+
+        proj = os.path.join(self.tmp, "plain-proj")
+        os.makedirs(proj, exist_ok=True)
+        with mock.patch.dict(os.environ, {"HOME": fake_home, "USERPROFILE": fake_home, "APPDATA": fake_appdata}):
+            # IsolatedDeskTestCase set DATASET_DESK_USER_CONFIG="", so the broken HOME/APPDATA config is ignored
+            self.assertEqual(os.environ.get("DATASET_DESK_USER_CONFIG"), "")
+            with contextlib.redirect_stderr(io.StringIO()):
+                pd = desk.check_multimodal_pool(proj, "none")
+            self.assertEqual(pd["status"], "off")
+
+            # Confirm that without DATASET_DESK_USER_CONFIG, the broken developer config WOULD fail every command
+            with mock.patch.dict(os.environ):
+                os.environ.pop("DATASET_DESK_USER_CONFIG", None)
+                with self.assertRaises(DeskError) as cm_unisolated:
+                    desk.check_multimodal_pool(proj, "none")
+                self.assertEqual(cm_unisolated.exception.code, "INPUT_BAD_ARGUMENT")
+
+        tests_dir = os.path.dirname(os.path.abspath(__file__))
+        checked_classes = 0
+        for fn in sorted(os.listdir(tests_dir)):
+            if not (fn.startswith("test_") and fn.endswith(".py")):
+                continue
+            mod_base = fn[:-3]
+            mod = None
+            for mod_name in (mod_base, f"tests.{mod_base}"):
+                try:
+                    mod = importlib.import_module(mod_name)
+                    break
+                except ImportError:
+                    continue
+            self.assertIsNotNone(mod, fn)
+            for attr_val in vars(mod).values():
+                if (
+                    isinstance(attr_val, type)
+                    and issubclass(attr_val, unittest.TestCase)
+                    and attr_val is not unittest.TestCase
+                ):
+                    checked_classes += 1
+                    self.assertTrue(
+                        any(base.__name__ == "IsolatedDeskTestCase" for base in attr_val.__mro__),
+                        f"{fn}:{attr_val.__name__} does not inherit IsolatedDeskTestCase",
+                    )
+        self.assertGreaterEqual(checked_classes, 30)
 
 
 if __name__ == "__main__":

@@ -89,6 +89,124 @@ _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 class _PoolCheckState:
     pool_detection: dict
     pool_hashes: dict[str, set[str]] | None
+    pool_stems: dict[str, set[str]] | None = None
+
+
+def _walk_followlinks(
+    top: str,
+    _ancestors: frozenset[str] = frozenset(),
+):
+    """Walk `top` following symlinks and Windows directory junctions while breaking any directory cycle."""
+    try:
+        real_top = os.path.normcase(os.path.realpath(top))
+    except OSError:
+        return
+    if real_top in _ancestors:
+        return
+    next_ancestors = _ancestors | {real_top}
+    try:
+        entries = list(os.scandir(top))
+    except OSError:
+        return
+    dirs: list[str] = []
+    files: list[str] = []
+    for entry in entries:
+        try:
+            if entry.is_dir(follow_symlinks=True):
+                dirs.append(entry.name)
+            elif entry.is_file(follow_symlinks=True):
+                files.append(entry.name)
+        except OSError:
+            continue
+    dirs.sort()
+    files.sort()
+    yield top, dirs, files
+    for d in dirs:
+        yield from _walk_followlinks(os.path.join(top, d), next_ancestors)
+
+
+def enumerate_project_images(
+    project: str,
+    *,
+    sidecars: bool = False,
+    include_record_assets: bool = False,
+    include_top_outputs: bool = False,
+) -> list[tuple[str, str, str]]:
+    """Shared enumerator returning `(rel_posix_path, full_path, folder_label)` for every image file read by `scan`
+    and every other project/source command, following symlinks and Windows directory junctions."""
+    abs_proj = os.path.abspath(project)
+    if not os.path.isdir(abs_proj):
+        return []
+    out_dir = os.path.join(abs_proj, "outputs")
+    found: list[tuple[str, str, str]] = []
+    seen_rel: set[str] = set()
+
+    if sidecars:
+        has_out_subdirs = False
+        if os.path.isdir(out_dir):
+            try:
+                has_out_subdirs = any(os.path.isdir(os.path.join(out_dir, d)) for d in os.listdir(out_dir))
+            except OSError:
+                has_out_subdirs = False
+        skip_top_outputs = (not include_top_outputs) and has_out_subdirs
+        for root, dirs, files in _walk_followlinks(abs_proj):
+            dirs[:] = [d for d in dirs if d not in (".git", "records", "__pycache__")]
+            if skip_top_outputs and os.path.abspath(root) == os.path.abspath(out_dir):
+                continue
+            for f in files:
+                if os.path.splitext(f)[1].lower() not in IMAGE_EXT:
+                    continue
+                full = os.path.join(root, f)
+                rel = os.path.relpath(full, abs_proj).replace("\\", "/")
+                seen_rel.add(rel)
+                rel_parts = rel.split("/")
+                folder_lbl = (
+                    rel_parts[1]
+                    if (len(rel_parts) >= 3 and rel_parts[0] == "outputs")
+                    else (rel_parts[0] if len(rel_parts) >= 2 else "root")
+                )
+                found.append((rel, full, folder_lbl))
+    else:
+        try:
+            out_names = sorted(os.listdir(out_dir)) if os.path.isdir(out_dir) else []
+        except OSError:
+            out_names = []
+        for folder in out_names:
+            fdir = os.path.join(out_dir, folder)
+            if not os.path.isdir(fdir):
+                continue
+            for root, _dirs, files in _walk_followlinks(fdir):
+                for f in files:
+                    if os.path.splitext(f)[1].lower() not in IMAGE_EXT:
+                        continue
+                    full = os.path.join(root, f)
+                    rel = os.path.relpath(full, abs_proj).replace("\\", "/")
+                    seen_rel.add(rel)
+                    found.append((rel, full, folder))
+
+    if include_record_assets:
+        rec_dir = os.path.join(abs_proj, "records")
+        if os.path.isdir(rec_dir):
+            try:
+                rec_files = sorted(os.listdir(rec_dir))
+            except OSError:
+                rec_files = []
+            for rf in rec_files:
+                if not rf.endswith(".json"):
+                    continue
+                try:
+                    with open(os.path.join(rec_dir, rf), encoding="utf-8") as fh:
+                        rdoc = json.load(fh)
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(rdoc, dict) and isinstance(rdoc.get("asset_path"), str):
+                    ap = rdoc["asset_path"].replace("\\", "/").strip()
+                    if ap and ap not in seen_rel and os.path.splitext(ap)[1].lower() in IMAGE_EXT:
+                        full_ap = os.path.join(abs_proj, ap)
+                        if os.path.isfile(full_ap):
+                            seen_rel.add(ap)
+                            found.append((ap, full_ap, "records"))
+    return found
 
 
 def _parse_pool_tag_value(raw_tag: object, source_label: str) -> str | None:
@@ -136,18 +254,46 @@ def _resolve_project_pool_tag(project: str, caption_config: str | None = None) -
     return None
 
 
-def _collect_folder_image_shas(folder: str) -> set[str]:
-    """Compute SHA-256 hex digests for every image file inside `folder`."""
+def _collect_folder_image_shas_and_stems(
+    folder: str,
+    *,
+    include_top_outputs: bool = False,
+) -> tuple[set[str], set[str]]:
+    """Compute SHA-256 hex digests and lowercased filename stems for every readable project image in `folder`
+    (symlinks and Windows directory junctions included via `enumerate_project_images`)."""
+    shas: set[str] = set()
+    stems: set[str] = set()
+    for rel, full, _lbl in enumerate_project_images(
+        folder,
+        sidecars=True,
+        include_record_assets=True,
+        include_top_outputs=include_top_outputs,
+    ):
+        shas.add(sha256_file(full))
+        stem = os.path.splitext(os.path.basename(rel))[0].strip().lower()
+        if stem:
+            stems.add(stem)
+    return shas, stems
+
+
+def _collect_folder_image_shas(folder: str, *, include_top_outputs: bool = False) -> set[str]:
+    """Compute SHA-256 hex digests for every readable project image in `folder`, links included."""
+    return _collect_folder_image_shas_and_stems(folder, include_top_outputs=include_top_outputs)[0]
+
+
+def _collect_folder_txt_stems(folder: str) -> set[str]:
+    """Collect lowercased stems of `.txt` files inside `folder` (links included)."""
     abs_dir = os.path.abspath(folder)
     if not os.path.isdir(abs_dir):
         return set()
-    shas: set[str] = set()
-    for root, dirs, files in os.walk(abs_dir):
-        dirs[:] = sorted(d for d in dirs if d != ".git")
-        for fn in sorted(files):
-            if os.path.splitext(fn)[1].lower() in IMAGE_EXT:
-                shas.add(sha256_file(os.path.join(root, fn)))
-    return shas
+    stems: set[str] = set()
+    for _root, dirs, files in _walk_followlinks(abs_dir):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
+        for fn in files:
+            stem, ext = os.path.splitext(fn)
+            if ext.lower() == ".txt" and stem.strip():
+                stems.add(stem.strip().lower())
+    return stems
 
 
 def _normalize_pool_dir_specs(
@@ -191,9 +337,22 @@ def _normalize_pool_dir_specs(
     return resolved
 
 
-def _extract_hash_set(entry: object, pool_name: str, source_label: str) -> set[str]:
+def _extract_hash_and_stem_sets(
+    entry: object,
+    pool_name: str,
+    source_label: str,
+) -> tuple[set[str], set[str]]:
     items_raw: object = entry
+    stems: set[str] = set()
     if isinstance(entry, dict):
+        if "stems" in entry:
+            raw_stems = entry["stems"]
+            if not isinstance(raw_stems, list) or any(not isinstance(s, str) for s in raw_stems):
+                raise DeskError(
+                    "INPUT_BAD_ARGUMENT",
+                    f"pool manifest {source_label!r} 'stems' for {pool_name!r} must be a list of strings",
+                )
+            stems.update(s.strip().lower() for s in raw_stems if s.strip())
         if "hashes" in entry:
             items_raw = entry["hashes"]
         elif "sha256" in entry and isinstance(entry["sha256"], list):
@@ -212,26 +371,56 @@ def _extract_hash_set(entry: object, pool_name: str, source_label: str) -> set[s
         )
     out: set[str] = set()
     for elem in items_raw:
-        val = elem.get("sha256") if isinstance(elem, dict) else elem
+        if isinstance(elem, dict):
+            val = elem.get("sha256")
+            for k in ("stem", "image", "asset_path", "path"):
+                sv = elem.get(k)
+                if isinstance(sv, str) and sv.strip():
+                    st = (
+                        sv.strip().lower()
+                        if k == "stem"
+                        else os.path.splitext(os.path.basename(sv.strip()))[0].strip().lower()
+                    )
+                    if st:
+                        stems.add(st)
+        else:
+            val = elem
         if not isinstance(val, str) or not _HEX64_RE.match(val.strip().lower()):
             raise DeskError(
                 "INPUT_BAD_ARGUMENT",
                 f"pool manifest {source_label!r} has invalid 64-hex sha256 {val!r} under {pool_name!r}",
             )
         out.add(val.strip().lower())
-    return out
+    return out, stems
 
 
-def _parse_pool_manifest_doc(doc: object, source_label: str, *, base_dir: str | None = None) -> tuple[dict[str, set[str]], list[str]]:
+def _parse_pool_manifest_doc(
+    doc: object,
+    source_label: str,
+    *,
+    base_dir: str | None = None,
+) -> tuple[dict[str, set[str]], dict[str, set[str]], list[str]]:
     if not isinstance(doc, dict):
         raise DeskError("INPUT_BAD_ARGUMENT", f"pool manifest {source_label!r} must be a JSON object")
-    extra_dirs = _normalize_pool_dir_specs(
-        doc.get("locked_pool_dirs") if "locked_pool_dirs" in doc else doc.get("pool_dirs"),
-        base_dir=base_dir,
-    )
-    pools_raw = doc.get("pools") if isinstance(doc.get("pools"), dict) else doc
-    assert isinstance(pools_raw, dict)
+    if "pools" in doc:
+        if not isinstance(doc["pools"], dict):
+            raise DeskError(
+                "INPUT_BAD_ARGUMENT",
+                f"pool manifest {source_label!r} 'pools' must be a JSON object, got {type(doc['pools']).__name__}",
+            )
+        pools_raw = doc["pools"]
+    else:
+        pools_raw = doc
+    raw_dirs = doc.get("locked_pool_dirs") if "locked_pool_dirs" in doc else doc.get("pool_dirs")
+    has_dir_key = ("locked_pool_dirs" in doc) or ("pool_dirs" in doc)
+    extra_dirs = _normalize_pool_dir_specs(raw_dirs, base_dir=base_dir)
+    if has_dir_key and raw_dirs is not None and not extra_dirs:
+        raise DeskError(
+            "INPUT_EMPTY_POOL_SOURCE",
+            f"pool manifest {source_label!r} configured an empty 'locked_pool_dirs' source",
+        )
     hashes_by_pool: dict[str, set[str]] = {}
+    stems_by_pool: dict[str, set[str]] = {}
     meta_keys = {"pools", "locked_pool_dirs", "pool_dirs", "version", "description"}
     for key, val in pools_raw.items():
         if pools_raw is doc and key in meta_keys:
@@ -243,8 +432,21 @@ def _parse_pool_manifest_doc(doc: object, source_label: str, *, base_dir: str | 
                 f"pool manifest {source_label!r} names unknown locked pool {key!r}; "
                 f"expected one of {sorted(MULTIMODAL_POOL)}",
             )
-        hashes_by_pool[norm_pool] = _extract_hash_set(val, norm_pool, source_label)
-    return hashes_by_pool, extra_dirs
+        h_set, s_set = _extract_hash_and_stem_sets(val, norm_pool, source_label)
+        if not h_set:
+            raise DeskError(
+                "INPUT_EMPTY_POOL_SOURCE",
+                f"pool manifest {source_label!r} entry for pool {norm_pool!r} yielded 0 image hashes",
+            )
+        hashes_by_pool[norm_pool] = h_set
+        if s_set:
+            stems_by_pool[norm_pool] = s_set
+    if not hashes_by_pool and not extra_dirs:
+        raise DeskError(
+            "INPUT_EMPTY_POOL_SOURCE",
+            f"pool manifest {source_label!r} configured 0 pool entries and 0 pool directories",
+        )
+    return hashes_by_pool, stems_by_pool, extra_dirs
 
 
 def _load_user_pool_config() -> tuple[str | None, str | None, list[str]]:
@@ -290,20 +492,12 @@ def _load_user_pool_config() -> tuple[str | None, str | None, list[str]]:
     return cfg_path, manifest_path, dir_specs
 
 
-def resolve_pool_detection(
+def _resolve_pool_detection_with_stems(
     *,
     pool_manifest: str | None = None,
     locked_pool_dirs: str | list[str] | tuple[str, ...] | dict[str, str] | None = None,
     emit_warning: bool = True,
-) -> tuple[dict, dict[str, set[str]] | None]:
-    """Resolve the run's single `pool_detection` status and locked-pool sha256 sets.
-
-    - When configured (`status == "on"`): records the pools, the image-hash count per pool, and where each came from
-      (`--pool-manifest`, `DATASET_DESK_POOL_MANIFEST`, `user_config`, `--locked-pool-dir`, `DATASET_DESK_POOL_DIRS`).
-      Hash values are NEVER included in `pool_detection`.
-    - When unconfigured (`status == "off"`): records the warning text and (when `emit_warning=True`) prints it once to
-      `stderr`.
-    """
+) -> tuple[dict, dict[str, set[str]] | None, dict[str, set[str]] | None]:
     user_cfg_path, user_manifest, user_dirs = _load_user_pool_config()
     arg_manifest = pool_manifest.strip() if isinstance(pool_manifest, str) and pool_manifest.strip() else None
     env_manifest = os.environ.get(POOL_MANIFEST_ENV, "").strip() or None
@@ -323,8 +517,12 @@ def resolve_pool_detection(
         manifest_cfg = user_cfg_path
 
     dir_entries: list[tuple[str, str, str | None]] = []
-    for spec in _normalize_pool_dir_specs(locked_pool_dirs):
-        dir_entries.append((spec, "--locked-pool-dir", None))
+    if locked_pool_dirs is not None:
+        norm_arg_dirs = _normalize_pool_dir_specs(locked_pool_dirs)
+        if not norm_arg_dirs:
+            raise DeskError("INPUT_EMPTY_POOL_SOURCE", "--locked-pool-dir configured 0 pool directories")
+        for spec in norm_arg_dirs:
+            dir_entries.append((spec, "--locked-pool-dir", None))
     env_dirs = os.environ.get(POOL_DIRS_ENV, "").strip()
     if env_dirs:
         for spec in _normalize_pool_dir_specs(env_dirs):
@@ -339,11 +537,13 @@ def resolve_pool_detection(
         }
         if emit_warning:
             print(POOL_DETECTION_OFF_WARNING, file=sys.stderr)
-        return off_doc, None
+        return off_doc, None, None
 
     pools: dict[str, set[str]] = {p: set() for p in sorted(MULTIMODAL_POOL)}
+    pool_stems: dict[str, set[str]] = {p: set() for p in sorted(MULTIMODAL_POOL)}
     pool_sources: dict[str, list[dict]] = {p: [] for p in sorted(MULTIMODAL_POOL)}
     all_sources: list[dict] = []
+    configured_pools: set[str] = set()
 
     if eff_manifest is not None:
         assert manifest_via is not None
@@ -355,21 +555,20 @@ def resolve_pool_detection(
                 doc = json.load(f)
         except (OSError, json.JSONDecodeError) as err:
             raise DeskError("INPUT_BAD_ARGUMENT", f"cannot parse pool manifest {abs_m!r}: {err}", cause=err) from err
-        parsed_hashes, manifest_dirs = _parse_pool_manifest_doc(doc, abs_m, base_dir=os.path.dirname(abs_m))
-        if parsed_hashes:
-            for p_name in sorted(parsed_hashes):
-                h_set = parsed_hashes[p_name]
-                pools[p_name].update(h_set)
-                src_entry: dict = {"via": manifest_via, "path": abs_m, "count": len(h_set)}
-                if manifest_cfg:
-                    src_entry["config_path"] = manifest_cfg
-                pool_sources[p_name].append(src_entry)
-                all_sources.append({"pool": p_name, **src_entry})
-        elif not manifest_dirs:
-            empty_src: dict = {"via": manifest_via, "path": abs_m, "count": 0}
+        parsed_hashes, parsed_stems, manifest_dirs = _parse_pool_manifest_doc(
+            doc, abs_m, base_dir=os.path.dirname(abs_m)
+        )
+        for p_name in sorted(parsed_hashes):
+            h_set = parsed_hashes[p_name]
+            configured_pools.add(p_name)
+            pools[p_name].update(h_set)
+            if p_name in parsed_stems:
+                pool_stems[p_name].update(parsed_stems[p_name])
+            src_entry: dict = {"via": manifest_via, "path": abs_m, "count": len(h_set)}
             if manifest_cfg:
-                empty_src["config_path"] = manifest_cfg
-            all_sources.append(empty_src)
+                src_entry["config_path"] = manifest_cfg
+            pool_sources[p_name].append(src_entry)
+            all_sources.append({"pool": p_name, **src_entry})
         for m_spec in manifest_dirs:
             dir_entries.append((m_spec, manifest_via, abs_m))
 
@@ -389,7 +588,7 @@ def resolve_pool_detection(
             raise DeskError("INPUT_BAD_ARGUMENT", f"locked-pool folder not found: {abs_d}")
         inferred_pool = explicit_pool or _resolve_project_pool_tag(abs_d)
         if inferred_pool is None:
-            bname = os.path.basename(abs_d).lower()
+            bname = os.path.basename(os.path.realpath(abs_d)).lower()
             if bname in MULTIMODAL_POOL:
                 inferred_pool = bname
         if inferred_pool not in MULTIMODAL_POOL:
@@ -398,17 +597,31 @@ def resolve_pool_detection(
                 f"cannot determine locked pool name for folder {abs_d!r}; pass <pool>=<folder> where <pool> is in "
                 f"{sorted(MULTIMODAL_POOL)}",
             )
-        folder_shas = _collect_folder_image_shas(abs_d)
+        folder_shas, folder_stems = _collect_folder_image_shas_and_stems(abs_d)
+        if not folder_shas:
+            raise DeskError(
+                "INPUT_EMPTY_POOL_SOURCE",
+                f"locked-pool folder {abs_d!r} (via {d_via}) yielded 0 image hashes",
+            )
+        configured_pools.add(inferred_pool)
         pools[inferred_pool].update(folder_shas)
+        pool_stems[inferred_pool].update(folder_stems)
         src_entry = {"via": d_via, "path": abs_d, "count": len(folder_shas)}
         if d_cfg:
             src_entry["config_path"] = d_cfg
         pool_sources[inferred_pool].append(src_entry)
         all_sources.append({"pool": inferred_pool, **src_entry})
 
+    if not configured_pools or any(len(pools[p]) == 0 for p in configured_pools):
+        raise DeskError(
+            "INPUT_EMPTY_POOL_SOURCE",
+            "pool_detection cannot turn on with zero hashes in a configured pool",
+        )
+
     sorted_pools = sorted(MULTIMODAL_POOL)
     on_doc = {
         "status": "on",
+        "configured_pools": sorted(configured_pools),
         "pools": {
             p: {
                 "count": len(pools[p]),
@@ -419,7 +632,28 @@ def resolve_pool_detection(
         "counts": {p: len(pools[p]) for p in sorted_pools},
         "sources": all_sources,
     }
-    return on_doc, pools
+    return on_doc, pools, pool_stems
+
+
+def resolve_pool_detection(
+    *,
+    pool_manifest: str | None = None,
+    locked_pool_dirs: str | list[str] | tuple[str, ...] | dict[str, str] | None = None,
+    emit_warning: bool = True,
+) -> tuple[dict, dict[str, set[str]] | None]:
+    """Resolve the run's single `pool_detection` status and locked-pool sha256 sets.
+
+    - When configured (`status == "on"`): guarantees `>= 1` image hash per configured source and per configured pool,
+      recording the pools, per-pool and per-source counts, and source paths (hash values are NEVER included).
+    - When unconfigured (`status == "off"`): records the warning text and (when `emit_warning=True`) prints it once to
+      `stderr`.
+    """
+    pd_doc, pd_hashes, _pd_stems = _resolve_pool_detection_with_stems(
+        pool_manifest=pool_manifest,
+        locked_pool_dirs=locked_pool_dirs,
+        emit_warning=emit_warning,
+    )
+    return pd_doc, pd_hashes
 
 
 def _load_locked_pool_hashes(
@@ -466,9 +700,12 @@ def _check_multimodal_pool_state(
     caption_config: str | None = None,
     pool_manifest: str | None = None,
     locked_pool_dirs: str | list[str] | tuple[str, ...] | dict[str, str] | None = None,
+    _include_top_outputs: bool = False,
     _pool_state: _PoolCheckState | None = None,
 ) -> _PoolCheckState:
-    folder_name = os.path.basename(os.path.abspath(project)).lower()
+    real_project = os.path.realpath(os.path.abspath(project))
+    folder_name = os.path.basename(real_project).lower()
+    alias_name = os.path.basename(os.path.abspath(project)).lower()
     pool_tag = _resolve_project_pool_tag(project, caption_config=caption_config)
     if not allow_multimodal_pool and folder_name in MULTIMODAL_POOL and pool_tag is not None and pool_tag != folder_name:
         raise DeskError(
@@ -478,12 +715,12 @@ def _check_multimodal_pool_state(
 
     state = _pool_state
     if state is None:
-        pd_doc, pd_hashes = resolve_pool_detection(
+        pd_doc, pd_hashes, pd_stems = _resolve_pool_detection_with_stems(
             pool_manifest=pool_manifest,
             locked_pool_dirs=locked_pool_dirs,
             emit_warning=True,
         )
-        state = _PoolCheckState(pool_detection=pd_doc, pool_hashes=pd_hashes)
+        state = _PoolCheckState(pool_detection=pd_doc, pool_hashes=pd_hashes, pool_stems=pd_stems)
 
     if allow_multimodal_pool:
         return state
@@ -491,7 +728,7 @@ def _check_multimodal_pool_state(
     locked_pool = folder_name if folder_name in MULTIMODAL_POOL else pool_tag
     if locked_pool is None:
         if state.pool_hashes is not None:
-            proj_shas = _collect_folder_image_shas(project)
+            proj_shas = _collect_folder_image_shas(project, include_top_outputs=_include_top_outputs)
             matches = [
                 (p_name, len(proj_shas & state.pool_hashes.get(p_name, set())))
                 for p_name in sorted(MULTIMODAL_POOL)
@@ -501,9 +738,10 @@ def _check_multimodal_pool_state(
                 matches.sort(key=lambda item: (-item[1], item[0]))
                 best_pool, best_count = matches[0]
                 img_word = "image" if best_count == 1 else "images"
+                shown_name = alias_name if alias_name != folder_name else folder_name
                 raise DeskError(
                     "PERM_LOCKED_POOL",
-                    f"REFUSED: untagged project {folder_name!r} matches locked multimodal pool {best_pool!r} "
+                    f"REFUSED: untagged project {shown_name!r} matches locked multimodal pool {best_pool!r} "
                     f"({best_count} matching {img_word} by sha256) and carries no multimodal_pool tag. "
                     f"Tag the project config with '\"multimodal_pool\": \"{best_pool}\"' so the pool lock applies, "
                     "or pass --allow-multimodal-pool after the counted run.",
@@ -532,6 +770,78 @@ def _check_multimodal_pool_state(
             "description embeddings and fit checks are locked until its counted run. "
             "Pass --images-only (or --backend none) to run without description embeddings, "
             "or --allow-multimodal-pool after the counted run.",
+        )
+    return state
+
+
+def _check_txt_stems_against_pools(
+    txt_stems: set[str],
+    pool_stems: dict[str, set[str]] | None,
+    source_label: str,
+) -> None:
+    if not txt_stems or not pool_stems:
+        return
+    matches = [
+        (p_name, len(txt_stems & pool_stems.get(p_name, set())))
+        for p_name in sorted(MULTIMODAL_POOL)
+    ]
+    matches = [(p_name, cnt) for p_name, cnt in matches if cnt > 0]
+    if matches:
+        matches.sort(key=lambda item: (-item[1], item[0]))
+        best_pool, best_count = matches[0]
+        sc_word = "sidecar" if best_count == 1 else "sidecars"
+        raise DeskError(
+            "PERM_LOCKED_POOL",
+            f"REFUSED: text source {source_label!r} contains {best_count} .txt caption {sc_word} whose stem matches "
+            f"an image of locked multimodal pool {best_pool!r}; pass --allow-multimodal-pool after the counted run.",
+        )
+
+
+def _check_text_source_pool_state(
+    source_root: str | None,
+    backend: str,
+    *,
+    images_only: bool = False,
+    allow_multimodal_pool: bool = False,
+    caption_config: str | None = None,
+    pool_manifest: str | None = None,
+    locked_pool_dirs: str | list[str] | tuple[str, ...] | dict[str, str] | None = None,
+    _pool_state: _PoolCheckState | None = None,
+) -> _PoolCheckState:
+    if source_root is None:
+        if _pool_state is not None:
+            return _pool_state
+        pd_doc, pd_hashes, pd_stems = _resolve_pool_detection_with_stems(
+            pool_manifest=pool_manifest,
+            locked_pool_dirs=locked_pool_dirs,
+            emit_warning=True,
+        )
+        return _PoolCheckState(pool_detection=pd_doc, pool_hashes=pd_hashes, pool_stems=pd_stems)
+
+    state = _check_multimodal_pool_state(
+        source_root,
+        backend,
+        images_only=images_only,
+        allow_multimodal_pool=allow_multimodal_pool,
+        caption_config=caption_config,
+        pool_manifest=pool_manifest,
+        locked_pool_dirs=locked_pool_dirs,
+        _include_top_outputs=True,
+        _pool_state=_pool_state,
+    )
+    if allow_multimodal_pool:
+        return state
+
+    real_src = os.path.realpath(os.path.abspath(source_root))
+    folder_name = os.path.basename(real_src).lower()
+    pool_tag = _resolve_project_pool_tag(source_root, caption_config=caption_config)
+    locked_pool = folder_name if folder_name in MULTIMODAL_POOL else pool_tag
+    if locked_pool is None and state.pool_stems:
+        txt_stems = _collect_folder_txt_stems(source_root)
+        _check_txt_stems_against_pools(
+            txt_stems,
+            state.pool_stems,
+            os.path.basename(os.path.abspath(source_root)).lower(),
         )
     return state
 
@@ -624,7 +934,7 @@ def check_drafter_pool(
     if drafter is None:
         return _pool_state.pool_detection if _pool_state is not None else None
     dname = str(getattr(drafter, "name", getattr(drafter, "drafter_id", "drafter")))
-    is_arm = bool(getattr(drafter, "is_arm_model", False))
+    is_arm = bool(getattr(drafter, "is_arm_model", True))
     return _check_multimodal_pool_state(
         project,
         dname,
@@ -1206,6 +1516,7 @@ def scan(
                 "canon_subject": None,
                 "source": f"sidecar:{sc['_sidecar_file']}",
                 "sidecar_file": sc["_sidecar_file"],
+                "author_kind": "sidecar",
                 "prompt": sc["provenance"].get("prompt") or None,
                 "asset_id": None,
                 "render_id": None,
@@ -1226,7 +1537,8 @@ def scan(
                 if _record_priority(cand) < _record_priority(it.record):
                     merged = dict(it.record)
                     for k in ("id", "status", "explanation", "judgment_note", "canon_subject", "source",
-                              "sidecar_file", "prompt", "asset_id", "render_id", "failure_modes", "recorded"):
+                              "sidecar_file", "author_kind", "prompt", "asset_id", "render_id",
+                              "failure_modes", "recorded"):
                         if k in cand:
                             merged[k] = cand[k]
                         else:
@@ -1243,51 +1555,13 @@ def scan(
             if w.get("prompt") and not it.record.get("prompt"):
                 it.record["prompt"] = w["prompt"]
 
-    out_dir = os.path.join(project, "outputs")
-    if sidecars:
-        abs_proj = os.path.abspath(project)
-        skip_top_outputs = os.path.isdir(out_dir) and any(
-            os.path.isdir(os.path.join(out_dir, d)) for d in os.listdir(out_dir)
-        )
-        for root, dirs, files in os.walk(abs_proj):
-            dirs[:] = sorted(d for d in dirs if d not in (".git", "records", "__pycache__"))
-            if skip_top_outputs and os.path.abspath(root) == os.path.abspath(out_dir):
-                continue
-            for f in sorted(files):
-                if os.path.splitext(f)[1].lower() not in IMAGE_EXT:
-                    continue
-                full = os.path.join(root, f)
-                rel = os.path.relpath(full, abs_proj).replace("\\", "/")
-                seen.add(rel)
-                sha = sha256_file(full)
-                it = by_sha.setdefault(sha, Item(sha, [], []))
-                it.paths.append(rel)
-                rel_parts = rel.split("/")
-                folder_lbl = (
-                    rel_parts[1]
-                    if (len(rel_parts) >= 3 and rel_parts[0] == "outputs")
-                    else (rel_parts[0] if len(rel_parts) >= 2 else "root")
-                )
-                it.folders.append(folder_lbl)
-                _attach_record_and_wave(it, rel)
-    else:
-        for folder in sorted(os.listdir(out_dir)) if os.path.isdir(out_dir) else []:
-            fdir = os.path.join(out_dir, folder)
-            if not os.path.isdir(fdir):
-                continue
-            for root, dirs, files in os.walk(fdir):
-                dirs.sort()
-                for f in sorted(files):
-                    if os.path.splitext(f)[1].lower() not in IMAGE_EXT:
-                        continue
-                    full = os.path.join(root, f)
-                    rel = os.path.relpath(full, project).replace("\\", "/")
-                    seen.add(rel)
-                    sha = sha256_file(full)
-                    it = by_sha.setdefault(sha, Item(sha, [], []))
-                    it.paths.append(rel)
-                    it.folders.append(folder)
-                    _attach_record_and_wave(it, rel)
+    for rel, full, folder_lbl in enumerate_project_images(project, sidecars=sidecars):
+        seen.add(rel)
+        sha = sha256_file(full)
+        it = by_sha.setdefault(sha, Item(sha, [], []))
+        it.paths.append(rel)
+        it.folders.append(folder_lbl)
+        _attach_record_and_wave(it, rel)
 
     valid_items: list[Item] = []
     cache_rows: list[dict] = []
@@ -2824,14 +3098,30 @@ def text_index(
     rnd_data: str | None = None,
     limit: int | None = None,
     grant: str | None = None,
+    allow_multimodal_pool: bool = False,
+    caption_config: str | None = None,
+    pool_manifest: str | None = None,
+    locked_pool_dirs: str | list[str] | tuple[str, ...] | dict[str, str] | None = None,
+    _pool_state: _PoolCheckState | None = None,
     log=print,
 ) -> dict:
     """Embed text/code files from --source or --rnd-data into <out>/<backend>/text/, reusing cached vectors by sha256
     and settings."""
     if bool(source) == bool(rnd_data):
         raise DeskError("INPUT_BAD_ARGUMENT", "text-index needs either --source <folder> or --rnd-data <checkout>")
-    root_dir = os.path.realpath(os.path.abspath(source or rnd_data))
+    raw_source_root = os.path.abspath(source or rnd_data)
+    root_dir = os.path.realpath(raw_source_root)
     _check_out_not_inside(root_dir, out)
+    pool_state = _check_text_source_pool_state(
+        raw_source_root,
+        str(getattr(emb, "name", "eg2")),
+        images_only=(getattr(emb, "name", None) == "none"),
+        allow_multimodal_pool=allow_multimodal_pool,
+        caption_config=caption_config,
+        pool_manifest=pool_manifest,
+        locked_pool_dirs=locked_pool_dirs,
+        _pool_state=_pool_state,
+    )
     items, stats = scan_text_source(root_dir) if source else scan_rnd_data(root_dir)
     if limit:
         items = items[:limit]
@@ -2916,9 +3206,11 @@ def text_index(
         "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "embedded_now": len(todo),
         "text_seconds": round(t_sec, 2),
+        "pool_detection": pool_state.pool_detection,
         **stats,
     }
     save_text_cache(out, emb.name, items, vecs, meta, symmetric_vecs=sym_vecs, dim=dim)
+    write_pool_detection_status(out, pool_state.pool_detection, command="text-index")
     log(
         f"indexed {len(items)} unique text files ({len(todo)} new, {t_sec:.1f} s) "
         f"with {emb.name}; cache: {text_cache_dir(out, emb.name, dim=dim)}"
@@ -3260,6 +3552,8 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         if a.source and a.rnd_data:
             raise DeskError("INPUT_BAD_ARGUMENT", "pass either --source or --rnd-data, not both")
         src_root = os.path.abspath(a.source or a.rnd_data) if (a.source or a.rnd_data) else None
+        if a.command == "text-index" and not src_root:
+            raise DeskError("INPUT_BAD_ARGUMENT", "text-index needs either --source <folder> or --rnd-data <checkout>")
         if src_root:
             _check_not_private_path(src_root)
         if not a.out and not src_root:
@@ -3267,8 +3561,20 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
         out = os.path.abspath(a.out or os.path.join("desk-out", os.path.basename(src_root)))
         if src_root:
             _check_out_not_inside(src_root, out)
+            _check_out_not_inside(os.path.realpath(src_root), out)
         if backend == "none" and a.command == "text-search":
             raise DeskError("INPUT_BAD_ARGUMENT", "text-search requires an embedding backend, not 'none'")
+        if a.command == "text-search" and not a.text:
+            raise DeskError("INPUT_BAD_ARGUMENT", "text-search needs --text")
+        text_pool_state = _check_text_source_pool_state(
+            src_root,
+            backend,
+            images_only=(backend == "none"),
+            allow_multimodal_pool=a.allow_multimodal_pool,
+            caption_config=a.caption_config,
+            pool_manifest=a.pool_manifest,
+            locked_pool_dirs=a.locked_pool_dirs,
+        )
         needs_text_model = a.command in ("text-index", "text-search")
         emb = None
         if needs_text_model:
@@ -3276,24 +3582,63 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
                 lower_priority()
             emb = make(backend, **make_kw)
         if a.command == "text-index":
-            text_index(out, emb, source=a.source, rnd_data=a.rnd_data, limit=a.limit, grant=a.grant)
+            text_index(
+                out,
+                emb,
+                source=a.source,
+                rnd_data=a.rnd_data,
+                limit=a.limit,
+                grant=a.grant,
+                allow_multimodal_pool=a.allow_multimodal_pool,
+                caption_config=a.caption_config,
+                pool_manifest=a.pool_manifest,
+                locked_pool_dirs=a.locked_pool_dirs,
+                _pool_state=text_pool_state,
+            )
             return 0
         read_role = "document" if a.command == "text-search" else "symmetric"
         t_items, t_vecs, t_meta = load_text_cache(out, backend, role=read_role, dim=a.dim)
+        if src_root is None and not a.allow_multimodal_pool and text_pool_state.pool_stems:
+            cached_txt_stems = {
+                os.path.splitext(os.path.basename(p))[0].strip().lower()
+                for it in t_items
+                for p in it.paths
+                if os.path.splitext(p)[1].lower() == ".txt"
+            }
+            cached_txt_stems.discard("")
+            _check_txt_stems_against_pools(cached_txt_stems, text_pool_state.pool_stems, os.path.basename(out).lower())
+        eff_t_backend = str(t_meta.get("backend") or backend)
+        os.makedirs(out, exist_ok=True)
         if a.command == "text-dupes":
             t_task = command_task(a.command, a.task)
-            print(json.dumps(text_dupes(t_items, t_vecs, semantic=a.semantic, task=t_task,
-                                        backend=t_meta.get("backend") or backend), indent=1))
+            td_doc = text_dupes(t_items, t_vecs, semantic=a.semantic, task=t_task, backend=eff_t_backend)
+            with open(os.path.join(out, f"text-dupes-{eff_t_backend}.json"), "w", encoding="utf-8", newline="\n") as f:
+                json.dump({**td_doc, "backend": eff_t_backend, "pool_detection": text_pool_state.pool_detection}, f, indent=2)
+                f.write("\n")
+            write_pool_detection_status(out, text_pool_state.pool_detection, command="text-dupes")
+            print(json.dumps(td_doc, indent=1))
         elif a.command == "text-search":
-            if not a.text:
-                raise DeskError("INPUT_BAD_ARGUMENT", "text-search needs --text")
             q_role = "code_query" if command_task(a.command, a.task) == "code" else "query"
             q = emb.texts([a.text], q_role)[0]
-            for hit in text_search(t_items, t_vecs, q, k=a.k):
+            ts_hits = text_search(t_items, t_vecs, q, k=a.k)
+            with open(os.path.join(out, f"text-search-{eff_t_backend}.json"), "w", encoding="utf-8", newline="\n") as f:
+                json.dump({
+                    "backend": eff_t_backend,
+                    "hits": ts_hits,
+                    "pool_detection": text_pool_state.pool_detection,
+                }, f, indent=2)
+                f.write("\n")
+            write_pool_detection_status(out, text_pool_state.pool_detection, command="text-search")
+            for hit in ts_hits:
                 label = hit["outcome"] or hit["run_id"] or "unrecorded"
                 print(f"{hit['cosine']:.4f}  {label:12s}  {hit['path']}")
         elif a.command == "lineage":
-            print(json.dumps(lineage(t_items, t_vecs, k=a.k), indent=1))
+            lin_doc = lineage(t_items, t_vecs, k=a.k)
+            with open(os.path.join(out, f"lineage-{eff_t_backend}.json"), "w", encoding="utf-8", newline="\n") as f:
+                json.dump({**lin_doc, "backend": eff_t_backend, "pool_detection": text_pool_state.pool_detection}, f, indent=2)
+                f.write("\n")
+            write_pool_detection_status(out, text_pool_state.pool_detection, command="lineage")
+            print(json.dumps(lin_doc, indent=1))
         return 0
 
     if not a.project:

@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-11
+
+### Added
+- **Training-caption commands and options:**
+  - `scan`: scans a `--project` into `<out>/scan.jsonl` and `<out>/scan-report.json` without loading an embedder.
+  - `sidecar-import` and `--sidecars` (on `scan`, `index`, `report`, and `compose`): pairs image files with same-stem
+    `.txt` caption sidecars when `records/` is absent, extracts embedded ComfyUI PNG `tEXt` generation prompts and wave
+    `generation.json` prompts for prompt-echo checks, reports images without a `.txt` sidecar instead of inventing text,
+    and writes `<out>/sidecar-records.jsonl` and `<out>/sidecar-import.json` strictly under `--out`.
+  - `compose` (and `report --compose`, `--manifest-name`): assembles training captions into `<out>/captions-manifest.json`
+    (`style-dataset-lab` lane-3 `run_dataset` format) from per-project `caption-rules.json` (`--caption-config`:
+    `prefix`, `classes`, `class_field`, `class_pattern`, `backdrop`, `banned_words`, `drafter`, `drafter_prompt`),
+    blind drafts, and imported seat edits, with per-part `writers` provenance (`config:<file>:<line>`,
+    `drafter:<id>@<rev>:<prompt sha>`, `seat:<name>`, `record:<file>`, `sidecar:<file>`).
+  - `import-edits` (`--worksheet`, `--seat`): re-imports edited rows from `description-worksheet.md` into
+    `<out>/seat-edits.jsonl` with `seat:<name>`, recording the draft text and drafter writer the seat saw.
+  - **Drafter registry (`registry.DRAFTER_REGISTRY`):** adds `qwen3-vl` (`Qwen/Qwen3-VL-8B-Instruct` pinned at
+    `0c351dd01ed87e9c1b53cbc748cba10e6187ff3b`, Apache-2.0, `is_arm_model=False`, VRAM-governed, `HF_HUB_OFFLINE`
+    aware, raw output logged to `<out>/drafter-raw.jsonl`) alongside default `plain-sight` (`--draft`,
+    `--drafter-prompt`).
+  - **Pool lock tag, fail-closed renamed-copy sources, user config, and `pool_detection`:**
+    - `"multimodal_pool"` project tag in `caption-rules.json`, `project.json`, `desk-config.json`, or
+      `--caption-config`.
+    - Locked-pool hash/directory configuration via `--pool-manifest` / `DATASET_DESK_POOL_MANIFEST`,
+      `--locked-pool-dir` / `DATASET_DESK_POOL_DIRS`, and user config (`DATASET_DESK_USER_CONFIG`,
+      `~/.config/dataset-desk/config.json`, or `%APPDATA%\dataset-desk\config.json`).
+    - Per-run `pool_detection` (`status: "on" | "off"`, configured pools, per-pool and per-source image-hash counts, and
+      source paths — never hash values) recorded across image, caption, and text commands.
+
+### Breaking changes
+- **Stderr warning when renamed-copy detection is `off`:** every `--project` command (`scan`, `index`, `dupes`,
+  `search`, `coverage`, `report`, `sidecar-import`, `compose`, `import-edits`) and every text command (`text-index`,
+  `text-dupes`, `text-search`, `lineage`) prints a single warning line to `stderr` when no pool manifest or locked-pool
+  folder is configured.
+- **Project and source config files are read and validated:** `caption-rules.json`, `project.json`, `desk-config.json`
+  (and `--caption-config` when passed) are read on `--project` and `--source` / `--rnd-data` commands; invalid JSON, a
+  non-object file, a non-string or unknown `multimodal_pool` (`INPUT_BAD_ARGUMENT`), a `caption-rules.json` schema
+  error, or a `multimodal_pool` tag conflicting with a locked folder's `realpath` name (`PERM_LOCKED_POOL`) exits `1`.
+- **User config and pool sources fail closed on malformed or empty inputs:** the user config
+  (`DATASET_DESK_USER_CONFIG` when non-empty, else `~/.config/dataset-desk/config.json` or
+  `%APPDATA%\dataset-desk\config.json`) and any configured pool manifest or pool folder are read on every command;
+  malformed JSON, a non-object user config or manifest, a non-object `"pools"` value (`INPUT_BAD_ARGUMENT`), an empty
+  manifest, or any configured pool entry or folder yielding zero image hashes (`INPUT_EMPTY_POOL_SOURCE`) fails every
+  command with exit `1`. Set `DATASET_DESK_USER_CONFIG=""` to ignore user config files.
+- **Fail-closed pool lock across all project and text commands (links included):** an untagged `--project` or
+  `--source` / `--rnd-data` folder sharing any image `sha256` with a configured pool (following symlinks and Windows
+  directory junctions via `enumerate_project_images`) is refused (`PERM_LOCKED_POOL`, exit `1`) for all commands —
+  `scan`, `dupes`, `--backend none`, `sidecar-import`, and `text-*` included — unless `--allow-multimodal-pool` is
+  passed. Text commands (`text-index`, `text-dupes`, `text-search`, `lineage`) also refuse untagged sources or cached
+  text indexes containing `.txt` files whose stem matches an image of a locked pool, and refuse embedding backends on
+  named or tagged locked pools without `--allow-multimodal-pool`. Folder-name pool checks compare `realpath` rather
+  than `abspath`.
+- **New output files under `--out` and new `pool_detection` / provenance fields:** commands write `pool-detection.json`,
+  `scan-report.json`, `<cmd>-<backend>.json` (`dupes`, `search`, `coverage`, `text-dupes`, `text-search`, `lineage`),
+  `drafter-raw.jsonl`, `seat-edits.jsonl`, `captions-manifest.json`, `sidecar-import.json`, and
+  `sidecar-records.jsonl` under `--out`; `<out>/<backend>/meta.json`, `<out>/<backend>/text/meta.json`, and
+  `description-review.jsonl` gain `pool_detection` (and review rows gain provenance fields including `writers`,
+  `parts`, `draft`, `drafter_writer`, `seat_edit`, `seat_id`, and `final_caption`). New 0.3.0 JSON-stdout commands
+  (`scan`, `sidecar-import`, `import-edits`) include `pool_detection` in stdout JSON; existing 0.2.x JSON-stdout
+  commands (`dupes`, `text-dupes`, `lineage`) keep their stdout JSON shapes unchanged.
+- **`--draft` takes an optional value and `compose` drafts by default:** `--draft` now accepts an optional drafter name
+  (`none`, `fake`, `plain-sight`, `florence2`, `qwen3-vl`), a bare `--draft` means `plain-sight`, and `compose` (as
+  well as `report --compose`) drafts every unedited record by default when `--draft` is absent (using `rules.drafter`
+  if set in `caption-rules.json`, else `plain-sight`; pass `--draft none` to compose without drafting).
+- **Python API, provenance strata, and error codes:** `desk.check_multimodal_pool` returns the `pool_detection` `dict`
+  (was `None`); `desk.check_drafter_pool` defaults `getattr(drafter, "is_arm_model", True)` so unknown drafter objects
+  are treated as arm models; sidecar descriptions carry `author_kind: "sidecar"` (never `"human"`) and `"sidecar"` is
+  counted in `strata_counts`; `audit_records` initializes `writers` as a `list[str]` and `import-edits` appends
+  `seat:<name>` onto `writers` rather than overwriting; added `MODEL_REVISION_MISMATCH`, `DEP_DRAFTER_OFFLINE`, and
+  `INPUT_EMPTY_POOL_SOURCE`; updated the `INPUT_UNKNOWN_DRAFTER` hint.
+
+### Known limits
+- Renamed-copy detection matches images by file `sha256`: neither a copy made only of new images (none shared with a
+  locked pool) nor a resized, re-encoded, or metadata-stripped copy matches by `sha256`. Tag such projects with
+  `"multimodal_pool"` in `caption-rules.json` or `project.json`.
+
 ## [0.2.2] - 2026-10-20
 
 0.2.1 was tagged on GitHub but never published to PyPI. 0.2.2 ships 0.2.1's changes, listed below, with one

@@ -14,6 +14,7 @@ EXIT_OK, EXIT_USER, EXIT_RUNTIME = 0, 1, 2
 # The registry. Codes are stable once released.
 CODES = {
     "INPUT_BAD_ARGUMENT": "check the command's --help",
+    "INPUT_EMPTY_POOL_SOURCE": "configure at least one locked-pool image sha256 per source, or remove the empty manifest/folder",
     "INPUT_UNKNOWN_BACKEND": "use one of: eg2, siglip2, bge-m3, qwen3-emb-0.6b, gte-modernbert, dinov2, none, fake",
     "INPUT_UNKNOWN_DRAFTER": "use one of: plain-sight, qwen3-vl, fake, none",
     "MODEL_REVISION_MISMATCH": "pass the exact 40-hex revision pinned in dataset_desk.registry.DRAFTER_REGISTRY",

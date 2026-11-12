@@ -55,6 +55,22 @@ SIDECAR_RECORDS_FILENAME = "sidecar-records.jsonl"
 SIDECAR_REPORT_FILENAME = "sidecar-import.json"
 SIDECAR_IMAGE_EXT = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 KNOWN_MULTIMODAL_POOLS = frozenset({"rustline", "tallow-fen", "salt-road", "hesperia"})
+KNOWN_AUTHOR_STRATA: tuple[str, ...] = (
+    "human",
+    "sidecar",
+    "captioner_assisted",
+    "captioner_draft_unedited",
+)
+_WS_DRAFTER_RE = re.compile(r"^Drafter:\s*`([^`]+)`\s*@\s*`([^`]+)`")
+
+
+def _count_strata(rows: list[dict]) -> dict[str, int]:
+    counts = {s: 0 for s in KNOWN_AUTHOR_STRATA}
+    for r in rows:
+        ak = r.get("author_kind")
+        if isinstance(ak, str):
+            counts[ak] = counts.get(ak, 0) + 1
+    return counts
 
 # Pinned Revision 3 acceptance thresholds (no extra degrees of freedom)
 MIN_WORDS = 8
@@ -1028,17 +1044,23 @@ def audit_records(
 
         # A record whose token count wasn't computed is "unchecked", and can't be marked as passing.
         passed = gate_status == "passed"
-        known_strata = ("human", "captioner_assisted", "captioner_draft_unedited")
+        is_sidecar = bool(e.get("sidecar_file"))
+        valid_strata: tuple[str, ...] = (
+            ("sidecar", "captioner_assisted", "captioner_draft_unedited")
+            if is_sidecar
+            else KNOWN_AUTHOR_STRATA
+        )
+        default_pass_stratum = "sidecar" if is_sidecar else "human"
         author_kind = (
             e["existing_author_kind"]
-            if (e["existing_author_kind"] in known_strata and passed_model_free)
-            else ("human" if passed_model_free else "captioner_assisted")
+            if (e["existing_author_kind"] in valid_strata and passed_model_free)
+            else (default_pass_stratum if passed_model_free else "captioner_assisted")
         )
 
-        init_writers = [e["record_writer"]] if e.get("sidecar_file") else None
+        init_writers: list[str] = [e["record_writer"]] if (is_sidecar or e["text"]) else []
         init_parts = (
             [{"part": "free", "text": e["text"], "writer": e["record_writer"]}]
-            if (e.get("sidecar_file") and e["text"])
+            if (is_sidecar and e["text"])
             else None
         )
 
@@ -1111,6 +1133,7 @@ def audit_records(
         "passed_model_free_count": len(passed_mf_rows),
         "unchecked_count": len(unchecked_rows),
         "flagged_count": len(flagged),
+        "strata_counts": _count_strata(rows),
         "max_exact_group": max_exact,
         "median_prompt_word_share": round(median_share, 4),
         "median_prompt_content_word_share": round(median_c_share, 4),
@@ -1211,13 +1234,17 @@ def _load_wave_prompts(project: str) -> dict[str, str]:
 def scan_sidecar_project(project: str) -> dict:
     """Scan `project` for images paired with same-stem `.txt` sidecars.
 
-    - Each `(image, <stem>.txt)` pair becomes an approved record with provenance source `sidecar:<file>`.
+    - Each `(image, <stem>.txt)` pair becomes an approved record with provenance source `sidecar:<file>` and
+      `author_kind: "sidecar"`.
+    - Images are enumerated via `desk.enumerate_project_images(..., sidecars=True)` (following symlinks and Windows
+      directory junctions).
     - Images without a sidecar are listed in `images_without_sidecar` and are never given invented text.
     - Nothing is written inside `project`.
     """
     abs_proj = os.path.abspath(project)
     if not os.path.isdir(abs_proj):
         raise DeskError("INPUT_BAD_ARGUMENT", f"project folder {project!r} does not exist")
+    from . import desk
 
     outputs_root = os.path.join(abs_proj, "outputs")
     skip_top_outputs = os.path.isdir(outputs_root) and any(
@@ -1225,44 +1252,48 @@ def scan_sidecar_project(project: str) -> dict:
     )
     wave_prompts = _load_wave_prompts(abs_proj)
 
+    txt_by_dir: dict[str, list[str]] = {}
+    for root, dirs, files in desk._walk_followlinks(abs_proj):
+        dirs[:] = [d for d in dirs if d not in (".git", "records", "__pycache__")]
+        if skip_top_outputs and os.path.abspath(root) == os.path.abspath(outputs_root):
+            continue
+        rel_dir = os.path.relpath(root, abs_proj).replace("\\", "/")
+        if rel_dir == ".":
+            rel_dir = ""
+        txt_files = [fn for fn in files if os.path.splitext(fn)[1].lower() == ".txt"]
+        if txt_files:
+            txt_by_dir[rel_dir] = txt_files
+
     raw_pairs: list[tuple[str, str, str, str, str]] = []  # (stem, rel_img, full_img, rel_txt, full_txt)
     images_without_sidecar: list[str] = []
-    orphan_sidecars: list[str] = []
+    paired_rel_txts: set[str] = set()
 
-    for root, dirs, files in os.walk(abs_proj):
-        dirs[:] = sorted(d for d in dirs if d not in (".git", "records", "__pycache__"))
-        is_top_outputs = skip_top_outputs and os.path.abspath(root) == os.path.abspath(outputs_root)
-        if is_top_outputs:
+    for rel_img, full_img, _folder_lbl in desk.enumerate_project_images(abs_proj, sidecars=True):
+        rel_dir = os.path.dirname(rel_img)
+        img_fn = os.path.basename(rel_img)
+        stem = os.path.splitext(img_fn)[0]
+        dir_txts = txt_by_dir.get(rel_dir, [])
+        txt_exact: dict[str, str] = {}
+        txt_lower: dict[str, str] = {}
+        for tfn in dir_txts:
+            t_stem = os.path.splitext(tfn)[0]
+            txt_exact.setdefault(t_stem, tfn)
+            txt_lower.setdefault(t_stem.lower(), tfn)
+        txt_fn = txt_exact.get(stem) or txt_lower.get(stem.lower())
+        if txt_fn is None:
+            images_without_sidecar.append(rel_img)
             continue
+        rel_txt = f"{rel_dir}/{txt_fn}" if rel_dir else txt_fn
+        full_txt = os.path.join(abs_proj, *rel_txt.split("/"))
+        paired_rel_txts.add(rel_txt)
+        raw_pairs.append((stem, rel_img, full_img, rel_txt, full_txt))
 
-        txt_by_lower_stem: dict[str, str] = {}
-        txt_exact_stems: dict[str, str] = {}
-        for fn in sorted(files):
-            stem, ext = os.path.splitext(fn)
-            if ext.lower() == ".txt":
-                txt_exact_stems.setdefault(stem, fn)
-                txt_by_lower_stem.setdefault(stem.lower(), fn)
-
-        paired_txt_names: set[str] = set()
-        for fn in sorted(files):
-            stem, ext = os.path.splitext(fn)
-            if ext.lower() not in SIDECAR_IMAGE_EXT:
-                continue
-            full_img = os.path.join(root, fn)
-            rel_img = os.path.relpath(full_img, abs_proj).replace("\\", "/")
-            txt_fn = txt_exact_stems.get(stem) or txt_by_lower_stem.get(stem.lower())
-            if txt_fn is None:
-                images_without_sidecar.append(rel_img)
-                continue
-            paired_txt_names.add(txt_fn)
-            full_txt = os.path.join(root, txt_fn)
-            rel_txt = os.path.relpath(full_txt, abs_proj).replace("\\", "/")
-            raw_pairs.append((stem, rel_img, full_img, rel_txt, full_txt))
-
-        for fn in sorted(files):
-            if os.path.splitext(fn)[1].lower() == ".txt" and fn not in paired_txt_names:
-                rel_orphan = os.path.relpath(os.path.join(root, fn), abs_proj).replace("\\", "/")
-                orphan_sidecars.append(rel_orphan)
+    orphan_sidecars: list[str] = []
+    for rel_dir in sorted(txt_by_dir):
+        for tfn in txt_by_dir[rel_dir]:
+            rel_txt = f"{rel_dir}/{tfn}" if rel_dir else tfn
+            if rel_txt not in paired_rel_txts:
+                orphan_sidecars.append(rel_txt)
 
     stem_counts = Counter(stem for stem, *_rest in raw_pairs)
     records: list[dict] = []
@@ -1285,6 +1316,7 @@ def scan_sidecar_project(project: str) -> dict:
             "provenance": {
                 "prompt": gen_prompt,
                 "source": f"sidecar:{rel_txt}",
+                "author_kind": "sidecar",
             },
             "_sidecar_file": rel_txt,
         })
@@ -1430,6 +1462,7 @@ def import_sidecars(
         "orphan_sidecars": scan_res["orphan_sidecars"],
         "passed_model_free_count": audit["passed_model_free_count"],
         "flagged_count": audit["flagged_count"],
+        "strata_counts": audit["strata_counts"],
         "sidecar_records_path": recs_path,
         "sidecar_report_path": rep_path,
         "review_jsonl_path": rev_jsonl,
@@ -1527,11 +1560,16 @@ def draft_flagged_records(project: str, audit: dict, drafter) -> dict:
         r["drafter_prompt_sha256"] = d_prompt_sha
         r["drafter_raw_output"] = raw_out
         r["drafter_writer"] = d_writer
+        existing_w = list(r.get("writers") or [])
+        if d_writer not in existing_w:
+            existing_w.append(d_writer)
+        r["writers"] = existing_w
 
     audit["drafter_id"] = drafter_id
     audit["drafter_revision"] = drafter_rev
     audit["drafter_prompt"] = d_prompt
     audit["drafter_prompt_sha256"] = d_prompt_sha
+    audit["strata_counts"] = _count_strata(audit.get("records") or [])
     return audit
 
 
@@ -1694,7 +1732,26 @@ def write_review_files(
             ed_entry = edits.get(str(r["id"]))
             seat_edit_val = r.get("seat_edit") or (ed_entry["edited_text"] if ed_entry else None)
             seat_id_val = r.get("seat_id") or (ed_entry["seat"] if ed_entry else None)
-            draft_val = r.get("draft") or r.get("florence2_draft") or ""
+            ed_draft_text = (ed_entry.get("draft_text") if ed_entry else None) or ""
+            ed_draft_writer = ed_entry.get("draft_writer") if ed_entry else None
+            draft_val = r.get("draft") or r.get("florence2_draft") or ed_draft_text
+            drafter_writer_val = r.get("drafter_writer") or ed_draft_writer
+            row_author_kind = r["author_kind"]
+            if ed_entry is not None and not r.get("final_caption"):
+                row_author_kind = (
+                    "captioner_assisted"
+                    if (r.get("drafter_id") or ed_draft_writer or ed_draft_text)
+                    else "human"
+                )
+            row_writers = r.get("writers")
+            if ed_entry is not None and not r.get("final_caption"):
+                w_list = list(row_writers or [])
+                if ed_draft_writer and ed_draft_writer not in w_list:
+                    w_list.append(str(ed_draft_writer))
+                ed_writer = ed_entry.get("writer") or f"seat:{ed_entry['seat']}"
+                if not w_list or w_list[-1] != ed_writer:
+                    w_list.append(str(ed_writer))
+                row_writers = w_list
             row_out: dict[str, Any] = {
                 "id": r["id"],
                 "asset_path": r["asset_path"],
@@ -1704,18 +1761,18 @@ def write_review_files(
                 "gate_status": r["gate_status"],
                 "passed_model_free": r["passed_model_free"],
                 "passed": r["passed"],
-                "author_kind": r["author_kind"],
+                "author_kind": row_author_kind,
                 "drafter_id": r["drafter_id"],
                 "drafter_revision": r["drafter_revision"],
                 "drafter_prompt": r.get("drafter_prompt"),
                 "drafter_prompt_sha256": r.get("drafter_prompt_sha256"),
                 "drafter_raw_output": r.get("drafter_raw_output"),
-                "drafter_writer": r.get("drafter_writer"),
+                "drafter_writer": drafter_writer_val,
                 "draft": draft_val,
                 "florence2_draft": r.get("florence2_draft") or draft_val,
                 "seat_edit": seat_edit_val,
                 "seat_id": seat_id_val,
-                "writers": r.get("writers"),
+                "writers": row_writers,
                 "parts": r.get("parts"),
                 "final_caption": r.get("final_caption"),
                 "siblings": sibs,
@@ -1779,7 +1836,7 @@ def write_review_files(
     if human_rows:
         lines += [
             "",
-            "## Existing descriptions passing model-free gate (`author_kind: human`)",
+            "## Existing descriptions passing model-free gate (`author_kind: human | sidecar`)",
             "",
             "| id | target image | gate_status | author_kind |",
             "|---|---|---|---|",
@@ -1883,8 +1940,21 @@ def import_worksheet_edits(
     with open(worksheet_path, encoding="utf-8") as f:
         raw_lines = f.readlines()
 
+    header_drafter_writer: str | None = None
+    for line in raw_lines[:20]:
+        m_dr = _WS_DRAFTER_RE.match(line.strip())
+        if m_dr:
+            header_drafter_writer = drafter_writer_id(m_dr.group(1).strip(), m_dr.group(2).strip(), None)
+            break
+
+    cached_rev = _load_cached_review_rows(out_dir)
+    cached_raw = _load_drafter_raw_rows(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+    merged = load_seat_edits(out_dir)
+
     header_cols: list[str] | None = None
     id_idx = -1
+    draft_idx = -1
     edit_idx = -1
     seat_idx = -1
     imported_rows: list[dict] = []
@@ -1903,6 +1973,10 @@ def import_worksheet_edits(
                 id_idx = lower_cells.index("id")
                 edit_idx = lower_cells.index("edited text")
                 seat_idx = lower_cells.index("seat_id") if "seat_id" in lower_cells else -1
+                if "florence-2 draft" in lower_cells:
+                    draft_idx = lower_cells.index("florence-2 draft")
+                elif "draft" in lower_cells:
+                    draft_idx = lower_cells.index("draft")
             continue
         if all(set(c) <= {"-", ":"} for c in cells if c):
             continue
@@ -1921,17 +1995,56 @@ def import_worksheet_edits(
             )
         if not _SEAT_NAME_RE.match(eff_seat):
             raise DeskError("INPUT_BAD_ARGUMENT", f"invalid seat name {eff_seat!r} on row {rid!r}")
+
+        ws_draft = cells[draft_idx].strip() if (draft_idx >= 0 and draft_idx < len(cells)) else ""
+        rev_row = cached_rev.get(rid)
+        raw_row = cached_raw.get(rid)
+        prev_ed = merged.get(rid)
+        rev_draft_writer: str | None = None
+        if rev_row:
+            if rev_row.get("drafter_writer"):
+                rev_draft_writer = str(rev_row["drafter_writer"])
+            elif rev_row.get("drafter_id"):
+                rev_draft_writer = drafter_writer_id(
+                    str(rev_row["drafter_id"]),
+                    str(rev_row.get("drafter_revision") or "unknown"),
+                    rev_row.get("drafter_prompt"),
+                )
+        if not rev_draft_writer and raw_row:
+            if raw_row.get("drafter_writer"):
+                rev_draft_writer = str(raw_row["drafter_writer"])
+            elif raw_row.get("drafter_id"):
+                rev_draft_writer = drafter_writer_id(
+                    str(raw_row["drafter_id"]),
+                    str(raw_row.get("drafter_revision") or "unknown"),
+                    raw_row.get("drafter_prompt"),
+                )
+
+        seen_draft_text: str | None = None
+        seen_draft_writer: str | None = None
+        if ws_draft:
+            seen_draft_text = ws_draft
+            seen_draft_writer = (
+                rev_draft_writer
+                or (str(prev_ed["draft_writer"]) if (prev_ed and prev_ed.get("draft_writer")) else None)
+                or header_drafter_writer
+                or drafter_writer_id("worksheet", "unknown", None)
+            )
+        elif draft_idx < 0 and rev_row and (rev_row.get("draft") or rev_row.get("florence2_draft")):
+            seen_draft_text = (rev_row.get("draft") or rev_row.get("florence2_draft") or "").strip() or None
+            seen_draft_writer = rev_draft_writer
+
         imported_rows.append({
             "id": rid,
             "edited_text": edit_text,
             "seat": eff_seat,
             "writer": f"seat:{eff_seat}",
+            "draft_text": seen_draft_text,
+            "draft_writer": seen_draft_writer,
             "worksheet_sha256": ws_sha,
             "pool_detection": eff_pd,
         })
 
-    os.makedirs(out_dir, exist_ok=True)
-    merged = load_seat_edits(out_dir)
     for row in imported_rows:
         merged[row["id"]] = row
     for existing_row in merged.values():
@@ -1955,13 +2068,19 @@ def import_worksheet_edits(
             if ed is not None:
                 r["seat_edit"] = ed["edited_text"]
                 r["seat_id"] = ed["seat"]
-                r["author_kind"] = "captioner_assisted" if r.get("drafter_id") else "human"
+                has_draft = bool(r.get("drafter_id") or ed.get("draft_writer") or ed.get("draft_text"))
+                r["author_kind"] = "captioner_assisted" if has_draft else "human"
+                if ed.get("draft_text") and not (r.get("draft") or r.get("florence2_draft")):
+                    r["draft"] = ed["draft_text"]
+                    r["florence2_draft"] = ed["draft_text"]
+                if ed.get("draft_writer") and not r.get("drafter_writer"):
+                    r["drafter_writer"] = ed["draft_writer"]
                 existing_writers = list(r.get("writers") or [])
-                if existing_writers:
-                    existing_writers[-1] = ed["writer"]
-                    r["writers"] = existing_writers
-                else:
-                    r["writers"] = [ed["writer"]]
+                if ed.get("draft_writer") and ed["draft_writer"] not in existing_writers:
+                    existing_writers.append(str(ed["draft_writer"]))
+                if not existing_writers or existing_writers[-1] != ed["writer"]:
+                    existing_writers.append(ed["writer"])
+                r["writers"] = existing_writers
             elif r.get("drafter_id") and not r.get("seat_edit"):
                 r["author_kind"] = "captioner_draft_unedited"
         with open(rev_path, "w", encoding="utf-8") as f:
@@ -2010,6 +2129,20 @@ def _load_cached_review_rows(out_dir: str) -> dict[str, dict]:
         return {}
     by_id: dict[str, dict] = {}
     with open(rev_path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                row = json.loads(line)
+                if isinstance(row, dict) and row.get("id"):
+                    by_id[str(row["id"])] = row
+    return by_id
+
+
+def _load_drafter_raw_rows(out_dir: str) -> dict[str, dict]:
+    raw_path = os.path.join(out_dir, DRAFTER_RAW_FILENAME)
+    if not os.path.isfile(raw_path):
+        return {}
+    by_id: dict[str, dict] = {}
+    with open(raw_path, encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 row = json.loads(line)
@@ -2196,8 +2329,11 @@ def compose_captions(
                 "text": free_clean,
                 "writer": seat_writer,
             }
-            if d_info is not None:
-                free_part["draft_writer"] = d_info["drafter_writer"]
+            eff_draft_writer = (d_info["drafter_writer"] if d_info is not None else None) or ed.get("draft_writer")
+            eff_draft_text = (d_info["draft"] if d_info is not None else None) or ed.get("draft_text")
+            if eff_draft_writer or eff_draft_text:
+                if eff_draft_writer:
+                    free_part["draft_writer"] = eff_draft_writer
                 stratum = "captioner_assisted"
             else:
                 stratum = "human"
@@ -2218,14 +2354,26 @@ def compose_captions(
                     "text": free_clean,
                     "writer": e["record_writer"],
                 })
+            is_sidecar = bool(e.get("sidecar_file"))
+            valid_composed_strata: tuple[str, ...] = (
+                ("sidecar", "captioner_assisted", "captioner_draft_unedited")
+                if is_sidecar
+                else KNOWN_AUTHOR_STRATA
+            )
+            default_composed_stratum = "sidecar" if is_sidecar else "human"
             stratum = (
                 e["existing_author_kind"]
-                if e["existing_author_kind"] in ("captioner_assisted", "captioner_draft_unedited")
-                else "human"
+                if e["existing_author_kind"] in valid_composed_strata
+                else default_composed_stratum
             )
 
         final_caption = _join_caption_parts([p["text"] for p in parts])
         writers = [str(p["writer"]) for p in parts]
+        item_drafter_writer = (
+            d_info["drafter_writer"]
+            if d_info is not None
+            else (ed.get("draft_writer") if ed is not None else None)
+        )
         composed_by_id[rid] = final_caption
         meta_by_id[rid] = {
             "author_kind": stratum,
@@ -2234,6 +2382,8 @@ def compose_captions(
             "parts": parts,
             "final_caption": final_caption,
             "draft_info": d_info,
+            "drafter_writer": item_drafter_writer,
+            "draft_text": d_info["draft"] if d_info is not None else (ed.get("draft_text") if ed is not None else None),
             "seat_edit": ed["edited_text"] if ed else None,
             "seat_id": ed["seat"] if ed else None,
         }
@@ -2247,7 +2397,7 @@ def compose_captions(
             "author_kind": stratum,
             "writers": writers,
             "parts": parts,
-            "drafter_writer": d_info["drafter_writer"] if d_info else None,
+            "drafter_writer": item_drafter_writer,
         })
 
     audit = audit_records(
@@ -2287,6 +2437,13 @@ def compose_captions(
             r["drafter_prompt_sha256"] = di["drafter_prompt_sha256"]
             r["drafter_raw_output"] = di["drafter_raw_output"]
             r["drafter_writer"] = di["drafter_writer"]
+        else:
+            if m["draft_text"]:
+                r["draft"] = m["draft_text"]
+                r["florence2_draft"] = m["draft_text"]
+            if m["drafter_writer"]:
+                r["drafter_writer"] = m["drafter_writer"]
+    audit["strata_counts"] = _count_strata(audit["records"])
 
     rev_jsonl, rev_ws = write_review_files(
         project,
@@ -2300,7 +2457,11 @@ def compose_captions(
 
     os.makedirs(out_dir, exist_ok=True)
     manifest_path = os.path.join(out_dir, manifest_name)
-    manifest_doc = {"pool_detection": eff_pd, "items": manifest_items}
+    manifest_doc = {
+        "pool_detection": eff_pd,
+        "strata_counts": audit["strata_counts"],
+        "items": manifest_items,
+    }
     with open(manifest_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(manifest_doc, f, indent=2, ensure_ascii=False)
         f.write("\n")
@@ -2311,6 +2472,7 @@ def compose_captions(
         "review_jsonl_path": rev_jsonl,
         "worksheet_path": rev_ws,
         "items": manifest_items,
+        "strata_counts": audit["strata_counts"],
         "images_without_sidecar": missing_sidecars,
         "pool_detection": eff_pd,
         "audit": audit,

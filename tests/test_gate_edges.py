@@ -23,7 +23,7 @@ def rec(rid, text, *, status="approved", prompt="", subject="", asset=None, auth
     return r
 
 
-class Helpers(unittest.TestCase):
+class Helpers(fakes.IsolatedDeskTestCase):
     def test_word_helpers(self):
         self.assertEqual(g.normalize_text("A b-C, d!"), "abcd")
         self.assertEqual(g.word_set("a a B"), {"a", "b"})
@@ -60,7 +60,7 @@ class Helpers(unittest.TestCase):
         self.assertFalse(inside["equals_prompt"])
 
 
-class SigLIPTokenizer(unittest.TestCase):
+class SigLIPTokenizer(fakes.IsolatedDeskTestCase):
     def fake_tf(self):
         tf = fakes.make_transformers()
         tf.seen = []
@@ -110,7 +110,7 @@ class SigLIPTokenizer(unittest.TestCase):
         self.assertEqual(g.siglip2_token_counts(["x", "y"], tokenizer=tok), [7, 7])
 
 
-class ExtractFields(unittest.TestCase):
+class ExtractFields(fakes.IsolatedDeskTestCase):
     def test_raw_record_with_canon_fallback_when_unapproved_or_no_explanation(self):
         e = g._extract_record_fields({"id": "a", "judgment": {"status": "rejected", "explanation": "text here"},
                                       "canon": {"subject": "the subject"}, "provenance": {"author_kind": "human"}})
@@ -136,8 +136,9 @@ class ExtractFields(unittest.TestCase):
         self.assertEqual((e["text"], e["source"]), ("only subject", "canon.subject"))
 
 
-class QueriesAndCounters(unittest.TestCase):
+class QueriesAndCounters(fakes.IsolatedDeskTestCase):
     def setUp(self):
+        super().setUp()
         self.records = [rec("r1", GOOD, subject="lantern pillars courtyard scene"), rec("r2", OTHER)]
 
     def by_id(self, audit):
@@ -235,8 +236,9 @@ class QueriesAndCounters(unittest.TestCase):
         self.assertEqual(even["median_prompt_word_share"], 0.5)
 
 
-class ProjectFiles(unittest.TestCase):
+class ProjectFiles(fakes.IsolatedDeskTestCase):
     def setUp(self):
+        super().setUp()
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.tmp = self._tmp.name
@@ -267,7 +269,7 @@ class ProjectFiles(unittest.TestCase):
         self.assertEqual(q["records"][0]["source"], "custom")
 
 
-class Drafting(unittest.TestCase):
+class Drafting(fakes.IsolatedDeskTestCase):
     def test_nothing_flagged_records_drafter_identity_without_drafting(self):
         class Drafter:
             drafter_id, revision = "d1", "r1"
@@ -303,7 +305,7 @@ class Drafting(unittest.TestCase):
         self.assertEqual(audit["drafter_id"], "namedrafter")
 
 
-class Siblings(unittest.TestCase):
+class Siblings(fakes.IsolatedDeskTestCase):
     def pool(self, *items):
         return [{"asset_path": p, "dhash": h} for p, h in items]
 
@@ -336,7 +338,7 @@ class Siblings(unittest.TestCase):
         self.assertEqual(len(g._fallback_hash_hex("x")), 64)
 
 
-class ReviewFiles(unittest.TestCase):
+class ReviewFiles(fakes.IsolatedDeskTestCase):
     def test_worksheet_hides_current_text_and_handles_missing_image_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             proj = os.path.join(tmp, "my proj")
@@ -375,7 +377,7 @@ class ReviewFiles(unittest.TestCase):
         self.assertIn("## Existing descriptions passing model-free gate", text)
 
 
-class Types(unittest.TestCase):
+class Types(fakes.IsolatedDeskTestCase):
     def test_stopword_hash_is_stable_across_line_endings(self):
         with tempfile.TemporaryDirectory() as tmp:
             a, b = os.path.join(tmp, "a.txt"), os.path.join(tmp, "b.txt")
