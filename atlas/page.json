@@ -7,7 +7,9 @@
   "breaks": [
     {
       "doors": 3,
-      "importedBy": [],
+      "importedBy": [
+        "scripts"
+      ],
       "importedByTests": [
         "tests"
       ],
@@ -18,22 +20,22 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 0,
-      "changed": 4,
+      "added": 1,
+      "changed": 18,
       "moved": 0,
-      "parts": 3,
+      "parts": 5,
       "removed": 0
     },
     "items": [
       {
         "kind": "counts",
-        "sentence": "Nothing structural changed since 2026-11-12; 4 files changed content.",
+        "sentence": "Nothing structural changed since 2026-11-12; 1 file added and 18 changed content.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "90cea26841a83a1941874087f6473c2d0287a4b5",
-      "generatedAt": "2026-11-12T11:03:16.759Z"
+      "commit": "82a8b0364fec9d92ed4c00f803954d3f172a6f77",
+      "generatedAt": "2026-11-12T14:42:46.539Z"
     },
     "unchanged": true
   },
@@ -42,15 +44,16 @@
     "Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "9101583df389d0cb8b60ce864d48602129ef7af8",
+  "commit": "2633ca32fb35a3fc8a9b6d7b6e3d3db9b8375f04",
   "defaultBranch": "main",
-  "derived": "5 parts, mostly Python (14 files), CSS (2), TypeScript (2), Astro (1), JavaScript (1) and shell (1). Work enters through 4 doors; the busiest is CI, which reaches 3 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.",
+  "derived": "6 parts, mostly Python (20 files), shell (3), CSS (2), TypeScript (2), Astro (1) and JavaScript (1). Work enters through 4 doors; the busiest is CI, which reaches 4 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.",
   "doors": [
     {
       "checks": [
-        "dataset_desk/"
+        "dataset_desk/",
+        "scripts/"
       ],
-      "checksCount": 1,
+      "checksCount": 2,
       "checksMore": 0,
       "file": ".github/workflows/ci.yml",
       "id": ".github/workflows/ci.yml",
@@ -69,9 +72,14 @@
           "files": 1
         },
         {
+          "boundary": "scripts",
+          "depth": 0,
+          "files": 4
+        },
+        {
           "boundary": "tests",
           "depth": 0,
-          "files": 7
+          "files": 9
         }
       ],
       "runs": [
@@ -184,12 +192,13 @@
   "edges": [],
   "engine": "1.26.0",
   "generated": [],
-  "generatedAt": "2026-11-12T11:29:34.606Z",
+  "generatedAt": "2026-11-12T16:50:44.143Z",
   "limits": [
-    "1 import could not be resolved: `tests/test_training_captions.py` imports a path built at run time.",
-    "4 reads use paths built at run time and are not named here.",
-    "17 writes and 38 reads go to a path their caller passes, not to this repository.",
+    "3 imports could not be resolved: `scripts/colab/desk_bundle_now.py` imports a path built at run time; `tests/test_colab_draft_lane.py` imports a path built at run time; `tests/test_training_captions.py` imports a path built at run time.",
+    "6 writes and 5 reads use paths built at run time and are not named here.",
+    "29 writes and 86 reads go to a path their caller passes, not to this repository.",
     "15 writes and 2 reads go to the directory the command is run in (desk-out/), not to this repository.",
+    "7 writes and 10 reads go to a temporary directory, not to this repository.",
     "5 writes and 2 reads go to the directory the command is run in (desk-out/) or a path their caller passes, not to this repository.",
     "Statistics confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions."
   ],
@@ -198,10 +207,11 @@
     ".github": ".github",
     "dataset_desk": "dataset_desk",
     "root": "the repository root",
+    "scripts": "scripts",
     "site": "the site",
     "tests": "tests"
   },
-  "parts": 5,
+  "parts": 6,
   "readers": [],
   "repo": "mcp-tool-shop-org/dataset-desk",
   "sequences": [],
@@ -213,16 +223,23 @@
   "startReason": "This path follows dataset-desk (a command people run) from its entry, since CI runs only tests and checks.",
   "summary": "dataset-desk: a review desk for visual datasets — duplicates, outliers, search, and a model-free description gate.",
   "summaryFrom": "person",
-  "testFiles": 7,
+  "testFiles": 9,
   "testedBy": {
-    "dataset_desk": 6
+    "dataset_desk": 7,
+    "scripts": 0
   },
-  "testedCodeParts": 1,
-  "unnamedWrites": 0,
+  "testedCodeParts": 2,
+  "unnamedWrites": 6,
   "unread": [],
   "unreadFiles": 0,
   "unreadNote": [],
-  "untested": [],
+  "untested": [
+    {
+      "part": "scripts",
+      "partLabel": "scripts",
+      "testedBy": 0
+    }
+  ],
   "untestedNote": [],
   "written": 0
 }

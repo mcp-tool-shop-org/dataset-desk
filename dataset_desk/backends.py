@@ -8,6 +8,7 @@ the desk records in its cache. The 'none' backend needs no torch and powers the 
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import sys
@@ -15,6 +16,9 @@ import time
 
 DEFAULT_THREADS = 4
 _TORCH_INTEROP_SET = False
+FORBID_EMBEDDERS_ENV = "DATASET_DESK_FORBID_EMBEDDERS"
+EMBEDDER_LOG_ENV = "DATASET_DESK_EMBEDDER_LOG_FILE"
+DRAFT_HEARTBEAT_ENV = "DATASET_DESK_DRAFT_HEARTBEAT_FILE"
 
 
 def _argv_threads(argv: list[str] | None = None, default: int = DEFAULT_THREADS) -> int:
@@ -250,11 +254,86 @@ def check_vram(
         waited += step
 
 
+def _record_embedder_event(backend_name: str, *, allowed: bool) -> None:
+    log_path = os.environ.get(EMBEDDER_LOG_ENV, "").strip()
+    if not log_path:
+        return
+    parent = os.path.dirname(log_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    rec = {"backend": backend_name, "allowed": allowed, "ts": round(time.time(), 6)}
+    with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(json.dumps(rec) + "\n")
+
+
+def _assert_embedders_allowed(backend_name: str) -> None:
+    if os.environ.get(FORBID_EMBEDDERS_ENV, "").strip() == "1":
+        _record_embedder_event(backend_name, allowed=False)
+        raise DeskError(
+            "EMBEDDING_BACKEND_FORBIDDEN",
+            f"REFUSED: embedding backend {backend_name!r} is forbidden when {FORBID_EMBEDDERS_ENV}=1",
+        )
+    _record_embedder_event(backend_name, allowed=True)
+
+
+def _record_draft_heartbeat(
+    drafter_name: str,
+    *,
+    phase: str,
+    drafted: int,
+    total: int,
+    last_path: str | None = None,
+) -> None:
+    hb_path = os.environ.get(DRAFT_HEARTBEAT_ENV, "").strip()
+    if not hb_path:
+        return
+    parent = os.path.dirname(hb_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    payload = {
+        "drafter": drafter_name,
+        "phase": phase,
+        "drafted": int(drafted),
+        "total": int(total),
+        "last_path": os.path.basename(last_path) if last_path else None,
+        "ts": round(time.time(), 6),
+        "mono": round(time.monotonic(), 6),
+    }
+    line = json.dumps(payload) + "\n"
+    with open(f"{hb_path}.jsonl", "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(line)
+    tmp_path = f"{hb_path}.tmp.{os.getpid()}"
+    with open(tmp_path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(line)
+    for attempt in range(20):
+        try:
+            os.replace(tmp_path, hb_path)
+            break
+        except PermissionError:
+            if attempt == 19:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_path)
+            else:
+                time.sleep(0.005)
+
+
+def _maybe_stall_for_test(record_index_1based: int) -> None:
+    if not os.environ.get(DRAFT_HEARTBEAT_ENV, "").strip():
+        return
+    stall_at = os.environ.get("DATASET_DESK_TEST_STALL_AT_RECORD", "").strip()
+    if stall_at and stall_at == str(record_index_1based):
+        secs = max(0.0, float(os.environ.get("DATASET_DESK_TEST_STALL_SECONDS", "5.0")))
+        time.sleep(secs)
+
+
 class NoneEmbedder:
     """No-embedding backend for dataset-desk-lite: needs only numpy and Pillow (no torch)."""
 
     name, revision, dim, vision_tokens, max_tokens, dtype_name = "none", "none-1", 0, 0, 0, "none"
     has_symmetric_vectors = False
+
+    def __init__(self) -> None:
+        _record_embedder_event("none", allowed=True)
 
     def images(self, paths: list[str]) -> np.ndarray:
         return np.zeros((len(paths), 0), np.float32)
@@ -280,6 +359,7 @@ class FakeEmbedder:
         text_only: bool = False,
         **_kw,
     ) -> None:
+        _assert_embedders_allowed("fake")
         if dim is not None and dim not in (*EG2_VALID_DIMS, 4):
             raise DeskError(
                 "INPUT_BAD_ARGUMENT",
@@ -363,6 +443,7 @@ class EG2Embedder:
                  vision_tokens: int | None = 280, dtype: str = "auto",
                  vram_budget: int = DEFAULT_VRAM_BUDGET_MIB, wait: float = 0.0,
                  text_only: bool = False):
+        _assert_embedders_allowed("eg2")
         eff_dim = 768 if dim is None else int(dim)
         eff_vt = 280 if vision_tokens is None else int(vision_tokens)
         if eff_dim not in EG2_VALID_DIMS:
@@ -571,6 +652,7 @@ class SigLIP2Embedder:
 
     def __init__(self, device: str = "cpu", threads: int = DEFAULT_THREADS, batch: int = 4,
                  vram_budget: int = DEFAULT_VRAM_BUDGET_MIB, wait: float = 0.0):
+        _assert_embedders_allowed("siglip2")
         self.device, self.threads, self.batch = device, threads, batch
         self.vram_budget, self.wait = vram_budget, wait
         self._vram_checked = False
@@ -662,6 +744,7 @@ class SentenceTransformerTextEmbedder:
         vram_budget: int = DEFAULT_VRAM_BUDGET_MIB,
         wait: float = 0.0,
     ):
+        _assert_embedders_allowed(spec.name)
         self.spec = spec
         self.name = spec.name
         self.repo = spec.repo
@@ -757,6 +840,7 @@ class DINOv2Embedder:
         vram_budget: int = DEFAULT_VRAM_BUDGET_MIB,
         wait: float = 0.0,
     ):
+        _assert_embedders_allowed(spec.name)
         self.spec = spec
         self.name = spec.name
         self.repo = spec.repo
@@ -869,9 +953,13 @@ class FakeDrafter:
             raise TypeError("drafter.draft() accepts a list[str] of image file paths only")
         from PIL import Image
 
+        total = len(image_paths)
+        _record_draft_heartbeat(self.name, phase="loading_model", drafted=0, total=total)
+        _record_draft_heartbeat(self.name, phase="drafting", drafted=0, total=total)
         out: list[str] = []
         raw_batch: list[str] = []
-        for p in image_paths:
+        for idx, p in enumerate(image_paths):
+            _maybe_stall_for_test(idx + 1)
             self.seen_paths.append(p)
             tone = "neutral"
             if p and os.path.isfile(p):
@@ -888,7 +976,9 @@ class FakeDrafter:
             self.raw_outputs[p] = raw
             raw_batch.append(raw)
             out.append(clean)
+            _record_draft_heartbeat(self.name, phase="drafting", drafted=idx + 1, total=total, last_path=p)
         self.last_raw_outputs = raw_batch
+        _record_draft_heartbeat(self.name, phase="done", drafted=total, total=total)
         return out
 
 
@@ -1043,20 +1133,27 @@ class PlainSightDrafter:
     def draft(self, image_paths: list[str]) -> list[str]:
         if not isinstance(image_paths, list) or any(not isinstance(p, str) for p in image_paths):
             raise TypeError("drafter.draft() accepts a list[str] of image file paths only")
+        total = len(image_paths)
         if not image_paths:
             self.last_raw_outputs = []
+            _record_draft_heartbeat(self.name, phase="done", drafted=0, total=0)
             return []
+        _record_draft_heartbeat(self.name, phase="loading_model", drafted=0, total=total)
         self._ensure_model()
+        _record_draft_heartbeat(self.name, phase="drafting", drafted=0, total=total)
 
         if self.engine is not None:
             out_eng: list[str] = []
             raw_eng: list[str] = []
-            for p in image_paths:
+            for idx, p in enumerate(image_paths):
+                _maybe_stall_for_test(idx + 1)
                 raw_desc = str(self.engine.describe(p, detail=self.detail))
                 self.raw_outputs[p] = raw_desc
                 raw_eng.append(raw_desc)
                 out_eng.append(raw_desc.strip())
+                _record_draft_heartbeat(self.name, phase="drafting", drafted=idx + 1, total=total, last_path=p)
             self.last_raw_outputs = raw_eng
+            _record_draft_heartbeat(self.name, phase="done", drafted=total, total=total)
             return out_eng
 
         from PIL import Image
@@ -1064,7 +1161,8 @@ class PlainSightDrafter:
         task_prompt = self.TASK_TOKEN
         out: list[str] = []
         raw_batch: list[str] = []
-        for p in image_paths:
+        for idx, p in enumerate(image_paths):
+            _maybe_stall_for_test(idx + 1)
             with Image.open(p) as im:
                 rgb = im.convert("RGB")
                 w, h = rgb.size
@@ -1081,7 +1179,9 @@ class PlainSightDrafter:
             raw_batch.append(text)
             parsed = self.processor.post_process_generation(text, task=task_prompt, image_size=(w, h))
             out.append(str(parsed.get(task_prompt, text)).strip())
+            _record_draft_heartbeat(self.name, phase="drafting", drafted=idx + 1, total=total, last_path=p)
         self.last_raw_outputs = raw_batch
+        _record_draft_heartbeat(self.name, phase="done", drafted=total, total=total)
         return out
 
 
@@ -1193,16 +1293,21 @@ class Qwen3VLDrafter:
     def draft(self, image_paths: list[str]) -> list[str]:
         if not isinstance(image_paths, list) or any(not isinstance(p, str) for p in image_paths):
             raise TypeError("drafter.draft() accepts a list[str] of image file paths only")
+        total = len(image_paths)
         if not image_paths:
             self.last_raw_outputs = []
+            _record_draft_heartbeat(self.name, phase="done", drafted=0, total=0)
             return []
+        _record_draft_heartbeat(self.name, phase="loading_model", drafted=0, total=total)
         self._ensure_model()
+        _record_draft_heartbeat(self.name, phase="drafting", drafted=0, total=total)
 
         from PIL import Image
 
         out: list[str] = []
         raw_batch: list[str] = []
-        for p in image_paths:
+        for idx, p in enumerate(image_paths):
+            _maybe_stall_for_test(idx + 1)
             with Image.open(p) as im:
                 rgb = im.convert("RGB")
             messages = [{
@@ -1237,7 +1342,9 @@ class Qwen3VLDrafter:
             self.raw_outputs[p] = raw_text
             raw_batch.append(raw_text)
             out.append(clean_text)
+            _record_draft_heartbeat(self.name, phase="drafting", drafted=idx + 1, total=total, last_path=p)
         self.last_raw_outputs = raw_batch
+        _record_draft_heartbeat(self.name, phase="done", drafted=total, total=total)
         return out
 
 
@@ -1352,11 +1459,13 @@ def make(
     text_only: bool = False,
     **kwargs,
 ):
-    check_device(device, grant)
-    cap_threads(threads)
     if backend not in _STANDINS and backend not in REGISTRY:
         valid = ", ".join([*REGISTRY, *_STANDINS])
         raise DeskError("INPUT_UNKNOWN_BACKEND", f"unknown backend {backend!r}: {valid}")
+    if backend != "none" and os.environ.get(FORBID_EMBEDDERS_ENV, "").strip() == "1":
+        _assert_embedders_allowed(backend)
+    check_device(device, grant)
+    cap_threads(threads)
     validate_embedder_options(backend, dim=dim, vision_tokens=vision_tokens)
     extra_kw = dict(kwargs)
     if backend in ("eg2", "fake"):
