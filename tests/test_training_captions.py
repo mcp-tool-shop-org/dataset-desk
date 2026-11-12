@@ -1987,8 +1987,13 @@ class Addendum3LockAndProvenanceTests(fakes.IsolatedDeskTestCase):
             )
 
         edits = description_gate.load_seat_edits(out_dir)
+        expected_d_writer = description_gate.drafter_writer_id(
+            backends.FakeDrafter.drafter_id,
+            backends.FakeDrafter.revision,
+            backends.DEFAULT_DRAFTER_PROMPT,
+        )
         self.assertTrue(edits["item_01"].get("draft_text"))
-        self.assertIn("drafter:fake-drafter@", str(edits["item_01"].get("draft_writer")))
+        self.assertEqual(edits["item_01"].get("draft_writer"), expected_d_writer)
 
         # Re-run `report` WITHOUT `--draft` (overwriting description-review.jsonl without live drafts), then `compose --draft none`
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -1998,7 +2003,7 @@ class Addendum3LockAndProvenanceTests(fakes.IsolatedDeskTestCase):
         with open(os.path.join(out_dir, "captions-manifest.json"), encoding="utf-8") as f:
             mf = json.load(f)
         self.assertEqual(mf["items"][0]["author_kind"], "captioner_assisted")
-        self.assertIn("drafter:fake-drafter@", str(mf["items"][0]["drafter_writer"]))
+        self.assertEqual(mf["items"][0]["drafter_writer"], expected_d_writer)
 
         with open(os.path.join(out_dir, "description-review.jsonl"), encoding="utf-8") as f:
             rev_row = json.loads(f.readline())
@@ -2028,7 +2033,11 @@ class Addendum3LockAndProvenanceTests(fakes.IsolatedDeskTestCase):
         rev_path = os.path.join(out_dir, "description-review.jsonl")
         with open(rev_path, encoding="utf-8") as f:
             before_row = json.loads(f.readline())
-        expected_d_writer = description_gate.drafter_writer_id("fake-drafter", "fake-drafter-v1", None)
+        expected_d_writer = description_gate.drafter_writer_id(
+            backends.FakeDrafter.drafter_id,
+            backends.FakeDrafter.revision,
+            backends.DEFAULT_DRAFTER_PROMPT,
+        )
         self.assertEqual(before_row["writers"], ["record:records/w_01.json", expected_d_writer])
 
         ws_path = os.path.join(out_dir, "description-worksheet.md")
@@ -2295,7 +2304,11 @@ class Addendum3bComposeDraftingTests(fakes.IsolatedDeskTestCase):
         self.assertIsNone(it["drafter_writer"])
 
         # Draft appears ONLY as the offer field (with its writer) in description-review.jsonl and worksheet
-        expected_offer_writer = description_gate.drafter_writer_id("fake-drafter", "fake-drafter-v1", None)
+        expected_offer_writer = description_gate.drafter_writer_id(
+            backends.FakeDrafter.drafter_id,
+            backends.FakeDrafter.revision,
+            backends.DEFAULT_DRAFTER_PROMPT,
+        )
         with open(os.path.join(out_all, "description-review.jsonl"), encoding="utf-8") as f:
             rev = json.loads(f.readline())
         self.assertEqual(rev["author_kind"], "human")
@@ -2304,7 +2317,11 @@ class Addendum3bComposeDraftingTests(fakes.IsolatedDeskTestCase):
         self.assertEqual(rev["florence2_draft"], "")
         self.assertIsNone(rev["drafter_id"])
         self.assertIsNone(rev["drafter_writer"])
-        self.assertTrue(rev["draft_offer"].startswith("blind draft for h_01.png"))
+        self.assertTrue(
+            rev["draft_offer"].startswith("a weathered ")
+            and rev["draft_offer"].endswith("beside carved stone pillars in a dim courtyard (h_01)"),
+            rev["draft_offer"],
+        )
         self.assertEqual(rev["draft_offer_writer"], expected_offer_writer)
 
         ws_path = os.path.join(out_all, "description-worksheet.md")
@@ -2380,18 +2397,26 @@ class Addendum3bComposeDraftingTests(fakes.IsolatedDeskTestCase):
         self.assertIsNone(mf_drafted["items"][0]["drafter_writer"])
 
         # Draft IS in the review queue and worksheet for the seat
-        expected_d_writer = description_gate.drafter_writer_id("fake-drafter", "fake-drafter-v1", None)
+        expected_d_writer = description_gate.drafter_writer_id(
+            backends.FakeDrafter.drafter_id,
+            backends.FakeDrafter.revision,
+            backends.DEFAULT_DRAFTER_PROMPT,
+        )
         with open(os.path.join(out_drafted, "description-review.jsonl"), encoding="utf-8") as f:
             rev_before = json.loads(f.readline())
         self.assertFalse(rev_before["passed_model_free"])
-        self.assertTrue(rev_before["draft"].startswith("blind draft for f_01.png"))
+        self.assertTrue(
+            rev_before["draft"].startswith("a weathered ")
+            and rev_before["draft"].endswith("beside carved stone pillars in a dim courtyard (f_01)"),
+            rev_before["draft"],
+        )
         self.assertEqual(rev_before["drafter_writer"], expected_d_writer)
 
         ws_path = os.path.join(out_drafted, "description-worksheet.md")
         with open(ws_path, encoding="utf-8") as f:
             ws_before = f.read()
         self.assertIn("| `f_01` |", ws_before)
-        self.assertIn("blind draft for f_01.png", ws_before)
+        self.assertIn("beside carved stone pillars in a dim courtyard (f_01)", ws_before)
 
         # Import a seat edit -> NOW compose updates the training caption
         self._set_worksheet_edit(ws_path, "f_01", "weathered stone arch spanning narrow cobbled lane")

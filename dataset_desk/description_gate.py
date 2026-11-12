@@ -1366,20 +1366,29 @@ def save_sidecar_import(
     scan_result: dict,
     *,
     pool_detection: dict | None = None,
+    strata_counts: dict[str, int] | None = None,
 ) -> tuple[str, str]:
     """Persist imported sidecar records and missing-sidecar report under `out_dir` (never inside `project`)."""
     os.makedirs(out_dir, exist_ok=True)
+    recs = list(scan_result.get("records") or [])
     recs_path = os.path.join(out_dir, SIDECAR_RECORDS_FILENAME)
     with open(recs_path, "w", encoding="utf-8") as f:
-        for rec in scan_result.get("records") or []:
+        for rec in recs:
             row_doc = {**rec, "pool_detection": pool_detection} if pool_detection is not None else rec
             f.write(json.dumps(row_doc, ensure_ascii=False) + "\n")
+    if strata_counts is not None:
+        eff_strata = dict(strata_counts)
+    elif recs:
+        eff_strata = audit_records(recs)["strata_counts"]
+    else:
+        eff_strata = {s: 0 for s in KNOWN_AUTHOR_STRATA}
     rep_path = os.path.join(out_dir, SIDECAR_REPORT_FILENAME)
     rep_doc: dict[str, Any] = {
         "total_images": int(scan_result.get("total_images", 0)),
-        "paired_count": len(scan_result.get("records") or []),
+        "paired_count": len(recs),
         "images_without_sidecar": list(scan_result.get("images_without_sidecar") or []),
         "orphan_sidecars": list(scan_result.get("orphan_sidecars") or []),
+        "strata_counts": eff_strata,
     }
     if pool_detection is not None:
         rep_doc["pool_detection"] = pool_detection
@@ -1436,7 +1445,6 @@ def import_sidecars(
         else load_caption_rules(project=project)
     )
     scan_res = scan_sidecar_project(project)
-    recs_path, rep_path = save_sidecar_import(out_dir, scan_res, pool_detection=pool_detection)
     audit = audit_records(
         scan_res["records"],
         token_counter=token_counter,
@@ -1446,6 +1454,12 @@ def import_sidecars(
     audit["pool_detection"] = pool_detection
     if drafter is not None:
         draft_flagged_records(project, audit, drafter)
+    recs_path, rep_path = save_sidecar_import(
+        out_dir,
+        scan_res,
+        pool_detection=pool_detection,
+        strata_counts=audit["strata_counts"],
+    )
     rev_jsonl, rev_ws = write_review_files(
         project,
         out_dir,

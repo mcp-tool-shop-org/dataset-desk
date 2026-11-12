@@ -3787,6 +3787,7 @@ def main(argv: list[str] | None = None, make=backends.make) -> int:
             "orphan_sidecars": imp["orphan_sidecars"],
             "passed_model_free_count": imp["passed_model_free_count"],
             "flagged_count": imp["flagged_count"],
+            "strata_counts": imp["strata_counts"],
             "sidecar_records_path": imp["sidecar_records_path"],
             "sidecar_report_path": imp["sidecar_report_path"],
             "review_jsonl_path": imp["review_jsonl_path"],
