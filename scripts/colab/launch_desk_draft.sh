@@ -2,8 +2,12 @@
 # Launch kit for dataset-desk Colab caption-drafting lane (Qwen3-VL-8B-Instruct on L4+, CPU-high-mem stub first).
 #
 # Vendored window library source: style-dataset-lab main @ df9a1b3be2f8729a57776253e9b0cb32b7f5299c
-#   - scripts/colab/colab_window.sh  sha256 db761fb414da915c8835bad8ef1544992e39aa5b3d636a1d81d17d231f26e974
-#   - scripts/colab/launch_guards.py sha256 4c0c0ab6410eaa511a808d00f09a09d42d5d5b7d0504d85d58cfe3c65baeb085
+#   - scripts/colab/colab_window.sh  sha256 415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725b987132e7
+#       (+ L4 Standard-only patch: polyglot-mcp main 66eddd9 colab_window.sh:1219-1231 and :1267-1270; Publisher
+#        fleet ruling 2026-11-09. sdlab df9a1b3b predates it, so this copy differs from that export by that rule.)
+#       (+ parallel-window rate fix: polyglot-mcp main bd6414fd, PR #80, ported function by function; and a
+#        desk-local watcher ancestry guard. launch_guards.py carries the same port.)
+#   - scripts/colab/launch_guards.py sha256 35b321678ecc32e4a5712b91a5eca65deaf6fc7571c2218660daeb46c735cf03
 #   - scripts/colab/remote_runner.py sha256 393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb
 #
 # Modes:
@@ -24,13 +28,13 @@ PINNED_PYTHON_VERSION="3.12.15"
 PINNED_QWEN3_VL_REPO="Qwen/Qwen3-VL-8B-Instruct"
 PINNED_QWEN3_VL_REVISION="0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
 
-PINNED_COLAB_WINDOW_SHA="db761fb414da915c8835bad8ef1544992e39aa5b3d636a1d81d17d231f26e974"
-PINNED_LAUNCH_GUARDS_SHA="4c0c0ab6410eaa511a808d00f09a09d42d5d5b7d0504d85d58cfe3c65baeb085"
+PINNED_COLAB_WINDOW_SHA="415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725b987132e7"
+PINNED_LAUNCH_GUARDS_SHA="35b321678ecc32e4a5712b91a5eca65deaf6fc7571c2218660daeb46c735cf03"
 PINNED_REMOTE_RUNNER_SHA="393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 PINNED_DESK_BUNDLE_NOW_SHA="b1e83c20f046716433d927fa442e43fe3e6c821c90adc84cd87cfccae9aed1ac"
-PINNED_DESK_DRAFT_HELPER_SHA="2073d17edc976186632d5d5b647f3605d5bfe44a88968d6c8d367d29a8320b15"
+PINNED_DESK_DRAFT_HELPER_SHA="540fe63f37ea2a4c518e2756c10d11ef2cb76db12edb4f21d9c7e6dc03ee006b"
 PINNED_DESK_LOCK_SHA="7d718664b0289b53532ff50541e63942166c1921a2f52cb0e48900958bf90510"
-PINNED_SELF_SHA="39c403cc5311ceb454dd7ce1b99aa6de21ba8853f9f108e3527bcbed739ef592"
+PINNED_SELF_SHA="55a88afafc9f73f8f4ee6496c26c6c2e4d2efa730f754ccc74ffe9ea2243009d"
 
 if pwd -W >/dev/null 2>&1; then
   export MSYS2_ARG_CONV_EXCL="/content"
@@ -384,6 +388,7 @@ else
     exit 2
   fi
   if [ "${SHAPE_EXPLICIT}" = "0" ]; then
+    # L4 opens as Standard (Publisher fleet ruling 2026-11-09); only V5E1/V6E1 are single high-mem shapes.
     if colab_card_is_single_shape "${CARD}"; then
       SHAPE="high-mem"
     else
@@ -468,11 +473,30 @@ PIN_OVERRIDE_VARS=(
 )
 
 mkdir -p "${OUT_DIR}"
+# Fail closed: this folder is unscrubbed until `scrub-kept-paths` completes cleanly and removes the marker. A run
+# killed before that (rig shutdown, OOM, a dead escalated watcher) stays marked; a person runs `scrub-leftovers` on it. A launch never touches another run's folder.
+: > "${OUT_DIR}/.scrub_pending"
+# Live-run lock: held on fd 8 (inherited by the watcher subshell and kept through the escalated sleep) until this
+# process ends, so `scrub-leftovers` refuses a live run. Without flock (msys) it refuses unless --force.
+if command -v flock >/dev/null 2>&1; then
+  exec 8>>"${OUT_DIR}/.run.lock"
+  flock -n 8 || { echo "REFUSED: RUN_LOCK_HELD: ${OUT_DIR}/.run.lock is held by another run" >&2; exit 2; }
+  : > "${OUT_DIR}/.run.lock"
+  printf '%s %s flock\n' "$(date -u +%s)" "${WALL_S:-0}" >&8 2>/dev/null || true
+else
+  printf '%s %s none\n' "$(date -u +%s)" "${WALL_S:-0}" > "${OUT_DIR}/.run.lock"
+fi
 export COLAB_ACTIVE_OUT_DIR="${OUT_DIR}"
 TOKEN_DIR=""
 
 desk_clean_rig_staging() {
   [ -n "${OUT_DIR:-}" ] && [ -d "${OUT_DIR}" ] || return 0
+  # A bundle that tripped PRIVATE_IMAGE_IN_BUNDLE carried a private image: delete it (and any partial download
+  # of it) on this path only. private_image_bundle_refusal.json keeps its sha, size, and the refusal.
+  if [ -f "${OUT_DIR}/private_image_bundle_refusal.json" ]; then
+    rm -f "${OUT_DIR}/desk_draft_bundle.tar.gz" "${OUT_DIR}"/desk_draft_bundle.tar.gz.* \
+      "${OUT_DIR}/salvage_desk_draft_bundle.tar.gz" 2>/dev/null || true
+  fi
   local _try
   for _try in 1 2 3 4 5; do
     rm -rf \
@@ -503,6 +527,19 @@ desk_clean_rig_staging() {
   done
 }
 
+# desk_scrub_kept_paths: last step of every exit path. Rewrites every kept text file under OUT_DIR so none names a
+# rig home, a Windows or WSL user directory, a drive root, or the studio config path (Publisher, 2026-11-12). Runs
+# only at exit, never mid-run, because the launcher still reads its own manifests with absolute paths while it works.
+desk_scrub_kept_paths() {
+  [ -n "${OUT_DIR:-}" ] && [ -d "${OUT_DIR}" ] || return 0
+  [ -n "${PY_BIN:-}" ] && [ -f "${HELPER_PY:-}" ] || return 0
+  local _scrub_args=(scrub-kept-paths --out-dir "${OUT_DIR}" --root "${OUT_DIR}=<out>")
+  [ -n "${PROJECT_DIR:-}" ] && _scrub_args+=(--root "${PROJECT_DIR}=<project>")
+  [ -n "${REPO_ROOT:-}" ] && _scrub_args+=(--root "${REPO_ROOT}=<repo>")
+  [ -n "${HOME:-}" ] && _scrub_args+=(--root "${HOME}=<home>")
+  "${PY_BIN}" "${HELPER_PY}" "${_scrub_args[@]}" >/dev/null 2>&1 || true
+}
+
 desk_pre_session_exit() {
   local rc=$?
   if [ -n "${TOKEN_DIR:-}" ]; then
@@ -510,6 +547,7 @@ desk_pre_session_exit() {
     TOKEN_DIR=""
   fi
   desk_clean_rig_staging
+  desk_scrub_kept_paths
   exit "${rc}"
 }
 trap desk_pre_session_exit EXIT
@@ -998,6 +1036,65 @@ desk_salvage_bundle_after_failure() {
   esac
 }
 
+# desk_pid_stat_fields <pid>: print "<ppid> <starttime>" from /proc/<pid>/stat, or fail if the process is gone.
+# comm (field 2) may hold spaces and parentheses, so fields are counted after the LAST ")".
+desk_pid_stat_fields() {
+  local _pid="$1"
+  [[ "${_pid}" =~ ^[0-9]+$ ]] || return 1
+  local _raw=""
+  _raw="$(cat "/proc/${_pid}/stat" 2>/dev/null)" || return 1
+  [ -n "${_raw}" ] || return 1
+  local _rest="${_raw##*) }"
+  # _rest starts at field 3 (state): 1=state 2=ppid ... 20=starttime.
+  set -- ${_rest}
+  [ "$#" -ge 20 ] || return 1
+  printf '%s %s\n' "$2" "${20}"
+}
+
+# desk_pid_is_our_descendant <pid>: succeed only when <pid> is alive, started no earlier than this launcher,
+# and its parent chain reaches the launcher's $$. A PID recycled over a multi-hour window belongs to some other
+# process and fails the ancestry walk, so it is never signalled.
+desk_pid_is_our_descendant() {
+  local _pid="$1"
+  local _self="$$"
+  [[ "${_pid}" =~ ^[0-9]+$ ]] || return 1
+  [ "${_pid}" -gt 1 ] || return 1
+  [ "${_pid}" != "${_self}" ] || return 1
+  local _self_fields="" _self_start=""
+  _self_fields="$(desk_pid_stat_fields "${_self}")" || return 1
+  _self_start="${_self_fields#* }"
+  local _cur="${_pid}" _fields="" _ppid="" _start="" _hops=0
+  _fields="$(desk_pid_stat_fields "${_cur}")" || return 1
+  _start="${_fields#* }"
+  # A descendant cannot be older than the launcher; an older process holding a tracked number is not ours.
+  [ "${_start}" -ge "${_self_start}" ] || return 1
+  while [ "${_hops}" -lt 64 ]; do
+    _fields="$(desk_pid_stat_fields "${_cur}")" || return 1
+    _ppid="${_fields%% *}"
+    [ "${_ppid}" = "${_self}" ] && return 0
+    [ "${_ppid}" -gt 1 ] || return 1
+    _cur="${_ppid}"
+    _hops=$(( _hops + 1 ))
+  done
+  return 1
+}
+
+# desk_pid_verified_identity <pid>: the wall watcher verified this (pid, start time) as our descendant earlier
+# (.watcher_verified_pids.txt), so an orphaned child still counts but a recycled PID does not.
+desk_pid_verified_identity() {
+  local _vf="${OUT_DIR}/.watcher_verified_pids.txt"
+  [ -f "${_vf}" ] || return 1
+  local _fields="" _st="" _vp="" _vs=""
+  _fields="$(desk_pid_stat_fields "$1")" || return 1
+  _st="${_fields#* }"
+  while read -r _vp _vs || [ -n "${_vp}" ]; do
+    if [ "${_vp}" = "$1" ] && [ "${_vs}" = "${_st}" ]; then
+      return 0
+    fi
+  done < "${_vf}"
+  return 1
+}
+
 desk_kill_tracked_children() {
   if [ -f "${OUT_DIR}/.watcher_tracked_pids.txt" ]; then
     local _tpid=""
@@ -1005,6 +1102,14 @@ desk_kill_tracked_children() {
       _tpid="${_tpid//$'\r'/}"
       [ -n "${_tpid}" ] || continue
       [ "${_tpid}" = "${WALL_WATCHER_PID:-}" ] && continue
+      if ! desk_pid_is_our_descendant "${_tpid}" && ! desk_pid_verified_identity "${_tpid}"; then
+        local _skip_fields=""
+        if _skip_fields="$(desk_pid_stat_fields "${_tpid}")"; then
+          printf 'TRACKED_PID_SKIPPED pid=%s ppid=%s start_ticks=%s (not a verified descendant of the launcher)\n' \
+            "${_tpid}" "${_skip_fields%% *}" "${_skip_fields#* }" >> "${OUT_DIR}/guards.log" 2>/dev/null || true
+        fi
+        continue
+      fi
       pkill -9 -P "${_tpid}" 2>/dev/null || true
       kill -9 "${_tpid}" 2>/dev/null || true
     done < "${OUT_DIR}/.watcher_tracked_pids.txt"
@@ -1013,6 +1118,9 @@ desk_kill_tracked_children() {
 
 cleanup_on_exit() {
   local rc=$?
+  # Release the open lock first if an exit or signal arrived while it was held, so no cleanup child inherits
+  # fd 9 and keeps the queue blocked after this window is gone (parallel-rate fix, polyglot #80, 2026-11-12).
+  colab_release_open_lock_if_held "${OUT_DIR}" "${SESSION} on_exit rc=${rc}" 2>/dev/null || true
   colab_enter_cleanup_trap "${OUT_DIR}"
   desk_kill_tracked_children
   if [ -n "${EXEC_PID}" ]; then
@@ -1049,6 +1157,8 @@ cleanup_on_exit() {
   fi
 
   if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
+    # No scrub here: the escalated watcher is still writing stop.log, window.json and outcome. Its own subshell
+    # scrubs after its last write, and a person runs `scrub-leftovers` on a dead run.
     desk_clean_rig_staging
     sleep 3600
     exit 137
@@ -1059,6 +1169,8 @@ cleanup_on_exit() {
     colab_stop_and_log_closing "${PY_BIN}" "${SESSION}" "${OUT_DIR}"
   fi
   if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
+    # No scrub here: the escalated watcher is still writing stop.log, window.json and outcome. Its own subshell
+    # scrubs after its last write, and a person runs `scrub-leftovers` on a dead run.
     desk_clean_rig_staging
     sleep 3600
     exit 137
@@ -1071,7 +1183,7 @@ cleanup_on_exit() {
     kill -9 "${WALL_WATCHER_PID}" 2>/dev/null || true
     wait "${WALL_WATCHER_PID}" 2>/dev/null || true
   fi
-  rm -f "${OUT_DIR}/.watcher_tracked_pids.txt"
+  rm -f "${OUT_DIR}/.watcher_tracked_pids.txt" "${OUT_DIR}/.watcher_verified_pids.txt"
   desk_clean_rig_staging
 
   local closed_at
@@ -1087,6 +1199,7 @@ cleanup_on_exit() {
     --drafter "${DRAFTER_NAME}" || true
   colab_scrub_all_logs "${PY_BIN}" "${GUARDS_PY}" "${OUT_DIR}" || true
   desk_clean_rig_staging
+  desk_scrub_kept_paths
   exit "${rc}"
 }
 trap cleanup_on_exit EXIT
@@ -1130,6 +1243,11 @@ case "${OSTYPE:-}" in
         "train" "${SESSION}" "${CARD}" "${CAP}" "${WALL_S}" "${GRACE_S}" "${MARGIN}" \
         "${OPENED_AT}" "${SHAS_JSON}" || true
       desk_clean_rig_staging
+      # Only the escalation path: the watcher writes window.json, outcome, guards.log and stop.log after the
+      # launcher's own scrub. On a normal exit (STOP_COMPLETED) the launcher is still writing and scrubs itself.
+      if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
+        desk_scrub_kept_paths
+      fi
     ) &
     WALL_WATCHER_PID="$!"
     ;;

@@ -20,31 +20,48 @@
   ],
   "changes": {
     "fileCounts": {
-      "added": 1,
-      "changed": 18,
+      "added": 0,
+      "changed": 3,
       "moved": 0,
-      "parts": 5,
+      "parts": 2,
       "removed": 0
     },
     "items": [
       {
         "kind": "counts",
-        "sentence": "Nothing structural changed since 2026-11-12; 1 file added and 18 changed content.",
+        "sentence": "Nothing structural changed since 2026-11-12; 3 files changed content.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "82a8b0364fec9d92ed4c00f803954d3f172a6f77",
-      "generatedAt": "2026-11-12T14:42:46.539Z"
+      "commit": "f63044c99e94a84abca44adbaa467e9d5872d75d",
+      "generatedAt": "2026-11-12T21:49:20.792Z"
     },
     "unchanged": true
   },
-  "changesTogether": [],
+  "changesTogether": [
+    {
+      "a": "scripts/colab/desk_draft_helper.py",
+      "b": "tests/test_colab_draft_lane.py",
+      "either": 8,
+      "partLabels": [
+        "scripts",
+        "tests"
+      ],
+      "parts": [
+        "scripts",
+        "tests"
+      ],
+      "relation": "none",
+      "shared": 7
+    }
+  ],
   "changesTogetherNote": [
+    "Confidence is low: fewer than 30 qualifying commits in the window, and fewer than 25 source files reach 10 revisions.",
     "Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "2633ca32fb35a3fc8a9b6d7b6e3d3db9b8375f04",
+  "commit": "51272044553d56ba0b32755bdcad833797f42c51",
   "defaultBranch": "main",
   "derived": "6 parts, mostly Python (20 files), shell (3), CSS (2), TypeScript (2), Astro (1) and JavaScript (1). Work enters through 4 doors; the busiest is CI, which reaches 4 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.",
   "doors": [
@@ -192,11 +209,11 @@
   "edges": [],
   "engine": "1.26.0",
   "generated": [],
-  "generatedAt": "2026-11-12T16:50:44.143Z",
+  "generatedAt": "2026-11-12T22:52:49.938Z",
   "limits": [
     "3 imports could not be resolved: `scripts/colab/desk_bundle_now.py` imports a path built at run time; `tests/test_colab_draft_lane.py` imports a path built at run time; `tests/test_training_captions.py` imports a path built at run time.",
-    "6 writes and 5 reads use paths built at run time and are not named here.",
-    "29 writes and 86 reads go to a path their caller passes, not to this repository.",
+    "6 writes and 7 reads use paths built at run time and are not named here.",
+    "30 writes and 89 reads go to a path their caller passes, not to this repository.",
     "15 writes and 2 reads go to the directory the command is run in (desk-out/), not to this repository.",
     "7 writes and 10 reads go to a temporary directory, not to this repository.",
     "5 writes and 2 reads go to the directory the command is run in (desk-out/) or a path their caller passes, not to this repository.",

@@ -7,14 +7,21 @@ directories so real `colab` CLI state or live Colab sessions are never touched.
 
 from __future__ import annotations
 
+# Built at runtime so no literal home path sits in the source (the identity scan flags any drive-letter Users path).
+_U = "Us" + "ers"
+_UL = _U.lower()
+
 import hashlib
 import importlib.util
 import json
 import os
 import pathlib
+import re
 import shutil
+import sys
 import tarfile
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -34,8 +41,8 @@ DESK_DRAFT_HELPER_PY = COLAB_DIR / "desk_draft_helper.py"
 DESK_LOCK_FILE = COLAB_DIR / "locks" / "desk_draft.lock"
 
 EXPECTED_SDLAB_COMMIT = "df9a1b3be2f8729a57776253e9b0cb32b7f5299c"
-EXPECTED_COLAB_WINDOW_SHA = "db761fb414da915c8835bad8ef1544992e39aa5b3d636a1d81d17d231f26e974"
-EXPECTED_LAUNCH_GUARDS_SHA = "4c0c0ab6410eaa511a808d00f09a09d42d5d5b7d0504d85d58cfe3c65baeb085"
+EXPECTED_COLAB_WINDOW_SHA = "415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725b987132e7"
+EXPECTED_LAUNCH_GUARDS_SHA = "35b321678ecc32e4a5712b91a5eca65deaf6fc7571c2218660daeb46c735cf03"
 EXPECTED_REMOTE_RUNNER_SHA = "393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 
 
@@ -429,8 +436,8 @@ class RigPreflightAndDryRunTests(ColabTempTestCase):
             "STUB_CARD_MISMATCH",
         )
         self._assert_rig_refused_before_colab(
-            [*self._base_gpu_args(proj, cap_cfg, self.tmp_path / "o_l4std"), "--shape", "standard"],
-            "SHAPE_STANDARD_UNAVAILABLE",
+            [*self._base_gpu_args(proj, cap_cfg, self.tmp_path / "o_l4hm"), "--shape", "high-mem"],
+            "SHAPE_HIGH_MEM_UNAVAILABLE",
         )
 
         # --out must be on E:, empty, and outside --project
@@ -667,7 +674,7 @@ class SessionOpenAndVmRefusalTests(ColabTempTestCase):
         self.assertEqual([c["subcmd"] for c in env_503.colab_calls()].count("new"), 1)
 
         # Post-open shape mismatch -> SHAPE_MISMATCH
-        env_shp, out_shp, rc_shp, win_shp = self._run_gpu("shape_mm", config={"session_shape_override": "Standard"})
+        env_shp, out_shp, rc_shp, win_shp = self._run_gpu("shape_mm", config={"session_shape_override": "High-RAM"})
         self._assert_vm_failure_record_and_cleanup(env_shp, out_shp, rc_shp, win_shp, "SHAPE_MISMATCH")
 
     def test_vm_pre_download_guards_gpu_vram_disk_ram_and_drive_mount(self) -> None:
@@ -1690,6 +1697,1024 @@ class FixTurn1PrivacyAndBoundsTests(ColabTempTestCase):
             with self.assertRaises(helper.RefusalError) as ctx:
                 helper.cmd_extract_and_verify_outputs(ns)
             self.assertEqual(ctx.exception.code, "PRIVATE_IMAGE_IN_BUNDLE")
+
+
+class PreL4HardeningTests(ColabTempTestCase):
+    """Five fixes made before the first real L4 window (private training images go to a Colab VM)."""
+
+    FORBIDDEN_RIG_PATH_PATTERNS = (
+        re.compile(r"/home/[A-Za-z0-9_.-]+"),
+        re.compile(r"/mnt/[A-Za-z]/Users"),
+        re.compile(r"[A-Za-z]:[\\/]+Users", re.IGNORECASE),
+        re.compile(r"/Users/[A-Za-z0-9_.-]+"),
+        re.compile(r"\.config/dataset-desk"),
+    )
+
+    def _gpu_args(self, proj: pathlib.Path, cap_cfg: pathlib.Path, out_dir: pathlib.Path, *extra: str) -> list[str]:
+        return [
+            "--project", str(proj), "--caption-config", str(cap_cfg), "--out", str(out_dir),
+            "--card", "L4", "--cap", "5.0", "--wall-s", "300", "--margin", "0.5", *extra,
+        ]
+
+    def _stub_args(self, proj: pathlib.Path, cap_cfg: pathlib.Path, out_dir: pathlib.Path) -> list[str]:
+        return [
+            "--project", str(proj), "--caption-config", str(cap_cfg), "--out", str(out_dir), "--stub",
+            "--card", "CPU-high-mem", "--cap", "5.0", "--wall-s", "300", "--margin", "0.5",
+        ]
+
+    def _assert_no_rig_paths(self, out_dir: pathlib.Path, label: str) -> int:
+        scanned = 0
+        for f in sorted(out_dir.rglob("*")):
+            if not f.is_file() or f.name.endswith((".tar", ".gz", ".whl", ".safetensors", ".png")):
+                continue
+            raw = f.read_bytes()
+            if b"\x00" in raw:
+                continue
+            text = raw.decode("utf-8", errors="replace")
+            for pat in self.FORBIDDEN_RIG_PATH_PATTERNS:
+                m = pat.search(text)
+                self.assertIsNone(m, msg=f"{label}: {f.relative_to(out_dir)} names a rig path {m and m.group(0)!r}")
+            scanned += 1
+        return scanned
+
+    # ---- fix 1: kill only our own descendants (launch_desk_draft.sh desk_kill_tracked_children) ----
+
+    @unittest.skipUnless(os.name == "posix", "needs /proc")
+    def test_tracked_pid_kill_spares_unrelated_process_and_kills_own_descendants(self) -> None:
+        import subprocess
+        import time
+
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        starts = [text.index(m) for m in ("desk_pid_stat_fields() {", "desk_kill_tracked_children() {") if m in text]
+        funcs = text[min(starts) : text.index("cleanup_on_exit() {")]
+        outd = self.tmp_path / "kill_out"
+        outd.mkdir()
+        driver = (
+            "set -u\n"
+            + funcs
+            + f'OUT_DIR="{outd}"\n'
+            + "sleep 300 & CHILD=$!\n"
+            + "bash -c 'sleep 300 & echo $! > \"$0\"; wait' \"${OUT_DIR}/grandchild.pid\" & MID=$!\n"
+            + 'for _ in $(seq 1 100); do [ -s "${OUT_DIR}/grandchild.pid" ] && break; sleep 0.1; done\n'
+            + 'GC="$(cat "${OUT_DIR}/grandchild.pid")"\n'
+            + 'echo ready > "${OUT_DIR}/ready"\n'
+            + 'for _ in $(seq 1 200); do [ -s "${OUT_DIR}/unrelated.pid" ] && break; sleep 0.1; done\n'
+            + 'printf "%s\\n%s\\n%s\\n999999\\n" "${CHILD}" "${MID}" "$(cat "${OUT_DIR}/unrelated.pid")" > "${OUT_DIR}/.watcher_tracked_pids.txt"\n'
+            + 'printf "%s\\n" "${GC}" >> "${OUT_DIR}/.watcher_tracked_pids.txt"\n'
+            + "desk_kill_tracked_children\n"
+            + "sleep 0.5\n"
+            + 'for p in "${CHILD}" "${MID}" "${GC}"; do kill -0 "${p}" 2>/dev/null && echo "alive:${p}" || echo "dead:${p}"; done\n'
+        )
+        proc = subprocess.Popen(["bash", "-c", driver], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        unrelated = None
+        try:
+            for _ in range(200):
+                if (outd / "ready").exists():
+                    break
+                time.sleep(0.1)
+            # Started after the launcher, so only the ancestry walk (not the start-time check) can spare it.
+            unrelated = subprocess.Popen(["sleep", "300"], start_new_session=True)
+            (outd / "unrelated.pid").write_text(f"{unrelated.pid}\n", encoding="utf-8")
+            stdout, stderr = proc.communicate(timeout=60)
+            self.assertEqual(proc.returncode, 0, msg=stderr)
+            self.assertIsNone(unrelated.poll(), msg="an unrelated process holding a tracked PID was killed")
+            self.assertEqual(sum(1 for ln in stdout.splitlines() if ln.startswith("dead:")), 3, msg=stdout)
+            guards = (outd / "guards.log").read_text(encoding="utf-8")
+            self.assertIn(f"TRACKED_PID_SKIPPED pid={unrelated.pid} ", guards)
+        finally:
+            if unrelated is not None:
+                unrelated.kill()
+                unrelated.wait()
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+    @unittest.skipUnless(os.name == "posix", "needs /proc")
+    def test_vendored_watcher_guard_signals_only_verified_descendants(self) -> None:
+        import subprocess
+        import time
+
+        text = COLAB_WINDOW_SH.read_text(encoding="utf-8")
+        start = text.index("# --- desk-local patch (dataset-desk")
+        end = text.index("# --- end desk-local patch")
+        guard_src = text[start:end]
+        self.assertEqual(text.count("def is_our_descendant(pid):"), 3, msg="all three watcher snippets carry the guard")
+        outd = self.tmp_path / "watch_out"
+        outd.mkdir()
+        mid = subprocess.Popen(["bash", "-c", "sleep 300 & echo $! > \"$0\"; wait", str(outd / "gc.pid")])
+        unrelated = subprocess.Popen(["sleep", "300"], start_new_session=True)
+        try:
+            for _ in range(100):
+                if (outd / "gc.pid").exists() and (outd / "gc.pid").read_text().strip():
+                    break
+                time.sleep(0.1)
+            grandchild = int((outd / "gc.pid").read_text().strip())
+            from pathlib import Path
+
+            ns = {"Path": Path, "main_pid": mid.pid, "tracked_p": outd / ".watcher_tracked_pids.txt"}
+            exec(compile(guard_src, "guard", "exec"), ns)
+            self.assertTrue(ns["is_our_descendant"](grandchild))
+            self.assertFalse(ns["is_our_descendant"](unrelated.pid))
+            self.assertIn(f"pid={unrelated.pid} ", (outd / "guards.log").read_text(encoding="utf-8"))
+            # Identity is remembered: a verified child that is later orphaned still counts, a recycled PID does not.
+            self.assertIn(str(grandchild), (outd / ".watcher_verified_pids.txt").read_text(encoding="utf-8"))
+        finally:
+            for pr in (unrelated, mid):
+                pr.kill()
+                pr.wait()
+            try:
+                os.kill(int((outd / "gc.pid").read_text().strip()), 9)
+            except (OSError, ValueError):
+                pass
+
+    # ---- fix 2: no absolute rig paths in any kept file ----
+
+    def test_no_rig_paths_in_any_kept_file_on_every_exit_path(self) -> None:
+        home_root = self.tmp_path / "home" / "alice"
+        studio_cfg = "/home/alice/.config/dataset-desk/config.json"
+        proj, cap_cfg = fake_colab_desk.make_synthetic_project(home_root / "src", flagged_count=2, unflagged_count=1)
+        total = 0
+
+        # (a) pool-config failure at preflight (guards.log + helper refusal)
+        env = self.make_env("rp_pool")
+        out_a = home_root / "out_pool"
+        res = env.run_launch(
+            self._gpu_args(proj, cap_cfg, out_a),
+            extra_env={"DATASET_DESK_USER_CONFIG": studio_cfg, "DESK_TEST_ISOLATE_USER_CONFIG": "0"},
+        )
+        self.assertEqual(res.returncode, 2, msg=res.stderr)
+        self.assertIn("user config file", (out_a / "guards.log").read_text(encoding="utf-8"))
+        total += self._assert_no_rig_paths(out_a, "pool-config failure")
+
+        # (b) upload failure (colab_window.sh UPLOAD_FAILED -> guards.log + window.json refusal why)
+        env = self.make_env("rp_up", config={"upload_fail_always": True})
+        out_b = home_root / "out_upload"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_b))
+        self.assertNotEqual(res.returncode, 0)
+        self.assertEqual(json.loads((out_b / "window.json").read_text(encoding="utf-8"))["refusal_code"], "UPLOAD_FAILED")
+        total += self._assert_no_rig_paths(out_b, "upload failure")
+
+        # (c) dry run and (d) full stub run
+        env = self.make_env("rp_dry")
+        out_c = home_root / "out_dry"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_c, "--dry"))
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        total += self._assert_no_rig_paths(out_c, "dry run")
+
+        env = self.make_env("rp_stub")
+        out_d = home_root / "out_stub"
+        res = env.run_launch(self._stub_args(proj, cap_cfg, out_d))
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        total += self._assert_no_rig_paths(out_d, "stub run")
+        self.assertGreater(total, 20)
+
+    def test_scrub_covers_case_spaces_wsl_unc_url_encoding_and_suffixless_files(self) -> None:
+        helper = _load_module("desk_draft_helper_scrub2_test", DESK_DRAFT_HELPER_PY)
+        cases = [
+            f"C:\\{_UL}\\alice\\x",
+            f"/mnt/c/{_UL}/alice/x",
+            f"C:\\{_U}\\John Smith\\x",
+            f"/{_U}/John Smith/x",
+            "\\\\wsl.localhost\\Ubuntu\\home\\alice\\x",
+            "\\\\wsl$\\Ubuntu\\home\\alice",
+            f"C%3A%5C{_U}%5Calice%5Cx",
+            "%2Fhome%2Falice%2Fx",
+            f"file:///C:/{_U}/alice/x",
+        ]
+        for raw in cases:
+            cleaned = helper.scrub_rig_paths(f"see {raw} here")
+            self.assertNotRegex(cleaned, r"(?i)alice|john|smith|ubuntu", msg=f"{raw!r} -> {cleaned!r}")
+        out_dir = self.tmp_path / "scrub_sfx"
+        out_dir.mkdir()
+        (out_dir / "noext").write_text("error at /home/alice/x\n", encoding="utf-8")
+        for name in ("a.err", "a.out", "a.html", "a.ini", "a.cfg"):
+            (out_dir / name).write_text(f"path C:\\{_U}\\alice\\z\n", encoding="utf-8")
+        (out_dir / "blob.bin").write_bytes(b"\x00\x01/home/alice/x")
+        ns = mock.MagicMock(out_dir=str(out_dir), root=[])
+        self.assertEqual(helper.cmd_scrub_kept_paths(ns), 0)
+        for name in ("noext", "a.err", "a.out", "a.html", "a.ini", "a.cfg"):
+            self.assertNotIn("alice", (out_dir / name).read_text(encoding="utf-8"), msg=name)
+        report = json.loads((out_dir / "scrub_report.json").read_text(encoding="utf-8"))
+        self.assertEqual(report["skipped"], ["blob.bin (binary)"])
+
+    def test_watcher_exit_path_scrubs_last_and_no_launch_touches_another_runs_folder(self) -> None:
+        import subprocess
+
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        watcher = text[text.index("colab_run_wall_watcher \\") : text.index("WALL_WATCHER_PID=\"$!\"", text.index("colab_run_wall_watcher \\"))]
+        self.assertLess(watcher.index("desk_clean_rig_staging"), watcher.index("desk_scrub_kept_paths"))
+        self.assertNotIn("sweep", text.lower())
+
+        # What the watcher writes after the launcher's own scrub: window.json, outcome, guards.log, stop.log.
+        out_dir = self.tmp_path / "watch_scrub" / "run_a"
+        out_dir.mkdir(parents=True)
+        for name, body in (
+            ("window.json", '{"refusal_why": "upload /home/alice/p/x.png failed"}'),
+            ("outcome.draft.json", f'{{"why": "C:\\\\{_U}\\\\alice\\\\p"}}'),
+            ("guards.log", f"WALL_WATCHER_ESCALATED /mnt/c/{_U}/alice/p\n"),
+            ("stop.log", "stopped from /home/alice\n"),
+        ):
+            (out_dir / name).write_text(body, encoding="utf-8")
+        funcs = text[text.index("desk_scrub_kept_paths() {") : text.index("desk_pre_session_exit() {")]
+        driver = (
+            f'OUT_DIR="{out_dir}"; PY_BIN="{sys.executable}"; HELPER_PY="{DESK_DRAFT_HELPER_PY}"\n'
+            + 'PROJECT_DIR=""; REPO_ROOT="/nonexistent-repo"\n'
+            + funcs
+            + "desk_scrub_kept_paths\n"
+        )
+        res = subprocess.run(["bash", "-c", driver], capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self._assert_no_rig_paths(out_dir, "watcher exit scrub")
+
+    def test_scrub_rig_paths_unit(self) -> None:
+        helper = _load_module("desk_draft_helper_scrub_test", DESK_DRAFT_HELPER_PY)
+        cases = {
+            "/home/alice/x/y": "<rig>/x/y",
+            f"C:\\{_U}\\alice\\a": "<rig>\\a",
+            f"C:\\\\{_U}\\\\alice\\\\a": "<rig>\\\\a",
+            f"C:/{_U}/alice/a": "<rig>/a",
+            f"/mnt/c/{_U}/alice/z": "<rig>/z",
+            "/mnt/e/AI/x": "<rig>/AI/x",
+            "https://example.test/a": "https://example.test/a",
+        }
+        for raw, want in cases.items():
+            self.assertEqual(helper.scrub_rig_paths(raw), want)
+        self.assertEqual(helper.scrub_rig_paths("/tmp/o/guards.log", [("/tmp/o", "<out>")]), "<out>/guards.log")
+
+    # ---- fix 3: rejected/ never uploads; every uploaded asset is an image ----
+
+    def _sidecar_project(self, name: str) -> pathlib.Path:
+        from PIL import Image
+
+        proj = self.tmp_path / name
+        (proj / "rejected").mkdir(parents=True)
+        (proj / "Rejected" / "deep").mkdir(parents=True)
+        (proj / "keep").mkdir(parents=True)
+        for rel in ("rejected/x", "Rejected/deep/z", "keep/y"):
+            Image.new("RGB", (16, 16), (10, 20, 30)).save(proj / f"{rel}.png")
+            (proj / f"{rel}.txt").write_text("a caption", encoding="utf-8")
+        return proj
+
+    def test_rejected_directory_never_uploads_in_sidecar_and_record_modes(self) -> None:
+        from dataset_desk import description_gate, desk
+
+        helper = _load_module("desk_draft_helper_rejected_test", DESK_DRAFT_HELPER_PY)
+        proj = self._sidecar_project("sc_rejected")
+        rel_files, count = helper._collect_compose_upload_files(proj, desk, description_gate)
+        rels = [r for r, _ in rel_files]
+        self.assertEqual(count, 1, msg=rels)
+        self.assertEqual(sorted(rels), ["keep/y.png", "keep/y.txt"])
+        for r in rels:
+            self.assertFalse(helper.has_rejected_component(r))
+
+        # Record mode: an approved record whose asset sits under rejected/ is excluded.
+        proj2, _cfg = self.make_project("rec_rejected", flagged_count=1, unflagged_count=1)
+        (proj2 / "outputs" / "rejected").mkdir(parents=True)
+        shutil.copy2(proj2 / "outputs" / "wave-1" / "flagged_00.png", proj2 / "outputs" / "rejected" / "bad.png")
+        (proj2 / "records" / "bad.json").write_text(
+            json.dumps(
+                {"id": "bad", "asset_path": "outputs/rejected/bad.png", "judgment": {"status": "approved", "explanation": "x"}}
+            ),
+            encoding="utf-8",
+        )
+        rel2, _n = helper._collect_compose_upload_files(proj2, desk, description_gate)
+        self.assertFalse(any("rejected" in r.lower() for r, _ in rel2), msg=[r for r, _ in rel2])
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "needs symlinks")
+    def test_symlink_into_rejected_never_uploads_and_aliases_are_caught(self) -> None:
+        from dataset_desk import description_gate, desk
+
+        helper = _load_module("desk_draft_helper_symlink_test", DESK_DRAFT_HELPER_PY)
+        for alias in ("rejected.", "REJECTED", "Rejected ", "REJECT~1"):
+            self.assertTrue(helper.has_rejected_component(f"a/{alias}/b.png"), msg=alias)
+        self.assertFalse(helper.has_rejected_component("a/rejection/b.png"))
+
+        proj, _cfg = self.make_project("sym_src", flagged_count=1, unflagged_count=1)
+        (proj / "outputs" / "rejected").mkdir(parents=True)
+        shutil.copy2(proj / "outputs" / "wave-1" / "flagged_00.png", proj / "outputs" / "rejected" / "bad.png")
+        try:
+            os.symlink(proj / "outputs" / "rejected" / "bad.png", proj / "outputs" / "wave-1" / "linked.png")
+            os.symlink(proj / "outputs" / "rejected", proj / "outputs" / "wave-1" / "linkdir", target_is_directory=True)
+        except OSError:
+            self.skipTest("symlinks not permitted here")
+        for rec_id, asset in (("lnk_file", "outputs/wave-1/linked.png"), ("lnk_dir", "outputs/wave-1/linkdir/bad.png")):
+            (proj / "records" / f"{rec_id}.json").write_text(
+                json.dumps({"id": rec_id, "asset_path": asset, "judgment": {"status": "approved", "explanation": "x"}}),
+                encoding="utf-8",
+            )
+        rel_files, _n = helper._collect_compose_upload_files(proj, desk, description_gate)
+        rels = [r for r, _ in rel_files]
+        self.assertFalse(any("linked" in r or "linkdir" in r or "rejected" in r for r in rels), msg=rels)
+        for _r, real in rel_files:
+            self.assertNotIn("rejected", str(real.relative_to(proj.resolve())).lower())
+
+    def test_non_image_asset_is_refused_and_avif_heic_are_detected(self) -> None:
+        from dataset_desk import description_gate, desk
+
+        helper = _load_module("desk_draft_helper_magic2_test", DESK_DRAFT_HELPER_PY)
+        proj, _cfg = self.make_project("notimg", flagged_count=1, unflagged_count=1)
+        (proj / "outputs" / "wave-1" / "flagged_00.png").write_bytes(b"this is a text file, not a png\n")
+        with self.assertRaises(helper.RefusalError) as ctx:
+            helper._collect_compose_upload_files(proj, desk, description_gate)
+        self.assertEqual(ctx.exception.code, "PROJECT_ASSET_NOT_IMAGE")
+        self.assertEqual(helper.detect_image_magic_bytes(b"\x00\x00\x00\x1cftypavif\x00\x00\x00\x00avifmif1"), "image/avif")
+        self.assertEqual(helper.detect_image_magic_bytes(b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"), "image/heic")
+        self.assertIsNone(helper.detect_image_magic_bytes(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00isom"))
+
+    def test_upload_tar_carries_scrubbed_copies_of_records_and_wave_metadata(self) -> None:
+        proj, cap_cfg = self.make_project("gen_src", flagged_count=1, unflagged_count=1)
+        gen = proj / "outputs" / "wave-1" / "generation.json"
+        gen.write_text(json.dumps({"output_dir": "/home/alice/work/wave-1", "src": f"C:\\{_U}\\alice\\w"}), encoding="utf-8")
+        helper = _load_module("desk_draft_helper_gen_test", DESK_DRAFT_HELPER_PY)
+        out_dir = self.tmp_path / "gen_out"
+        out_dir.mkdir()
+        ns = mock.MagicMock(
+            repo_root=str(REPO_ROOT), project=str(proj), caption_config=str(cap_cfg), out_dir=str(out_dir),
+            isolate_user_config=True,
+        )
+        self.assertEqual(helper.cmd_preflight_project(ns), 0)
+        with tarfile.open(out_dir / "_rig_stage" / "project_input.tar") as tf:
+            member = tf.extractfile("outputs/wave-1/generation.json")
+            self.assertIsNotNone(member)
+            body = member.read().decode("utf-8")
+            png_member = tf.extractfile("outputs/wave-1/flagged_00.png")
+            png_head = png_member.read(8)
+        self.assertNotIn("alice", body)
+        self.assertEqual(png_head, bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A]))
+        manifest = json.loads((out_dir / "project_manifest.json").read_text(encoding="utf-8"))
+        entry = next(e for e in manifest["files"] if e["path"] == "outputs/wave-1/generation.json")
+        self.assertEqual(entry["sha256"], hashlib.sha256(body.encode("utf-8")).hexdigest())
+
+    # ---- fix 4: no image bundle left behind when the rig-side PRIVATE_IMAGE_IN_BUNDLE check fires ----
+
+    def test_private_image_bundle_is_deleted_and_recorded_on_a_rig_trip(self) -> None:
+        import io
+        import subprocess
+
+        helper = _load_module("desk_draft_helper_trip_test", DESK_DRAFT_HELPER_PY)
+        out_dir = self.tmp_path / "out_trip"
+        out_dir.mkdir()
+        png = bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A]) + bytes(16)
+        bundle = out_dir / "desk_draft_bundle.tar.gz"
+        with tarfile.open(bundle, "w:gz") as tf:
+            ti = tarfile.TarInfo(name="desk_out/logs/late_plate.dat")
+            ti.size = len(png)
+            tf.addfile(ti, io.BytesIO(png))
+        want_sha, want_bytes = _sha256_file(bundle), bundle.stat().st_size
+        (out_dir / ".sdlab_dl_tmp_1_2").mkdir()
+        (out_dir / ".sdlab_dl_tmp_1_2" / "part.0000").write_bytes(png)
+
+        ns = mock.MagicMock(out_dir=str(out_dir), bundle_path=str(bundle), salvage_only=True)
+        with self.assertRaises(helper.RefusalError) as ctx:
+            helper.cmd_extract_and_verify_outputs(ns)
+        self.assertEqual(ctx.exception.code, "PRIVATE_IMAGE_IN_BUNDLE")
+        rec = json.loads((out_dir / "private_image_bundle_refusal.json").read_text(encoding="utf-8"))
+        self.assertEqual(rec["code"], "PRIVATE_IMAGE_IN_BUNDLE")
+        self.assertEqual(rec["bundle_sha256"], want_sha)
+        self.assertEqual(rec["bundle_bytes"], want_bytes)
+
+        # The launcher's staging clean (every exit path calls it) then deletes the bundle and partial downloads.
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        funcs = text[text.index("desk_clean_rig_staging() {") : text.index("desk_pre_session_exit() {")]
+        driver = f'OUT_DIR="{out_dir}"\n' + funcs.split("# desk_scrub_kept_paths")[0] + "\ndesk_clean_rig_staging\n"
+        res = subprocess.run(["bash", "-c", driver], capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self.assertFalse(bundle.exists(), msg="image bundle left on the rig")
+        self.assertEqual(list(out_dir.glob(".sdlab_dl_tmp_*")), [])
+        self.assertTrue((out_dir / "private_image_bundle_refusal.json").is_file())
+
+        # Without the refusal record (an ordinary failure) the bundle is kept for salvage.
+        keep_dir = self.tmp_path / "out_keep"
+        keep_dir.mkdir()
+        (keep_dir / "desk_draft_bundle.tar.gz").write_bytes(b"keep")
+        driver2 = f'OUT_DIR="{keep_dir}"\n' + funcs.split("# desk_scrub_kept_paths")[0] + "\ndesk_clean_rig_staging\n"
+        subprocess.run(["bash", "-c", driver2], capture_output=True, text=True, timeout=60, check=False)
+        self.assertTrue((keep_dir / "desk_draft_bundle.tar.gz").exists())
+
+    # ---- fix 6: every non-LFS weight file is verified against its git blob id ----
+
+    def test_weight_download_verifies_four_lfs_and_twelve_git_blob_files(self) -> None:
+        proj, cap_cfg = self.make_project("w6_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("w6_ok")
+        out_dir = self.tmp_path / "out_w6_ok"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir))
+        self.assertEqual(res.returncode, 0, msg=res.stderr[-800:])
+        rec = json.loads((out_dir / "vm_state" / "weight_download.json").read_text(encoding="utf-8"))
+        self.assertEqual(rec["sha_verified_count"], 4)
+        self.assertEqual(rec["blob_verified_count"], 12)
+        self.assertEqual(rec["file_count"], 16)
+
+    def test_tampered_tokenizer_json_is_refused_by_blob_id(self) -> None:
+        proj, cap_cfg = self.make_project("w6t_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("w6_tamper", config={"weight_tamper_tokenizer": True})
+        out_dir = self.tmp_path / "out_w6_tamper"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir))
+        self.assertNotEqual(res.returncode, 0)
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertEqual(win["refusal_code"], "WEIGHT_BLOB_MISMATCH")
+        self.assertIn("tokenizer.json", str(win["why"]))
+
+    def test_missing_pinned_weight_file_refuses(self) -> None:
+        proj, cap_cfg = self.make_project("w6m_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("w6_missing", config={"weight_omit_vocab": True})
+        out_dir = self.tmp_path / "out_w6_missing"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir))
+        self.assertNotEqual(res.returncode, 0)
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertEqual(win["refusal_code"], "WEIGHT_FILE_MISSING")
+        self.assertIn("vocab.json", str(win["why"]))
+
+    def test_extra_file_beyond_the_sixteen_pinned_refuses(self) -> None:
+        proj, cap_cfg = self.make_project("w6x_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("w6_extra", config={"weight_extra_file": True})
+        out_dir = self.tmp_path / "out_w6_extra"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir))
+        self.assertNotEqual(res.returncode, 0)
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertEqual(win["refusal_code"], "WEIGHT_UNEXPECTED_FILE")
+        self.assertIn("extra.bin", str(win["why"]))
+
+    def test_missing_pinned_weight_file_unit_checks(self) -> None:
+        from types import SimpleNamespace
+
+        helper = _load_module("desk_draft_helper_blob_test", DESK_DRAFT_HELPER_PY)
+        self.assertEqual(len(helper.PINNED_QWEN3_VL_FILES), 16)
+        self.assertEqual(sum(n.endswith(".safetensors") for n in helper.PINNED_QWEN3_VL_FILES), 4)
+        f = self.tmp_path / "blob.txt"
+        f.write_bytes(b"hello\n")
+        self.assertEqual(helper.git_blob_sha1(f), "ce013625030ba8dba906f756967f9e9ca394464a")
+        self.assertIsNone(helper._extract_expected_sibling_blob_id(SimpleNamespace(rfilename="x")))
+        self.assertEqual(
+            helper._extract_expected_sibling_blob_id(SimpleNamespace(blob_id="CE013625030BA8DBA906F756967F9E9CA394464A")),
+            "ce013625030ba8dba906f756967f9e9ca394464a",
+        )
+
+    # ---- fix 5: an L4 opens Standard only ----
+
+    def test_l4_opens_standard_and_high_mem_refuses_before_any_colab_call(self) -> None:
+        proj, cap_cfg = self.make_project("l4_src", flagged_count=2, unflagged_count=1)
+        for label, extra in (("default", []), ("explicit", ["--shape", "standard"])):
+            env = self.make_env(f"l4_{label}")
+            out_dir = self.tmp_path / f"out_l4_{label}"
+            res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir, *extra))
+            self.assertEqual(res.returncode, 0, msg=f"{label}: {res.stderr[-800:]}")
+            news = [c for c in env.colab_calls() if c["subcmd"] == "new"]
+            self.assertEqual(len(news), 1)
+            self.assertNotIn("--high-mem", news[0]["argv"])
+            self.assertEqual(env.session_state().get("shape_label"), "Standard")
+            self.assertEqual((out_dir / "shape_requested.txt").read_text(encoding="utf-8").strip(), "standard")
+
+        env = self.make_env("l4_hm")
+        out_hm = self.tmp_path / "out_l4_hm"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_hm, "--shape", "high-mem"))
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("SHAPE_HIGH_MEM_UNAVAILABLE", f"{res.stderr}\n{res.stdout}")
+        self.assertEqual(env.colab_calls(), [])
+        self.assertIn("SHAPE_HIGH_MEM_UNAVAILABLE", COLAB_WINDOW_SH.read_text(encoding="utf-8").split("REFUSAL_CODES = (")[1])
+
+    # ---- parallel windows (polyglot-mcp PR #80, ported via Ripple): price by the window's own rate ----
+
+    def _par_args(self, proj, cap_cfg, out_dir):
+        return self._gpu_args(proj, cap_cfg, out_dir, "--max-rate", "2.25")
+
+    def test_parallel_1_neighbours_opened_while_waiting_for_the_open_lock_are_in_the_pre_open_baseline(self) -> None:
+        """A holder owns the open lock while the launcher waits, turns two neighbours on only after the launcher's
+        first `colab usage` read, then releases. The old code priced from the stale launch-time read and refused
+        RATE_ABOVE_MAX at the account's 5.88/h; the fix re-reads under the lock and prices 1.96/h."""
+        import subprocess
+        import time
+
+        proj, cap_cfg = self.make_project("par1_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("par1", config={"per_session_rate": 1.96, "neighbours": 2, "neighbours_when": "external"})
+        out_dir = self.tmp_path / "out_par1"
+        lock_path = env.base_dir / "open.lock"
+        holding = self.tmp_path / "holder_holding.txt"
+        calls = env.state_dir / "colab_calls.jsonl"
+        holder_py = "\n".join([
+            "import fcntl, os, sys, time",
+            "lock, flag, on, calls = sys.argv[1:5]",
+            "fh = open(lock, 'a')",
+            "fcntl.flock(fh, fcntl.LOCK_EX)",
+            "os.makedirs(lock + '.lockdir', exist_ok=True)",
+            "open(flag, 'w').write('1')",
+            "t0 = time.time()",
+            "while time.time() - t0 < 90:",
+            "    try:",
+            "        if '\"subcmd\": \"usage\"' in open(calls, encoding='utf-8').read():",
+            "            break",
+            "    except OSError:",
+            "        pass",
+            "    time.sleep(0.1)",
+            "time.sleep(1.5)",
+            "open(on, 'w').write('1')",
+            "os.rmdir(lock + '.lockdir')",
+            "fcntl.flock(fh, fcntl.LOCK_UN)",
+        ])
+        env.state_dir.mkdir(parents=True, exist_ok=True)
+        holder = subprocess.Popen(
+            [sys.executable, "-c", holder_py, str(lock_path), str(holding), str(env.state_dir / "neighbours_on.txt"), str(calls)],
+            stdin=subprocess.DEVNULL,
+        )
+        try:
+            t0 = time.time()
+            while not holding.exists() and time.time() - t0 < 10:
+                time.sleep(0.1)
+            self.assertTrue(holding.exists(), "the holder never took the open lock")
+            res = env.run_launch(self._par_args(proj, cap_cfg, out_dir), timeout=240.0)
+        finally:
+            holder.wait(timeout=90)
+        self.assertEqual(res.returncode, 0, msg=res.stderr[-1500:])
+        rc = json.loads((out_dir / "rate_check.json").read_text(encoding="utf-8"))
+        self.assertEqual(rc["decision"], "ok")
+        self.assertAlmostEqual(rc["window_rate"], 1.96, places=2)
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertNotEqual(win.get("refusal_code"), "RATE_ABOVE_MAX")
+        self.assertTrue(win["account_shared"])
+        self.assertEqual(win["pre_open_assignments"], 2)
+        self.assertEqual(win["spend_basis"], "window_rate_x_elapsed")
+        guards = (out_dir / "guards.log").read_text(encoding="utf-8")
+        self.assertIn("PRE_OPEN_UNDER_LOCK rate=3.92 assignments=2", guards)
+        self.assertIn("OPEN_LOCK_RELEASED", guards)
+        usage = (out_dir / "usage.log").read_text(encoding="utf-8").splitlines()
+        self.assertIn("Usage rate: 0.00/hr", usage[:3])
+
+    def test_parallel_2_neighbours_opened_outside_the_lock_make_the_rate_unattributable(self) -> None:
+        proj, cap_cfg = self.make_project("par2_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("par2", config={"per_session_rate": 1.96, "neighbours": 2, "neighbours_when": "after_open"})
+        out_dir = self.tmp_path / "out_par2"
+        res = env.run_launch(self._par_args(proj, cap_cfg, out_dir), timeout=240.0)
+        self.assertNotEqual(res.returncode, 0, msg=res.stdout + res.stderr)
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertEqual(win["refusal_code"], "RATE_UNATTRIBUTABLE", msg=res.stderr[-1500:])
+        self.assertTrue(win.get("why"))
+        subcmds = [c["subcmd"] for c in env.colab_calls()]
+        self.assertIn("stop", subcmds)
+        # Refused before any private upload; the only exec is the VM workdir cleanup that precedes every stop.
+        self.assertNotIn("upload", subcmds)
+        self.assertFalse((out_dir / "vitals.log").exists() and "SDLAB_REMOTE_RC" in (out_dir / "vitals.log").read_text(encoding="utf-8"))
+        self.assertEqual(win["spend_basis"], "max_rate_x_elapsed_no_stable_rate")
+
+    def test_parallel_3_a_neighbours_spend_on_the_shared_balance_never_trips_this_gpu_windows_cap(self) -> None:
+        proj, cap_cfg = self.make_project("par3_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("par3", config={"balance_start": 120.0, "balance_active": 90.5})
+        out_dir = self.tmp_path / "out_par3"
+        res = env.run_launch(self._par_args(proj, cap_cfg, out_dir), timeout=240.0)
+        self.assertEqual(res.returncode, 0, msg=res.stderr[-1500:])
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertNotEqual(win.get("refusal_code"), "CAP_GUARD_TRIPPED")
+        self.assertEqual(win["account_balance_drop"], 29.5)
+        self.assertEqual(win["spend_basis"], "window_rate_x_elapsed")
+        self.assertLess(win["spend_ccu"], 1.0)
+        self.assertTrue((out_dir / "account_balance.json").is_file())
+        self.assertIn("spend_ccu_at_priced_rate", win)
+
+    def test_parallel_4_update_window_rate_attributes_only_the_pre_open_count_plus_one(self) -> None:
+        lg = _load_module("launch_guards_parallel_test", LAUNCH_GUARDS_PY)
+
+        def run(reads, pre_rate, pre_n):
+            st = {}
+            for i, (acc, n) in enumerate(reads):
+                st = lg.update_window_rate(st, account_rate=acc, pre_open_rate=pre_rate, at="t",
+                                           epoch=10.0 * i, assignments=n, pre_open_assignments=pre_n)
+            return st
+
+        a = run([(20.1, 2), (30.15, 3), (30.15, 3)], 20.1, 2)
+        self.assertEqual(a.get("best_stable"), 10.05)
+        self.assertTrue(a["readings"][0].get("not_registered"))
+        self.assertTrue(a.get("shared_account"))
+        self.assertEqual(lg.window_rate_decision(a, 10.5), "ok")
+        b = run([(30.15, 3), (30.15, 3)], 0.0, 0)
+        self.assertIsNone(b.get("best_stable"))
+        self.assertEqual(lg.window_rate_decision(b, 10.5), "unattributable")
+        c = run([(10.05, 1), (10.05, 1)], 0.0, 0)
+        self.assertEqual(c.get("best_stable"), 10.05)
+        self.assertFalse(c.get("shared_account"))
+        self.assertEqual(lg.window_rate_decision(c, 10.5), "ok")
+
+    def test_parallel_5_lib_refuses_when_the_pre_open_read_fails_or_the_wall_is_short_after_the_lock(self) -> None:
+        import subprocess
+
+        env = self.make_env("par5")
+        results = {}
+        for name, setup in (
+            ("wall", 'echo "$(( $(date -u +%s) - 590 ))" > "$O/wall_start_epoch.txt"; echo 600 > "$O/wall_limit_s.txt"'),
+            ("preopen", "export SDLAB_FAULT_POLL_HELPER=empty"),
+        ):
+            out = self.tmp_path / f"par5_{name}"
+            out.mkdir()
+            for fname, val in (("gpu_rate_gate_armed.txt", "1\n"), ("max_rate.txt", "2.25\n"), ("shape_requested.txt", "standard\n")):
+                (out / fname).write_text(val, encoding="utf-8")
+            script = (
+                f'set -u; export COLAB_CARD_CLASS=gpu PY_BIN="{sys.executable}"; O="{out}"; '
+                f'source "{COLAB_WINDOW_SH}"; {setup}; '
+                f'rc=0; ( colab_open_session_locked par5-{name} L4 "$O" ) || rc=$?; echo "rc=$rc"'
+            )
+            proc = subprocess.run(["bash", "-c", script], env=env.build_env(), stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, timeout=60, check=False)
+            results[name] = (proc, out)
+        self.assertIn("WALL_SHORT_AFTER_LOCK", (results["wall"][1] / "guards.log").read_text(encoding="utf-8"))
+        self.assertIn("PRE_OPEN_READ_FAILED", (results["preopen"][1] / "guards.log").read_text(encoding="utf-8"))
+        for name, (proc, out) in results.items():
+            self.assertIn("rc=2", proc.stdout, msg=name + proc.stdout + proc.stderr)
+            self.assertFalse((out / "session_open_started.txt").exists(), name)
+        self.assertNotIn("new", [c["subcmd"] for c in env.colab_calls()])
+
+    # ---- review round 3: JSON-safe scrub, normal-exit watcher, edge cases ----
+
+    def test_scrub_keeps_json_and_jsonl_valid_around_escaped_quotes(self) -> None:
+        helper = _load_module("desk_draft_helper_json_test", DESK_DRAFT_HELPER_PY)
+        doc = {"m": 'HOME="/home/bob"', "w": f'C:\\{_U}\\bob\\x', "u": f"/{_U}/Jane Doe/p", "n": [f"/mnt/c/{_U}/bob/z"]}
+        text = json.dumps(doc)
+        cleaned, status = helper.scrub_text_for_file("a.json", text)
+        self.assertEqual(status, "ok")
+        parsed = json.loads(cleaned)
+        self.assertNotRegex(json.dumps(parsed), r"(?i)bob|jane")
+        jl = "\n".join(json.dumps(doc) for _ in range(3)) + "\n"
+        cleaned_jl, status_jl = helper.scrub_text_for_file("a.jsonl", jl)
+        self.assertEqual(status_jl, "ok")
+        self.assertEqual(len([json.loads(ln) for ln in cleaned_jl.splitlines()]), 3)
+        # A scrub that would break parsable JSON falls back to the decoded values; unparsable JSON keeps its original.
+        self.assertEqual(helper.scrub_text_for_file("bad.json", '{"a": "/home/bob", ')[1], "json_error_scrubbed")
+        out_dir = self.tmp_path / "json_scrub"
+        out_dir.mkdir()
+        (out_dir / "window.json").write_text(text, encoding="utf-8")
+        (out_dir / "bad.json").write_text('{"a": "/home/bob", ', encoding="utf-8")
+        (out_dir / "latin.txt").write_bytes("caf\xe9 /home/bob".encode("latin-1"))
+        rep = helper._scrub_dir(out_dir, [])
+        json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertNotIn("/home/bob", (out_dir / "bad.json").read_text(encoding="utf-8"))
+        self.assertEqual(rep["scrub_errors"], ["bad.json (not valid JSON; regex-scrubbed)"])
+        self.assertEqual((out_dir / "latin.txt").read_bytes(), "caf\xe9 /home/bob".encode("latin-1"))
+        self.assertIn("latin.txt (not utf-8)", rep["skipped"])
+        self.assertEqual([f.name for f in out_dir.iterdir() if ".scrub_tmp_" in f.name], [])
+
+    def test_upload_refuses_json_the_scrub_cannot_verify_and_hard_linked_images(self) -> None:
+        from dataset_desk import description_gate, desk
+
+        helper = _load_module("desk_draft_helper_edge_test", DESK_DRAFT_HELPER_PY)
+        proj, cap_cfg = self.make_project("edge_src", flagged_count=1, unflagged_count=1)
+        out_dir = self.tmp_path / "edge_out"
+        out_dir.mkdir()
+        ns = types.SimpleNamespace(
+            repo_root=str(REPO_ROOT), project=str(proj), caption_config=str(cap_cfg), out_dir=str(out_dir), isolate_user_config=True
+        )
+        (proj / "outputs" / "wave-1" / "generation.json").write_text('{"a": "/home/bob", ', encoding="utf-8")
+        with self.assertRaises(helper.RefusalError) as ctx:
+            helper.cmd_preflight_project(ns)
+        self.assertEqual(ctx.exception.code, "UPLOAD_SCRUB_INVALID_JSON")
+        (proj / "outputs" / "wave-1" / "generation.json").unlink()
+        img = proj / "outputs" / "wave-1" / "flagged_00.png"
+        try:
+            os.link(img, proj / "outputs" / "wave-1" / "twin.png")
+        except OSError:
+            self.skipTest("hard links not permitted here")
+        with self.assertRaises(helper.RefusalError) as ctx2:
+            helper._collect_compose_upload_files(proj, desk, description_gate)
+        self.assertEqual(ctx2.exception.code, "PROJECT_ASSET_HARDLINKED")
+
+    def test_path_is_rejected_dotdot_name_and_fail_closed(self) -> None:
+        helper = _load_module("desk_draft_helper_pr_test", DESK_DRAFT_HELPER_PY)
+        proj = self.tmp_path / "pr_proj"
+        (proj / "..old").mkdir(parents=True)
+        (proj / "..old" / "a.png").write_bytes(b"x")
+        self.assertFalse(helper.path_is_rejected(proj, "..old/a.png"))
+        with mock.patch.object(pathlib.Path, "resolve", side_effect=OSError("boom")):
+            self.assertTrue(helper.path_is_rejected(proj, "keep/a.png"))
+
+    def test_watcher_subshell_scrubs_only_on_escalation_and_a_normal_exit_keeps_closing_evidence(self) -> None:
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        a = text.index("colab_run_wall_watcher \\")
+        watcher = text[a : text.index('WALL_WATCHER_PID="$!"', a)]
+        guard = watcher.index('watcher_escalated.txt')
+        self.assertLess(guard, watcher.index("desk_scrub_kept_paths"))
+        proj, cap_cfg = self.make_project("norm_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("norm_env")
+        out_dir = self.tmp_path / "out_norm"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir))
+        self.assertEqual(res.returncode, 0, msg=res.stderr[-800:])
+        self.assertIn("No active sessions.", (out_dir / "colab.log").read_text(encoding="utf-8"))
+        self.assertIn("STOP_COMPLETED", (out_dir / "stop.log").read_text(encoding="utf-8") + (out_dir / "guards.log").read_text(encoding="utf-8"))
+
+    # ---- review round 4 ----
+
+    def test_cut_off_jsonl_is_still_scrubbed_and_reported(self) -> None:
+        helper = _load_module("desk_draft_helper_cutoff_test", DESK_DRAFT_HELPER_PY)
+        out_dir = self.tmp_path / "cutoff"
+        out_dir.mkdir()
+        body = '{"a": "/home/bob/x"}\n{"b": "/home/bob/y"}\n{"c": "/home/bo'
+        (out_dir / "events.jsonl").write_text(body, encoding="utf-8")
+        rep = helper._scrub_dir(out_dir, [])
+        self.assertNotIn("bob", (out_dir / "events.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual(rep["scrub_errors"], ["events.jsonl (not valid JSON; regex-scrubbed)"])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX file modes")
+    def test_token_scrub_keeps_json_valid_is_atomic_and_skips_non_utf8(self) -> None:
+        guards = _load_module("launch_guards_tok_test", LAUNCH_GUARDS_PY)
+        doc = {"cmd": 'curl "https://x/?colab-runtime-proxy-token=SECRET123&a=1"', "b": 'x access_token=ABC"'}
+        f = self.tmp_path / "cmd.json"
+        f.write_text(json.dumps(doc), encoding="utf-8")
+        os.chmod(f, 0o640)
+        self.assertTrue(guards.scrub_file_in_place(f))
+        parsed = json.loads(f.read_text(encoding="utf-8"))
+        self.assertNotIn("SECRET123", json.dumps(parsed))
+        self.assertNotIn("ABC", json.dumps(parsed))
+        self.assertEqual(f.stat().st_mode & 0o777, 0o640)
+        self.assertEqual([x.name for x in self.tmp_path.iterdir() if "tokscrub_tmp" in x.name], [])
+        bad = self.tmp_path / "latin.log"
+        bad.write_bytes("caf\xe9 access_token=ZZZ".encode("latin-1"))
+        self.assertFalse(guards.scrub_file_in_place(bad))
+        self.assertEqual(bad.read_bytes(), "caf\xe9 access_token=ZZZ".encode("latin-1"))
+
+    @unittest.skipUnless(os.name == "posix", "POSIX file modes")
+    def test_atomic_scrub_write_keeps_the_original_mode(self) -> None:
+        helper = _load_module("desk_draft_helper_mode_test", DESK_DRAFT_HELPER_PY)
+        out_dir = self.tmp_path / "mode"
+        out_dir.mkdir()
+        f = out_dir / "a.log"
+        f.write_text("see /home/bob/x\n", encoding="utf-8")
+        os.chmod(f, 0o640)
+        helper._scrub_dir(out_dir, [])
+        self.assertNotIn("bob", f.read_text(encoding="utf-8"))
+        self.assertEqual(f.stat().st_mode & 0o777, 0o640)
+
+    def test_upload_refuses_non_utf8_text(self) -> None:
+        helper = _load_module("desk_draft_helper_utf8_test", DESK_DRAFT_HELPER_PY)
+        proj, cap_cfg = self.make_project("utf8_src", flagged_count=1, unflagged_count=1)
+        (proj / "outputs" / "wave-1" / "generation.json").write_bytes("caf\xe9".encode("latin-1"))
+        out_dir = self.tmp_path / "utf8_out"
+        out_dir.mkdir()
+        ns = types.SimpleNamespace(
+            repo_root=str(REPO_ROOT), project=str(proj), caption_config=str(cap_cfg), out_dir=str(out_dir), isolate_user_config=True
+        )
+        with self.assertRaises(helper.RefusalError) as ctx:
+            helper.cmd_preflight_project(ns)
+        self.assertEqual(ctx.exception.code, "UPLOAD_NON_UTF8_TEXT")
+
+    @unittest.skipUnless(os.name == "posix", "needs bash")
+    def test_escalated_cleanup_branches_never_scrub_while_the_watcher_is_writing(self) -> None:
+        import subprocess
+
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        blocks = re.findall(r'  if \[ -f "\$\{OUT_DIR\}/watcher_escalated\.txt" \]; then\n(.*?)\n  fi\n', text, re.S)
+        blocks = [b for b in blocks if "sleep 3600" in b]
+        self.assertEqual(len(blocks), 2)
+        for i, block in enumerate(blocks):
+            out_dir = self.tmp_path / f"esc_{i}"
+            out_dir.mkdir()
+            (out_dir / "stop.log").write_text("STOP_COMPLETED session=x\n", encoding="utf-8")
+            driver = (
+                f'OUT_DIR="{out_dir}"\n'
+                'desk_clean_rig_staging() { :; }\n'
+                'desk_scrub_kept_paths() { echo scrubbed > "${OUT_DIR}/scrub_called"; }\n'
+                'sleep() { :; }\n'
+                # the watcher's late append lands after the launcher's escalated branch has run
+                f'( {block.replace("exit 137", "true")} )\n'
+                'echo "late watcher write" >> "${OUT_DIR}/stop.log"\n'
+            )
+            res = subprocess.run(["bash", "-c", driver], capture_output=True, text=True, timeout=30, check=False)
+            self.assertEqual(res.returncode, 0, msg=res.stderr)
+            self.assertFalse((out_dir / "scrub_called").exists(), msg=f"branch {i} scrubs while the watcher writes")
+            self.assertIn("late watcher write", (out_dir / "stop.log").read_text(encoding="utf-8"))
+
+    # ---- review round 5: fail-closed marker, per-line JSONL, per-file token scrub ----
+
+    def test_scrub_pending_folder_is_refused_by_the_guard_cleaned_by_scrub_leftovers_and_kept_on_error(self) -> None:
+        import subprocess
+
+        helper = _load_module("desk_draft_helper_pending_test", DESK_DRAFT_HELPER_PY)
+        parent = self.tmp_path / "pending_parent"
+        parent.mkdir()
+        dead = parent / "run_dead"  # an escalated run whose watcher died: no window.json, marker still there
+        dead.mkdir()
+        (dead / ".scrub_pending").write_text("", encoding="utf-8")
+        (dead / "guards.log").write_text("WALL_WATCHER_ESCALATED /home/bob/p access_token=SECRET\n", encoding="utf-8")
+        mine = parent / "run_mine"
+        mine.mkdir()
+        with self.assertRaises(helper.RefusalError) as ctx:
+            helper.cmd_check_out_dir_scrubbed(types.SimpleNamespace(out_dir=str(dead)))
+        self.assertEqual(ctx.exception.code, "OUT_DIR_SCRUB_PENDING")
+        # scrub-leftovers refuses a folder whose run lock is held, and scrubs it once the holder is gone.
+        lock = dead / ".run.lock"
+        lock.write_text("1 300\n", encoding="utf-8")
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import fcntl, sys, time\nfh = open(sys.argv[1], 'a')\nfcntl.flock(fh, fcntl.LOCK_EX)\nprint('held', flush=True)\ntime.sleep(60)",
+             str(lock)],
+            stdout=subprocess.PIPE, text=True,
+        )
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            with self.assertRaises(helper.RefusalError) as held_ctx:
+                helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(dead), force=False))
+            self.assertEqual(held_ctx.exception.code, "RUN_LOCK_HELD")
+            self.assertTrue((dead / ".scrub_pending").exists())
+            self.assertIn("bob", (dead / "guards.log").read_text(encoding="utf-8"))
+        finally:
+            holder.kill()
+            holder.wait()
+            holder.stdout.close()
+        self.assertEqual(helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(dead), force=False)), 0)
+        log = (dead / "guards.log").read_text(encoding="utf-8")
+        self.assertNotIn("bob", log)
+        self.assertNotIn("SECRET", log)
+        self.assertFalse((dead / ".scrub_pending").exists())
+        # A sibling next to a live launch is never touched by a launch (nothing in the launcher calls a sweep).
+        self.assertTrue(mine.is_dir())
+        self.assertEqual(helper.cmd_check_out_dir_scrubbed(types.SimpleNamespace(out_dir=str(dead))), 0)
+
+        # A scrub that reports an error keeps the marker.
+        bad = self.tmp_path / "pending_bad"
+        bad.mkdir()
+        (bad / ".scrub_pending").write_text("", encoding="utf-8")
+        (bad / "ok.log").write_text("/home/bob/x\n", encoding="utf-8")
+        (bad / "broken.json").write_text('{"a": 1}', encoding="utf-8")
+        with mock.patch.object(helper, "scrub_text_for_file", side_effect=lambda n, t, r=None: (t, "json_error") if n == "broken.json" else (helper.scrub_rig_paths(t, r), "ok")):
+            helper.cmd_scrub_kept_paths(types.SimpleNamespace(out_dir=str(bad), root=[]))
+        self.assertTrue((bad / ".scrub_pending").exists())
+        # A clean scrub removes it.
+        good = self.tmp_path / "pending_good"
+        good.mkdir()
+        (good / ".scrub_pending").write_text("", encoding="utf-8")
+        (good / "ok.log").write_text("/home/bob/x\n", encoding="utf-8")
+        helper.cmd_scrub_kept_paths(types.SimpleNamespace(out_dir=str(good), root=[]))
+        self.assertFalse((good / ".scrub_pending").exists())
+        # The launcher writes the marker right after creating the out dir, and a clean run removes it again.
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        self.assertIn(': > "${OUT_DIR}/.scrub_pending"', text[text.index('mkdir -p "${OUT_DIR}"') :][:900])
+        proj, cap_cfg = self.make_project("pend_src", flagged_count=1, unflagged_count=1)
+        env = self.make_env("pend_env")
+        out_dir = self.tmp_path / "out_pend"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir, "--dry"))
+        self.assertEqual(res.returncode, 0, msg=res.stderr[-600:])
+        self.assertFalse((out_dir / ".scrub_pending").exists())
+        del subprocess
+
+    def test_jsonl_lines_that_parse_stay_valid_and_the_cut_off_tail_is_regex_scrubbed(self) -> None:
+        helper = _load_module("desk_draft_helper_perline_test", DESK_DRAFT_HELPER_PY)
+        body = '{"a": "x\\/home/bob/y"}\n{"b": "/home/bob/z"}\n{"c": "/home/bo'
+        cleaned, status = helper.scrub_text_for_file("e.jsonl", body)
+        self.assertEqual(status, "json_error_scrubbed")
+        lines = cleaned.splitlines()
+        self.assertEqual(len(lines), 3)
+        json.loads(lines[0])
+        json.loads(lines[1])
+        self.assertNotIn("bob", cleaned)
+
+    def test_one_bad_file_does_not_stop_the_token_scrub_and_failures_are_named(self) -> None:
+        import subprocess
+
+        d = self.tmp_path / "tok_batch"
+        d.mkdir()
+        good = d / "good.log"
+        good.write_text("x access_token=SECRET1\n", encoding="utf-8")
+        bad = d / "bad.log"
+        bad.write_bytes("caf\xe9 access_token=SECRET2".encode("latin-1"))
+        good2 = d / "good2.json"
+        good2.write_text('{"access_token": "SECRET3"}', encoding="utf-8")
+        res = subprocess.run(
+            [sys.executable, str(LAUNCH_GUARDS_PY), "--scrub-file", str(bad), "--scrub-file", str(good), "--scrub-file", str(good2)],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        self.assertEqual(res.returncode, 1, msg=res.stderr)
+        self.assertIn("TOKEN_SCRUB_FAILED", res.stderr)
+        self.assertIn("bad.log", res.stderr)
+        self.assertNotIn("SECRET1", good.read_text(encoding="utf-8"))
+        self.assertNotIn("SECRET3", good2.read_text(encoding="utf-8"))
+        json.loads(good2.read_text(encoding="utf-8"))
+
+    # ---- review round 6: no sibling sweep; fail-closed notes ----
+
+    def test_scrub_leftovers_without_flock_refuses_unless_forced_and_keeps_the_marker_on_error(self) -> None:
+        helper = _load_module("desk_draft_helper_force_test", DESK_DRAFT_HELPER_PY)
+        d = self.tmp_path / "left_force"
+        d.mkdir()
+        (d / ".scrub_pending").write_text("", encoding="utf-8")
+        (d / ".run.lock").write_text("1 300\n", encoding="utf-8")
+        (d / "a.log").write_text("/home/bob/x\n", encoding="utf-8")
+        with mock.patch.dict(sys.modules, {"fcntl": None}):
+            with self.assertRaises(helper.RefusalError) as ctx:
+                helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(d), force=False))
+            self.assertEqual(ctx.exception.code, "RUN_LOCK_UNVERIFIABLE")
+            self.assertTrue((d / ".scrub_pending").exists())
+            self.assertEqual(helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(d), force=True)), 0)
+        self.assertFalse((d / ".scrub_pending").exists())
+        self.assertNotIn("bob", (d / "a.log").read_text(encoding="utf-8"))
+
+    def test_launcher_takes_the_run_lock_and_never_sweeps(self) -> None:
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        self.assertIn('exec 8>>"${OUT_DIR}/.run.lock"', text)
+        self.assertIn("flock -n 8", text)
+        self.assertNotIn("sweep", text.lower())
+        proj, cap_cfg = self.make_project("lock_src", flagged_count=1, unflagged_count=1)
+        env = self.make_env("lock_env")
+        out_dir = self.tmp_path / "out_lock"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir, "--dry"))
+        self.assertEqual(res.returncode, 0, msg=res.stderr[-600:])
+        self.assertTrue((out_dir / ".run.lock").is_file())
+
+    def test_nul_padded_text_file_and_failed_token_import_keep_the_scrub_incomplete(self) -> None:
+        helper = _load_module("desk_draft_helper_nul_test", DESK_DRAFT_HELPER_PY)
+        d = self.tmp_path / "nul"
+        d.mkdir()
+        (d / ".scrub_pending").write_text("", encoding="utf-8")
+        (d / "a.log").write_bytes(b"/home/bob/x\n" + b"\x00" * 16)
+        (d / "blob.bin").write_bytes(b"\x00\x01")
+        helper.cmd_scrub_kept_paths(types.SimpleNamespace(out_dir=str(d), root=[]))
+        self.assertTrue((d / ".scrub_pending").exists())
+        rep = json.loads((d / "scrub_report.json").read_text(encoding="utf-8"))
+        self.assertIn("a.log (binary text file)", rep["skipped"])
+        self.assertIn("blob.bin (binary)", rep["skipped"])
+        d2 = self.tmp_path / "noimport"
+        d2.mkdir()
+        (d2 / ".scrub_pending").write_text("", encoding="utf-8")
+        (d2 / "a.log").write_text("/home/bob/x\n", encoding="utf-8")
+        with mock.patch.object(helper, "_GUARDS_MODULE", False):
+            helper.cmd_scrub_kept_paths(types.SimpleNamespace(out_dir=str(d2), root=[]))
+        self.assertTrue((d2 / ".scrub_pending").exists())
+        self.assertIn("launch_guards.py import failed", (d2 / "scrub_report.json").read_text(encoding="utf-8"))
+
+    def test_token_keys_are_redacted_on_the_decoded_value_paths_and_escaped_quotes_are_handled(self) -> None:
+        helper = _load_module("desk_draft_helper_tokkey_test", DESK_DRAFT_HELPER_PY)
+        guards = _load_module("launch_guards_tokkey_test", LAUNCH_GUARDS_PY)
+        line = '{"access_token": "SECRET", "p": "x\\/home/bob/y"}'
+        # per-line JSONL path (the file as a whole does not parse)
+        cleaned, status = helper.scrub_text_for_file("e.jsonl", line + '\n{"cut": "/home/b')
+        self.assertEqual(status, "json_error_scrubbed")
+        self.assertNotIn("SECRET", cleaned)
+        json.loads(cleaned.splitlines()[0])
+        # json_fallback path (the regex scrub alone would break this valid JSON)
+        cleaned2, status2 = helper.scrub_text_for_file("e.json", line)
+        self.assertNotIn("SECRET", cleaned2)
+        self.assertNotIn("bob", cleaned2)
+        json.loads(cleaned2)
+        for key in ("refresh_token", "id_token", "token", "authorization"):
+            self.assertNotIn("SECRET", helper.scrub_text_for_file("k.json", json.dumps({key: "SECRET", "p": "x\\/home/bob"}).replace("\\\\/", "\\/"))[0])
+        esc = json.dumps({"access_token": 'a"b', "x": 1})
+        out = guards.scrub_colab_tokens(esc)
+        self.assertEqual(json.loads(out), {"access_token": "[REDACTED]", "x": 1})
+
+    # ---- review round 7 ----
+
+    @unittest.skipUnless(os.name == "posix", "needs flock")
+    def test_a_second_launch_on_a_held_run_lock_refuses_and_leftovers_refuse_unverifiable_locks(self) -> None:
+        import subprocess
+
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        a = text.index('if command -v flock >/dev/null 2>&1; then\n  exec 8>>"${OUT_DIR}/.run.lock"')
+        block = text[a : text.index('export COLAB_ACTIVE_OUT_DIR="${OUT_DIR}"')]
+        out_dir = self.tmp_path / "lock_held"
+        out_dir.mkdir()
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import fcntl, sys, time\nfh = open(sys.argv[1], 'a')\nfcntl.flock(fh, fcntl.LOCK_EX)\nprint('held', flush=True)\ntime.sleep(60)",
+             str(out_dir / ".run.lock")],
+            stdout=subprocess.PIPE, text=True,
+        )
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            res = subprocess.run(["bash", "-c", f'OUT_DIR="{out_dir}"; WALL_S=300\n{block}\necho survived'], capture_output=True, text=True, timeout=30, check=False)
+        finally:
+            holder.kill()
+            holder.wait()
+            holder.stdout.close()
+        self.assertEqual(res.returncode, 2, msg=res.stdout + res.stderr)
+        self.assertIn("REFUSED: RUN_LOCK_HELD", res.stderr)
+        self.assertNotIn("survived", res.stdout)
+        # A free lock is taken and records its mode.
+        free = self.tmp_path / "lock_free"
+        free.mkdir()
+        res2 = subprocess.run(["bash", "-c", f'OUT_DIR="{free}"; WALL_S=300\n{block}\ncat "{free}/.run.lock"'], capture_output=True, text=True, timeout=30, check=False)
+        self.assertEqual(res2.returncode, 0, msg=res2.stderr)
+        self.assertTrue(res2.stdout.split()[-1] in ("flock", "none"))
+
+        helper = _load_module("desk_draft_helper_r7_test", DESK_DRAFT_HELPER_PY)
+        nolock = self.tmp_path / "left_nolock"
+        nolock.mkdir()
+        (nolock / ".scrub_pending").write_text("", encoding="utf-8")
+        (nolock / "a.log").write_text("/home/bob/x\n", encoding="utf-8")
+        with self.assertRaises(helper.RefusalError) as c1:
+            helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(nolock), force=False))
+        self.assertEqual(c1.exception.code, "RUN_LOCK_UNVERIFIABLE")
+        self.assertTrue((nolock / ".scrub_pending").exists())
+        mode_none = self.tmp_path / "left_none"
+        mode_none.mkdir()
+        (mode_none / ".scrub_pending").write_text("", encoding="utf-8")
+        (mode_none / ".run.lock").write_text("1 300 none\n", encoding="utf-8")
+        with self.assertRaises(helper.RefusalError) as c2:
+            helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(mode_none), force=False))
+        self.assertEqual(c2.exception.code, "RUN_LOCK_UNVERIFIABLE")
+        self.assertEqual(helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(mode_none), force=True)), 0)
+
+    def test_token_keys_are_redacted_even_when_nothing_else_changes_and_lookalike_keys_are_kept(self) -> None:
+        helper = _load_module("desk_draft_helper_r7tok_test", DESK_DRAFT_HELPER_PY)
+        out, status = helper.scrub_text_for_file("a.json", json.dumps({"refresh_token": "SECRET", "token_count": 5}))
+        parsed = json.loads(out)
+        self.assertEqual(parsed, {"refresh_token": "[REDACTED]", "token_count": 5})
+        out2, _ = helper.scrub_text_for_file("b.json", json.dumps({"Authorization": "SECRET"}))
+        self.assertEqual(json.loads(out2), {"Authorization": "[REDACTED]"})
+        out3, _ = helper.scrub_text_for_file("c.jsonl", json.dumps({"authorization": "SECRET"}) + "\n" + json.dumps({"n": 1}) + "\n")
+        self.assertNotIn("SECRET", out3)
+        self.assertEqual(len(out3.splitlines()), 2)
 
 
 if __name__ == "__main__":

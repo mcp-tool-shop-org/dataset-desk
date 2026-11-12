@@ -195,6 +195,27 @@ A project with no `records/` works too, as long as the images sit in folders und
 
 Report a vulnerability as described in [SECURITY.md](SECURITY.md).
 
+### Colab caption-drafting lane: kept files
+
+One desk launch at a time per parent folder. A launch scrubs only its own out dir, within its own lifetime; it never
+touches another run's folder.
+
+- **Marker.** The launcher creates the out dir, writes `.scrub_pending` into it first, and takes an `flock` on
+  `<out>/.run.lock` (kept to the end, including an escalated watcher's sleep).
+- **Scrub.** At exit it scrubs rig paths and tokens from every kept text file and removes the marker only when the scrub
+  is complete: no `scrub_errors` in `scrub_report.json`, and nothing skipped as NUL-padded text, non-UTF-8, over-size or
+  unreadable. A JSON or JSONL file that does not parse (a cut-off JSONL) is scrubbed by regex but still counts as an
+  error, so the folder stays marked; open `scrub_report.json`, review the file by hand, then delete the marker
+  yourself once you are satisfied.
+- **Guard.** Any promote, export or publish step that reads a run folder must call
+  `desk_draft_helper.py check-out-dir-scrubbed --out-dir <dir>`; it refuses `OUT_DIR_SCRUB_PENDING` while the marker
+  exists.
+- **Dead runs.** A run killed before its scrub (rig shutdown, WSL restart, OOM, or an escalated run whose wall watcher
+  died) stays marked and refused. A person cleans it with
+  `desk_draft_helper.py scrub-leftovers <dir>`. It refuses `RUN_LOCK_HELD` while that run's lock is held, and where
+  `flock` is unavailable (msys) it refuses `RUN_LOCK_UNVERIFIABLE` unless you pass `--force` after making sure the run
+  is dead. It removes the marker only on a complete scrub.
+
 ## Status
 
 **v0.3.0, a public prototype.** The code is tested offline with small stand-ins for the model libraries.

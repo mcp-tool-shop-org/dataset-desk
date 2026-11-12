@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import importlib.util
+import io
 import json
 import os
 import pathlib
@@ -16,6 +18,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import types
 import tomllib
 import zipfile
 
@@ -111,7 +114,395 @@ def detect_image_magic_bytes(data: bytes) -> str | None:
         return "image/tiff"
     if len(data) >= 14 and data[:2] == b"BM" and data[6:10] == b"\x00\x00\x00\x00":
         return "image/bmp"
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        # ISO-BMFF image brands: the major brand, then the compatible brands the box lists.
+        box_len = int.from_bytes(data[:4], "big")
+        end = box_len if 16 <= box_len <= len(data) else len(data)
+        brands = {data[8:12]} | {data[i : i + 4] for i in range(16, max(16, end - 3), 4)}
+        if brands & {b"avif", b"avis"}:
+            return "image/avif"
+        if brands & {b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1"}:
+            return "image/heic"
     return None
+
+
+def is_image_file_by_magic(path: pathlib.Path) -> bool:
+    """True when the file's own first bytes are a raster image (the extension is never trusted)."""
+    try:
+        with pathlib.Path(path).open("rb") as fh:
+            return detect_image_magic_bytes(fh.read(64)) is not None
+    except OSError:
+        return False
+
+
+_REJECTED_83_RE = re.compile(r"^reject~\d+$")
+
+
+def _is_rejected_component(part: str) -> bool:
+    # Windows ignores trailing dots and spaces ("rejected." is the directory "rejected") and may show a long
+    # name as an 8.3 short name ("REJECT~1"); both count as rejected.
+    norm = part.rstrip(". ").lower()
+    return norm == "rejected" or bool(_REJECTED_83_RE.match(norm))
+
+
+def has_rejected_component(rel_posix: str) -> bool:
+    """True when any component of a project-relative path is `rejected` (case-insensitive, Windows aliases too)."""
+    parts = [p for p in str(rel_posix).replace("\\", "/").split("/") if p]
+    return any(_is_rejected_component(p) for p in parts)
+
+
+def path_is_rejected(proj_dir: pathlib.Path, rel: object) -> bool:
+    """True if `rel` names a path under `rejected/`, either as written or AFTER symlinks and junctions resolve."""
+    rel_s = str(rel or "").replace("\\", "/").strip("/")
+    if not rel_s:
+        return False
+    if has_rejected_component(rel_s):
+        return True
+    try:
+        real = (pathlib.Path(proj_dir) / rel_s).resolve()
+        real_rel = os.path.relpath(str(real), str(pathlib.Path(proj_dir).resolve())).replace("\\", "/")
+    except (OSError, ValueError) as exc:
+        # Fail closed: a path that cannot be resolved is treated as rejected and never uploads.
+        print(f"REJECTED_PATH_CHECK_FAILED {rel_s!r}: {exc.__class__.__name__}", file=sys.stderr)
+        return True
+    if real_rel == ".." or real_rel.startswith("../"):
+        return False
+    return has_rejected_component(real_rel)
+
+
+# Kept-file path scrubbing (Publisher, 2026-11-12): nothing under the out dir may name a rig home, a Windows or
+# WSL user directory, a drive root, or the studio config path. Explicit roots (out dir, repo, project, home, the
+# user-config file) become named placeholders first; the generic patterns then catch whatever is left.
+RIG_PATH_PLACEHOLDER = "<rig>"
+_SEP = r"(?:\\\\|\\|/)+"
+_USER = r"[^\\/\"'\r\n:;,<>|]+"
+_STUDIO_CONFIG_PATTERN = re.compile(r"[^\s\"'<>]*dataset-desk[\\/]+config\.json", re.I)
+_RIG_PATH_PATTERNS = (
+    # \\wsl.localhost\<distro>\... and \\wsl$\<distro>\...
+    re.compile(r"(?:\\{2,4}|//)wsl(?:\.localhost|\$)(?:\\{1,4}|/)+[^\\/\s\"']+(?:(?:\\{1,4}|/)+home(?:\\{1,4}|/)+[^\\/\s\"']+)?", re.I),
+    # URL-encoded forms of the drive-letter Users, home and /mnt/<drive>/Users paths
+    re.compile(r"[A-Za-z]%3A(?:%5C|%2F)+Users(?:%5C|%2F)+[^%\s\"'&/\\]+", re.I),
+    re.compile(r"%2Fmnt%2F[A-Za-z]%2FUsers%2F[^%\s\"'&/\\]+", re.I),
+    re.compile(r"%2F(?:home|Users)%2F[^%\s\"'&/\\]+", re.I),
+    re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:" + _SEP + r"Users" + _SEP + _USER, re.I),
+    re.compile(r"/mnt/[A-Za-z]/Users/" + _USER, re.I),
+    re.compile(r"/home/[^/\\\s\"']+", re.I),
+    re.compile(r"/Users/" + _USER, re.I),
+    re.compile(r"(?<![A-Za-z0-9])/mnt/[A-Za-z](?=/)", re.I),
+    re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:(?=\\|/(?!/))"),
+)
+_SCRUB_MAX_BYTES = 64 * 1024 * 1024
+_TEXT_SUFFIXES = {".log", ".txt", ".json", ".jsonl"}
+_TOKEN_KEYS = {"access_token", "refresh_token", "id_token", "token", "authorization"}
+_TOKEN_KEY_RE = re.compile(r'"(?:access_token|refresh_token|id_token|token|authorization)"\s*:', re.I)
+
+
+_GUARDS_MODULE: object = None
+
+
+def _token_scrub(text: str) -> str:
+    """Apply launch_guards.scrub_colab_tokens (sits next to this file on the rig and on the VM)."""
+    global _GUARDS_MODULE
+    if _GUARDS_MODULE is None:
+        try:
+            spec = importlib.util.spec_from_file_location("desk_launch_guards", pathlib.Path(__file__).with_name("launch_guards.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _GUARDS_MODULE = mod
+        except Exception:
+            _GUARDS_MODULE = False
+    return _GUARDS_MODULE.scrub_colab_tokens(text) if _GUARDS_MODULE else text
+
+
+def _token_scrub_available() -> bool:
+    _token_scrub("")
+    return bool(_GUARDS_MODULE)
+
+
+def scrub_rig_paths(text: str, roots: list[tuple[str, str]] | None = None) -> str:
+    """Replace Colab/HF tokens, then explicit roots (longest first), then every generic rig-path pattern, in `text`."""
+    out = _token_scrub(text)
+    variants: list[tuple[str, str]] = []
+    for root, placeholder in roots or []:
+        r = str(root or "").strip()
+        if len(r) < 4:
+            continue
+        for form in {r, r.rstrip("/\\"), r.replace("/", "\\"), r.replace("\\", "/")}:
+            if len(form) >= 4:
+                variants.append((form, placeholder))
+                variants.append((form.replace("\\", "\\\\"), placeholder))
+    for form, placeholder in sorted(set(variants), key=lambda kv: -len(kv[0])):
+        out = out.replace(form, placeholder)
+    out = _STUDIO_CONFIG_PATTERN.sub("<studio-config>", out)
+    for pat in _RIG_PATH_PATTERNS:
+        out = pat.sub(RIG_PATH_PLACEHOLDER, out)
+    return out
+
+
+def _scrub_json_values(node, roots):
+    if isinstance(node, str):
+        return scrub_rig_paths(node, roots)
+    if isinstance(node, list):
+        return [_scrub_json_values(v, roots) for v in node]
+    if isinstance(node, dict):
+        return {
+            scrub_rig_paths(str(k), roots): (
+                "[REDACTED]" if str(k).lower() in _TOKEN_KEYS and isinstance(v, str) else _scrub_json_values(v, roots)
+            )
+            for k, v in node.items()
+        }
+    return node
+
+
+def _json_text_ok(text: str, jsonl: bool) -> bool:
+    try:
+        if jsonl:
+            for ln in text.splitlines():
+                if ln.strip():
+                    json.loads(ln)
+        else:
+            json.loads(text)
+        return True
+    except ValueError:
+        return False
+
+
+def scrub_text_for_file(name: str, text: str, roots: list[tuple[str, str]] | None = None) -> tuple[str, str]:
+    """Scrub `text` of the file `name`. Returns (cleaned, status).
+
+    status: ok; json_fallback (the regex scrub broke parsable JSON, so it was redone on the decoded values);
+    json_error_scrubbed (the original is not valid JSON; the regex-scrubbed text is returned); json_error (the
+    original parsed and neither scrub could keep it valid; the ORIGINAL text is returned)."""
+    cleaned = scrub_rig_paths(text, roots)
+    suffix = pathlib.PurePosixPath(name).suffix.lower()
+    if suffix not in (".json", ".jsonl"):
+        return cleaned, "ok"
+    jsonl = suffix == ".jsonl"
+    if _TOKEN_KEY_RE.search(text) and _json_text_ok(text, jsonl):
+        # A token key is present in JSON that parses: always redact on the decoded values, whether or not the regex
+        # scrub changed anything or left the JSON valid (redaction must not depend on an unrelated path).
+        try:
+            if jsonl:
+                lines = [json.dumps(_scrub_json_values(json.loads(ln), roots), ensure_ascii=False) for ln in text.splitlines() if ln.strip()]
+                return "\n".join(lines) + "\n", "json_values"
+            return json.dumps(_scrub_json_values(json.loads(text), roots), ensure_ascii=False, indent=2) + "\n", "json_values"
+        except ValueError:
+            return text, "json_error"
+    if cleaned == text:
+        return cleaned, "ok"
+    if _json_text_ok(cleaned, jsonl):
+        return cleaned, "ok"
+    if not _json_text_ok(text, jsonl):
+        # The original does not parse (a JSONL cut off by a killed writer): there is no JSON to protect, so the
+        # regex-scrubbed text is written and the file is still reported.
+        if jsonl:
+            # Per line: a line that parses is scrubbed on its decoded values (a `\\/` writer stays valid); a line
+            # that does not (a cut-off tail) is regex-scrubbed.
+            out_lines = []
+            for ln in text.splitlines():
+                if not ln.strip():
+                    continue
+                try:
+                    out_lines.append(json.dumps(_scrub_json_values(json.loads(ln), roots), ensure_ascii=False))
+                except ValueError:
+                    out_lines.append(scrub_rig_paths(ln, roots))
+            return "\n".join(out_lines) + "\n", "json_error_scrubbed"
+        return cleaned, "json_error_scrubbed"
+    try:
+        if jsonl:
+            lines = [json.dumps(_scrub_json_values(json.loads(ln), roots), ensure_ascii=False) for ln in text.splitlines() if ln.strip()]
+            redone = "\n".join(lines) + "\n"
+        else:
+            redone = json.dumps(_scrub_json_values(json.loads(text), roots), ensure_ascii=False, indent=2) + "\n"
+    except ValueError:
+        return text, "json_error"
+    return redone, "json_fallback"
+
+
+def _atomic_write_text(path: pathlib.Path, text: str) -> None:
+    """Write via an exclusively created temp file in the same directory, copy the original's mode, and rename, so a
+    kill cannot leave a truncated file."""
+    tmp = path.with_name(f".{path.name}.scrub_tmp_{os.getpid()}")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    try:
+        try:
+            fd = os.open(tmp, flags, 0o600)
+        except FileExistsError:
+            tmp.unlink()
+            fd = os.open(tmp, flags, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(text.encode("utf-8"))
+            fh.flush()
+            os.fsync(fh.fileno())
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def _scrub_dir(out_dir: pathlib.Path, roots: list[tuple[str, str]]) -> dict:
+    scrubbed = 0
+    skipped: list[str] = []
+    errors: list[str] = []
+    if not _token_scrub_available():
+        # Never report a scrub complete when the token half could not run.
+        errors.append("launch_guards.py import failed: tokens were not scrubbed")
+    for fpath in sorted(out_dir.rglob("*")):
+        try:
+            rel = fpath.relative_to(out_dir).as_posix()
+            if fpath.is_symlink() or not fpath.is_file() or rel == "scrub_report.json" or ".scrub_tmp_" in fpath.name:
+                continue
+            if fpath.stat().st_size > _SCRUB_MAX_BYTES:
+                skipped.append(f"{rel} (over {_SCRUB_MAX_BYTES} bytes)")
+                continue
+            raw = fpath.read_bytes()
+            if b"\x00" in raw:
+                if fpath.suffix.lower() in _TEXT_SUFFIXES:
+                    # A text file with NUL bytes (power-loss padding) cannot be verified clean.
+                    skipped.append(f"{rel} (binary text file)")
+                else:
+                    skipped.append(f"{rel} (binary)")
+                continue
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                # Decoding with replacement would write U+FFFD into the file for good.
+                skipped.append(f"{rel} (not utf-8)")
+                continue
+            cleaned, status = scrub_text_for_file(rel, text, roots)
+            if status == "json_error":
+                errors.append(f"{rel} (scrub would break the JSON; original kept)")
+                continue
+            if status == "json_error_scrubbed":
+                errors.append(f"{rel} (not valid JSON; regex-scrubbed)")
+            if cleaned != text:
+                try:
+                    _atomic_write_text(fpath, cleaned)
+                except OSError as exc:
+                    skipped.append(f"{rel} (replace_failed: {exc.__class__.__name__})")
+                    continue
+                scrubbed += 1
+        except OSError as exc:
+            skipped.append(f"{fpath.name} (unreadable: {exc.__class__.__name__})")
+    return {"scrubbed_files": scrubbed, "skipped": skipped, "scrub_errors": errors}
+
+
+SCRUB_PENDING_MARKER = ".scrub_pending"
+
+
+def _scrub_complete(report: dict) -> bool:
+    """A scrub is complete only with no scrub_errors and nothing that could not be rewritten or read as text."""
+    if report["scrub_errors"]:
+        return False
+    return not any(("replace_failed" in x) or ("not utf-8" in x) or ("over " in x) or ("unreadable" in x) or ("binary text file" in x) for x in report["skipped"])
+
+
+def cmd_check_out_dir_scrubbed(args: argparse.Namespace) -> int:
+    """Refuse (OUT_DIR_SCRUB_PENDING) a run folder that still carries .scrub_pending: any promote, export or publish
+    step that reads a desk-lane out dir must call this first."""
+    out_dir = pathlib.Path(args.out_dir)
+    if (out_dir / SCRUB_PENDING_MARKER).exists():
+        raise RefusalError(
+            "OUT_DIR_SCRUB_PENDING",
+            f"{out_dir.name!r} still carries {SCRUB_PENDING_MARKER}: its kept files may hold unscrubbed rig paths; "
+            "run `scrub-leftovers <dir>` (only if the run is dead) and review scrub_report.json",
+        )
+    print(json.dumps({"scrubbed": True}, sort_keys=True))
+    return 0
+
+
+def cmd_scrub_kept_paths(args: argparse.Namespace) -> int:
+    out_dir = pathlib.Path(args.out_dir)
+    if not out_dir.is_dir():
+        return 0
+    roots: list[tuple[str, str]] = []
+    for spec in args.root or []:
+        if "=" not in spec:
+            continue
+        raw_root, placeholder = spec.rsplit("=", 1)
+        roots.append((raw_root, placeholder))
+        try:
+            resolved = str(pathlib.Path(raw_root).resolve())
+        except OSError:
+            resolved = ""
+        if resolved and resolved != raw_root:
+            roots.append((resolved, placeholder))
+    cfg_env = os.environ.get("DATASET_DESK_USER_CONFIG", "").strip()
+    if cfg_env:
+        roots.append((cfg_env, "<studio-config>"))
+    report = _scrub_dir(out_dir, roots)
+    try:
+        write_json_lf(
+            out_dir / "scrub_report.json",
+            {"scrub_errors": report["scrub_errors"], "scrubbed_files": report["scrubbed_files"], "skipped": report["skipped"]},
+        )
+    except OSError:
+        pass
+    if _scrub_complete(report):
+        try:
+            (out_dir / SCRUB_PENDING_MARKER).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
+def cmd_scrub_leftovers(args: argparse.Namespace) -> int:
+    """Explicit, person-run cleanup of ONE named run folder left by a dead run (rig shutdown, OOM, a watcher that died
+    after escalating). No launch ever calls this. It refuses RUN_LOCK_HELD while that run still holds its .run.lock,
+    and refuses RUN_LOCK_UNVERIFIABLE where flock is unavailable (msys) unless --force. It scrubs paths and tokens and
+    removes .scrub_pending only on a complete scrub."""
+    out_dir = pathlib.Path(args.dir)
+    if not out_dir.is_dir():
+        raise RefusalError("OUT_DIR_MISSING", f"{out_dir.name!r} is not a folder")
+    lock = out_dir / ".run.lock"
+    held_file = None
+    if not lock.exists():
+        if (out_dir / SCRUB_PENDING_MARKER).exists() and not args.force:
+            raise RefusalError(
+                "RUN_LOCK_UNVERIFIABLE",
+                "the folder is marked unscrubbed but has no .run.lock, so a live run cannot be ruled out; "
+                "make sure the run is dead, then pass --force",
+            )
+    else:
+        try:
+            lock_words = lock.read_text(encoding="utf-8").split()
+        except OSError:
+            lock_words = []
+        if len(lock_words) >= 3 and lock_words[2] == "none" and not args.force:
+            raise RefusalError(
+                "RUN_LOCK_UNVERIFIABLE",
+                "the run was launched without flock (lock mode none), so a live run cannot be ruled out; "
+                "make sure the run is dead, then pass --force",
+            )
+        try:
+            import fcntl
+        except ImportError:
+            fcntl = None
+        if fcntl is None:
+            if not args.force:
+                raise RefusalError(
+                    "RUN_LOCK_UNVERIFIABLE",
+                    "this platform has no flock, so a live run cannot be ruled out; make sure the run is dead, then pass --force",
+                )
+        else:
+            held_file = lock.open("a")
+            try:
+                fcntl.flock(held_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                held_file.close()
+                raise RefusalError("RUN_LOCK_HELD", f"{out_dir.name!r} still belongs to a live run (its .run.lock is held)") from None
+    try:
+        return cmd_scrub_kept_paths(types.SimpleNamespace(out_dir=str(out_dir), root=[]))
+    finally:
+        if held_file is not None:
+            held_file.close()
 
 
 def sanitize_pool_detection(pd: object) -> object:
@@ -349,11 +740,18 @@ def _collect_compose_upload_files(
         raise RefusalError("PROJECT_EMPTY", f"--project {proj_dir.name!r} contains zero readable images")
 
     selected_rels: set[str] = set()
+    asset_rels: set[str] = set()
     approved_image_count = 0
     raw_recs = gate_mod.load_project_records(str(proj_dir)) if rec_dir.is_dir() else []
 
     if raw_recs:
         approved = [e for e in (gate_mod._extract_record_fields(r) for r in raw_recs) if e["status"] == "approved"]
+        # A `rejected/` path is never an approved training image, whatever the record says (Publisher, 2026-11-12).
+        approved = [
+            e
+            for e in approved
+            if not path_is_rejected(proj_dir, e["record_file"]) and not path_is_rejected(proj_dir, e["asset_path"])
+        ]
         if not approved:
             raise RefusalError("NO_APPROVED_RECORDS", f"--project {proj_dir.name!r} contains zero approved records")
         for entry in approved:
@@ -364,8 +762,14 @@ def _collect_compose_upload_files(
             asset_cand = proj_dir / asset_rel
             if not asset_cand.exists() or not asset_cand.is_file():
                 raise RefusalError("PROJECT_FILE_MISSING", f"{rec_rel}: approved asset missing at {asset_rel!r}")
+            if not is_image_file_by_magic(asset_cand):
+                raise RefusalError(
+                    "PROJECT_ASSET_NOT_IMAGE",
+                    f"{rec_rel}: approved asset {asset_rel!r} is not an image (magic bytes); refusing to upload it",
+                )
             selected_rels.add(rec_rel)
             selected_rels.add(asset_rel)
+            asset_rels.add(asset_rel)
             approved_image_count += 1
 
             sidecar_rel = entry.get("sidecar_file")
@@ -384,13 +788,24 @@ def _collect_compose_upload_files(
     else:
         sc_scan = gate_mod.scan_sidecar_project(str(proj_dir))
         approved_sc = [
-            e for e in (gate_mod._extract_record_fields(r) for r in sc_scan.get("records", [])) if e["status"] == "approved"
+            e
+            for e in (gate_mod._extract_record_fields(r) for r in sc_scan.get("records", []))
+            if e["status"] == "approved"
+            and not path_is_rejected(proj_dir, e["asset_path"])
+            and not path_is_rejected(proj_dir, e.get("sidecar_file"))
         ]
         if not approved_sc:
             raise RefusalError("NO_APPROVED_RECORDS", f"--project {proj_dir.name!r} contains zero paired sidecar records")
         for entry in approved_sc:
             asset_rel = str(entry["asset_path"]).replace("\\", "/").strip("/")
+            asset_cand_sc = proj_dir / asset_rel
+            if not asset_cand_sc.is_file() or not is_image_file_by_magic(asset_cand_sc):
+                raise RefusalError(
+                    "PROJECT_ASSET_NOT_IMAGE",
+                    f"sidecar record asset {asset_rel!r} is not an image (magic bytes); refusing to upload it",
+                )
             selected_rels.add(asset_rel)
+            asset_rels.add(asset_rel)
             approved_image_count += 1
             sidecar_rel = entry.get("sidecar_file")
             if isinstance(sidecar_rel, str) and sidecar_rel.strip():
@@ -415,10 +830,33 @@ def _collect_compose_upload_files(
         norm_rel = rel_posix.replace("\\", "/")
         if norm_rel.startswith("/") or ".." in pathlib.PurePosixPath(norm_rel).parts:
             raise RefusalError("PRIVATE_IMAGE_ROUTE_FORBIDDEN", f"project path escapes root: {rel_posix!r}")
+        if has_rejected_component(norm_rel):
+            raise RefusalError("PRIVATE_IMAGE_ROUTE_FORBIDDEN", f"project path under rejected/ is never uploaded: {rel_posix!r}")
         cand = proj_dir / norm_rel
         real = _verify_inside_project(proj_dir, cand, label=norm_rel)
         if not real.is_file():
             raise RefusalError("PROJECT_FILE_MISSING", f"expected file missing at {norm_rel!r}")
+        # A symlink or junction whose target sits under rejected/ is rejected too (checked on the resolved path).
+        if path_is_rejected(proj_dir, norm_rel):
+            raise RefusalError(
+                "PRIVATE_IMAGE_ROUTE_FORBIDDEN",
+                f"project path {norm_rel!r} resolves into rejected/ and is never uploaded",
+            )
+        # Only the approved assets are images; every other uploaded file is a record, sidecar, or config.
+        if norm_rel in asset_rels:
+            if not is_image_file_by_magic(real):
+                raise RefusalError("PROJECT_ASSET_NOT_IMAGE", f"upload asset {norm_rel!r} is not an image (magic bytes)")
+            if real.stat().st_nlink > 1:
+                # A hard link cannot be traced to its other names (one may sit under rejected/): copy the file instead.
+                raise RefusalError(
+                    "PROJECT_ASSET_HARDLINKED",
+                    f"upload asset {norm_rel!r} has {real.stat().st_nlink} hard links; copy it to a plain file",
+                )
+        elif is_image_file_by_magic(real):
+            raise RefusalError(
+                "PRIVATE_IMAGE_ROUTE_FORBIDDEN",
+                f"{norm_rel!r} carries image bytes but is not an approved asset; it is not uploaded",
+            )
         rel_files.append((norm_rel, real))
     return rel_files, approved_image_count
 
@@ -570,7 +1008,7 @@ def cmd_preflight_project(args: argparse.Namespace) -> int:
             caption_config=str(cap_path),
         )
     except DeskError as exc:
-        raise RefusalError(exc.code, exc.message) from exc
+        raise RefusalError(exc.code, scrub_rig_paths(exc.message)) from exc
     finally:
         if args.isolate_user_config:
             if prev_user_cfg is None:
@@ -585,28 +1023,55 @@ def cmd_preflight_project(args: argparse.Namespace) -> int:
 
     with tarfile.open(tar_path, "w", format=tarfile.PAX_FORMAT) as tf:
         for rel_posix, real_path in rel_files:
-            st = real_path.stat()
-            fsha = sha256_file(real_path)
+            payload: bytes | None = None
+            if not is_image_file_by_magic(real_path):
+                # Records, sidecars, configs and wave metadata are uploaded as scrubbed copies: they can carry
+                # absolute rig paths (generation.json source dirs, record provenance) that must not reach the VM.
+                raw_bytes = real_path.read_bytes()
+                try:
+                    as_text = raw_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    as_text = None
+                if as_text is None:
+                    raise RefusalError(
+                        "UPLOAD_NON_UTF8_TEXT",
+                        f"{rel_posix!r} is not an image and not valid UTF-8, so it cannot be scrubbed of rig paths",
+                    )
+                else:
+                    cleaned_text, scrub_status = scrub_text_for_file(rel_posix, as_text)
+                    if scrub_status in ("json_error", "json_error_scrubbed"):
+                        raise RefusalError(
+                            "UPLOAD_SCRUB_INVALID_JSON",
+                            f"{rel_posix!r} is not valid JSON and a rig-path scrub cannot be verified; fix or remove it",
+                        )
+                    payload = cleaned_text.encode("utf-8")
+            if payload is not None:
+                size_up, fsha = len(payload), sha256_bytes(payload)
+            else:
+                size_up, fsha = real_path.stat().st_size, sha256_file(real_path)
             manifest_entries.append(
                 {
                     "path": rel_posix,
-                    "bytes": st.st_size,
+                    "bytes": size_up,
                     "sha256": fsha,
                 }
             )
             ti = tarfile.TarInfo(name=rel_posix)
-            ti.size = st.st_size
+            ti.size = size_up
             ti.mtime = 0
             ti.mode = 0o644
             ti.uid = 0
             ti.gid = 0
             ti.uname = ""
             ti.gname = ""
-            with real_path.open("rb") as fh:
-                tf.addfile(ti, fh)
+            if payload is not None:
+                tf.addfile(ti, io.BytesIO(payload))
+            else:
+                with real_path.open("rb") as fh:
+                    tf.addfile(ti, fh)
 
     staged_cap = stage_dir / "caption_config.json"
-    cap_bytes = json.dumps(cap_doc, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    cap_bytes = scrub_rig_paths(json.dumps(cap_doc, indent=2, sort_keys=True)).encode("utf-8") + b"\n"
     staged_cap.write_bytes(cap_bytes)
 
     uploaded_file_count = len(manifest_entries)
@@ -1077,6 +1542,48 @@ def _extract_expected_sibling_sha(sib: object) -> str | None:
     return None
 
 
+# The 16 files of the pinned Qwen/Qwen3-VL-8B-Instruct revision: 4 LFS safetensors shards (verified by LFS sha256)
+# and 12 plain git files (verified by git blob id). Any missing file refuses.
+PINNED_QWEN3_VL_FILES = frozenset(
+    {
+        ".gitattributes",
+        "README.md",
+        "chat_template.json",
+        "config.json",
+        "generation_config.json",
+        "merges.txt",
+        "model-00001-of-00004.safetensors",
+        "model-00002-of-00004.safetensors",
+        "model-00003-of-00004.safetensors",
+        "model-00004-of-00004.safetensors",
+        "model.safetensors.index.json",
+        "preprocessor_config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "video_preprocessor_config.json",
+        "vocab.json",
+    }
+)
+
+
+def _extract_expected_sibling_blob_id(sib: object) -> str | None:
+    blob_id = getattr(sib, "blob_id", None)
+    if isinstance(blob_id, str) and re.fullmatch(r"[0-9a-fA-F]{40}", blob_id):
+        return blob_id.lower()
+    return None
+
+
+def git_blob_sha1(path: pathlib.Path) -> str:
+    """git blob id: sha1 of the blob header plus content, streamed."""
+    p = pathlib.Path(path)
+    h = hashlib.sha1()
+    h.update(b"blob " + str(p.stat().st_size).encode("ascii") + b"\x00")
+    with p.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def cmd_download_weights(args: argparse.Namespace) -> int:
     state_dir = pathlib.Path(args.state_dir)
     step = "weight_download"
@@ -1194,6 +1701,7 @@ def cmd_download_weights(args: argparse.Namespace) -> int:
         raise RefusalError("WEIGHT_FILE_MISSING", "model_info returned zero sibling files", step=step)
 
     sha_verified_count = 0
+    blob_verified_count = 0
     for sib in siblings:
         rfilename = getattr(sib, "rfilename", None)
         if not isinstance(rfilename, str) or not rfilename:
@@ -1219,6 +1727,44 @@ def cmd_download_weights(args: argparse.Namespace) -> int:
                     step=step,
                 )
             sha_verified_count += 1
+        else:
+            expected_blob = _extract_expected_sibling_blob_id(sib)
+            if expected_blob is None:
+                raise RefusalError(
+                    "WEIGHT_BLOB_ID_MISSING",
+                    f"weight file {rfilename!r} has neither an LFS sha256 nor a git blob id to verify against",
+                    step=step,
+                )
+            actual_blob = git_blob_sha1(real_f)
+            if actual_blob != expected_blob:
+                raise RefusalError(
+                    "WEIGHT_BLOB_MISMATCH",
+                    f"weight file {rfilename!r} git blob id {actual_blob} != expected {expected_blob}",
+                    step=step,
+                )
+            blob_verified_count += 1
+
+    if args.repo_id == QWEN3_VL_REPO and args.revision == QWEN3_VL_REVISION:
+        present = {getattr(sib, "rfilename", None) for sib in siblings}
+        missing = sorted(PINNED_QWEN3_VL_FILES - present)
+        if missing:
+            raise RefusalError(
+                "WEIGHT_FILE_MISSING",
+                f"pinned revision lists {len(present)} files; missing {len(missing)}: {', '.join(missing)}",
+                step=step,
+            )
+        on_disk = {
+            f.relative_to(snapshot_dir).as_posix()
+            for f in snapshot_dir.rglob("*")
+            if (f.is_file() or f.is_symlink()) and ".cache" not in f.relative_to(snapshot_dir).parts
+        }
+        extra = sorted((present | on_disk) - PINNED_QWEN3_VL_FILES - {None})
+        if extra:
+            raise RefusalError(
+                "WEIGHT_UNEXPECTED_FILE",
+                f"pinned revision holds {len(extra)} file(s) beyond the 16 pinned names: {', '.join(extra)}",
+                step=step,
+            )
 
     try:
         snapshot_rel = snapshot_dir.resolve().relative_to(hf_home.resolve()).as_posix()
@@ -1228,6 +1774,7 @@ def cmd_download_weights(args: argparse.Namespace) -> int:
         "attempts": attempts,
         "download_bound_s": bound_s,
         "elapsed_s": round(total_elapsed, 4),
+        "blob_verified_count": blob_verified_count,
         "file_count": len(siblings),
         "hf_home_dir": hf_home.name,
         "local_disk_verified": True,
@@ -1686,6 +2233,25 @@ def cmd_run_compose_and_report(args: argparse.Namespace) -> int:
     return 0
 
 
+PRIVATE_IMAGE_BUNDLE_RECORD = "private_image_bundle_refusal.json"
+
+
+def _record_private_image_bundle_refusal(
+    out_dir: pathlib.Path, bundle_path: pathlib.Path, member: str, why: str
+) -> None:
+    """Keep a sha + size + refusal record for a bundle that carried an image; the launcher's staging clean
+    then deletes the bundle itself (it is the only copy of a private image left on the rig after a trip)."""
+    rec = {
+        "bundle_bytes": bundle_path.stat().st_size,
+        "bundle_name": bundle_path.name,
+        "bundle_sha256": sha256_file(bundle_path),
+        "code": "PRIVATE_IMAGE_IN_BUNDLE",
+        "member": member,
+        "why": why,
+    }
+    write_json_lf(out_dir / PRIVATE_IMAGE_BUNDLE_RECORD, rec)
+
+
 def cmd_extract_and_verify_outputs(args: argparse.Namespace) -> int:
     out_dir = pathlib.Path(args.out_dir).resolve()
     bundle_path = pathlib.Path(args.bundle_path).resolve()
@@ -1704,11 +2270,15 @@ def cmd_extract_and_verify_outputs(args: argparse.Namespace) -> int:
             with extracted_f.open("rb") as fh:
                 magic_mime = detect_image_magic_bytes(fh.read(64))
             if magic_mime is not None:
+                _record_private_image_bundle_refusal(out_dir, bundle_path, rel_member, f"raster image magic bytes ({magic_mime})")
                 raise RefusalError(
                     "PRIVATE_IMAGE_IN_BUNDLE",
                     f"downloaded bundle member {rel_member!r} contains raster image magic bytes ({magic_mime})",
                 )
             if extracted_f.suffix.lower() in IMAGE_EXTS:
+                _record_private_image_bundle_refusal(
+                    out_dir, bundle_path, rel_member, f"forbidden image extension {extracted_f.suffix.lower()!r}"
+                )
                 raise RefusalError(
                     "PRIVATE_IMAGE_IN_BUNDLE",
                     f"downloaded bundle member {rel_member!r} has forbidden image extension {extracted_f.suffix.lower()!r}",
@@ -2223,6 +2793,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_cln = sub.add_parser("vm-cleanup-workdir")
     p_cln.add_argument("--content-root", default="/content")
     p_cln.set_defaults(func=cmd_vm_cleanup_workdir)
+
+    p_chk = sub.add_parser("check-out-dir-scrubbed")
+    p_chk.add_argument("--out-dir", required=True)
+    p_chk.set_defaults(func=cmd_check_out_dir_scrubbed)
+
+    p_lo = sub.add_parser("scrub-leftovers")
+    p_lo.add_argument("dir")
+    p_lo.add_argument("--force", action="store_true")
+    p_lo.set_defaults(func=cmd_scrub_leftovers)
+
+    p_scr = sub.add_parser("scrub-kept-paths")
+    p_scr.add_argument("--out-dir", required=True)
+    p_scr.add_argument("--root", action="append", default=[], help="<abs path>=<placeholder>; repeatable")
+    p_scr.set_defaults(func=cmd_scrub_kept_paths)
 
     p_fin = sub.add_parser("finalize-window-record")
     p_fin.add_argument("--out-dir", required=True)
