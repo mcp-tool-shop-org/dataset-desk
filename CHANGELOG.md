@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - Weight download verifies all 16 files of the pinned revision: 4 LFS shards by sha256 and the 12 plain git files by
     git blob id (`WEIGHT_BLOB_MISMATCH`, `WEIGHT_BLOB_ID_MISSING`, `WEIGHT_FILE_MISSING`); the record carries
     `sha_verified_count` and `blob_verified_count`.
+  - Review round 2: a symlink or junction into `rejected/` (and `rejected.`, `REJECT~1` aliases) never uploads; the
+    vendored wall watcher signals only verified descendants (desk-local patch, `TRACKED_PID_SKIPPED` logged); the
+    watcher exit path scrubs after its last write and each launch sweeps earlier unscrubbed run folders; the scrub
+    is case-insensitive and covers spaces, `\wsl.localhost`, URL-encoded paths and suffixless files (skips logged in
+    `scrub_report.json`); records, sidecars, configs and wave metadata upload as scrubbed copies; an extra file in the
+    pinned weight revision refuses `WEIGHT_UNEXPECTED_FILE`.
   - Coverage unchanged (the lane scripts sit outside the measured `dataset_desk` package; floor 90 stays).
 
 ### Added

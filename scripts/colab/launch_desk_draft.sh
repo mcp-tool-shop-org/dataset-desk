@@ -2,7 +2,7 @@
 # Launch kit for dataset-desk Colab caption-drafting lane (Qwen3-VL-8B-Instruct on L4+, CPU-high-mem stub first).
 #
 # Vendored window library source: style-dataset-lab main @ df9a1b3be2f8729a57776253e9b0cb32b7f5299c
-#   - scripts/colab/colab_window.sh  sha256 3ad4cfb34de3d559f66976a8a2a5e73509b48a9b1be37ebf8bf82644cbaa8267
+#   - scripts/colab/colab_window.sh  sha256 e5a25bce118d60f95e50ae235ccc91101a348cbcb60699d6a4350d559e2d5752
 #       (+ L4 Standard-only patch: polyglot-mcp main 66eddd9 colab_window.sh:1219-1231 and :1267-1270; Publisher
 #        fleet ruling 2026-11-09. sdlab df9a1b3b predates it, so this copy differs from that export by that rule.)
 #   - scripts/colab/launch_guards.py sha256 4c0c0ab6410eaa511a808d00f09a09d42d5d5b7d0504d85d58cfe3c65baeb085
@@ -26,13 +26,13 @@ PINNED_PYTHON_VERSION="3.12.15"
 PINNED_QWEN3_VL_REPO="Qwen/Qwen3-VL-8B-Instruct"
 PINNED_QWEN3_VL_REVISION="0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
 
-PINNED_COLAB_WINDOW_SHA="3ad4cfb34de3d559f66976a8a2a5e73509b48a9b1be37ebf8bf82644cbaa8267"
+PINNED_COLAB_WINDOW_SHA="e5a25bce118d60f95e50ae235ccc91101a348cbcb60699d6a4350d559e2d5752"
 PINNED_LAUNCH_GUARDS_SHA="4c0c0ab6410eaa511a808d00f09a09d42d5d5b7d0504d85d58cfe3c65baeb085"
 PINNED_REMOTE_RUNNER_SHA="393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 PINNED_DESK_BUNDLE_NOW_SHA="b1e83c20f046716433d927fa442e43fe3e6c821c90adc84cd87cfccae9aed1ac"
-PINNED_DESK_DRAFT_HELPER_SHA="95f5b3d0a31a6ec6888d41f5365814f98eadfcb6d203aec4b40b8bed23690328"
+PINNED_DESK_DRAFT_HELPER_SHA="74b437a2c6ac5ec469b8683bb193e166b888dec27064235bab03adad5e3fb920"
 PINNED_DESK_LOCK_SHA="7d718664b0289b53532ff50541e63942166c1921a2f52cb0e48900958bf90510"
-PINNED_SELF_SHA="a17aa9ea1365b070ae4659d400a6e3648777ec7f38cac7ff55d1f058bd50ec45"
+PINNED_SELF_SHA="362a5c542e64c59651e3858515be4dcbee8ceb32d22369eadb14fcad5446d116"
 
 if pwd -W >/dev/null 2>&1; then
   export MSYS2_ARG_CONV_EXCL="/content"
@@ -525,6 +525,14 @@ desk_scrub_kept_paths() {
   "${PY_BIN}" "${HELPER_PY}" "${_scrub_args[@]}" >/dev/null 2>&1 || true
 }
 
+# desk_sweep_earlier_runs: a SIGKILL or power loss can skip an earlier run's exit scrub. At startup, scrub any
+# sibling run folder (a desk lane out dir: it holds window.json and remote_desk_draft.sh) with the generic patterns.
+desk_sweep_earlier_runs() {
+  [ -n "${OUT_DIR:-}" ] && [ -d "${OUT_DIR}" ] || return 0
+  [ -n "${PY_BIN:-}" ] && [ -f "${HELPER_PY:-}" ] || return 0
+  "${PY_BIN}" "${HELPER_PY}" sweep-unscrubbed --parent "$(dirname -- "${OUT_DIR}")" --exclude "${OUT_DIR}" >/dev/null 2>&1 || true
+}
+
 desk_pre_session_exit() {
   local rc=$?
   if [ -n "${TOKEN_DIR:-}" ]; then
@@ -536,6 +544,7 @@ desk_pre_session_exit() {
   exit "${rc}"
 }
 trap desk_pre_session_exit EXIT
+desk_sweep_earlier_runs
 trap 'exit 143' TERM INT
 
 colab_refuse_live_pin_overrides "${OUT_DIR}" "${TEST_MODE}" "${PIN_OVERRIDE_VARS[@]}"
@@ -1064,6 +1073,22 @@ desk_pid_is_our_descendant() {
   return 1
 }
 
+# desk_pid_verified_identity <pid>: the wall watcher verified this (pid, start time) as our descendant earlier
+# (.watcher_verified_pids.txt), so an orphaned child still counts but a recycled PID does not.
+desk_pid_verified_identity() {
+  local _vf="${OUT_DIR}/.watcher_verified_pids.txt"
+  [ -f "${_vf}" ] || return 1
+  local _fields="" _st="" _vp="" _vs=""
+  _fields="$(desk_pid_stat_fields "$1")" || return 1
+  _st="${_fields#* }"
+  while read -r _vp _vs || [ -n "${_vp}" ]; do
+    if [ "${_vp}" = "$1" ] && [ "${_vs}" = "${_st}" ]; then
+      return 0
+    fi
+  done < "${_vf}"
+  return 1
+}
+
 desk_kill_tracked_children() {
   if [ -f "${OUT_DIR}/.watcher_tracked_pids.txt" ]; then
     local _tpid=""
@@ -1071,7 +1096,14 @@ desk_kill_tracked_children() {
       _tpid="${_tpid//$'\r'/}"
       [ -n "${_tpid}" ] || continue
       [ "${_tpid}" = "${WALL_WATCHER_PID:-}" ] && continue
-      desk_pid_is_our_descendant "${_tpid}" || continue
+      if ! desk_pid_is_our_descendant "${_tpid}" && ! desk_pid_verified_identity "${_tpid}"; then
+        local _skip_fields=""
+        if _skip_fields="$(desk_pid_stat_fields "${_tpid}")"; then
+          printf 'TRACKED_PID_SKIPPED pid=%s ppid=%s start_ticks=%s (not a verified descendant of the launcher)\n' \
+            "${_tpid}" "${_skip_fields%% *}" "${_skip_fields#* }" >> "${OUT_DIR}/guards.log" 2>/dev/null || true
+        fi
+        continue
+      fi
       pkill -9 -P "${_tpid}" 2>/dev/null || true
       kill -9 "${_tpid}" 2>/dev/null || true
     done < "${OUT_DIR}/.watcher_tracked_pids.txt"
@@ -1140,7 +1172,7 @@ cleanup_on_exit() {
     kill -9 "${WALL_WATCHER_PID}" 2>/dev/null || true
     wait "${WALL_WATCHER_PID}" 2>/dev/null || true
   fi
-  rm -f "${OUT_DIR}/.watcher_tracked_pids.txt"
+  rm -f "${OUT_DIR}/.watcher_tracked_pids.txt" "${OUT_DIR}/.watcher_verified_pids.txt"
   desk_clean_rig_staging
 
   local closed_at
@@ -1200,6 +1232,8 @@ case "${OSTYPE:-}" in
         "train" "${SESSION}" "${CARD}" "${CAP}" "${WALL_S}" "${GRACE_S}" "${MARGIN}" \
         "${OPENED_AT}" "${SHAS_JSON}" || true
       desk_clean_rig_staging
+      # The watcher writes window.json, outcome, guards.log and stop.log after the launcher's own scrub.
+      desk_scrub_kept_paths
     ) &
     WALL_WATCHER_PID="$!"
     ;;

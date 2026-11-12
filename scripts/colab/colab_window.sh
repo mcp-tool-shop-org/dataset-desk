@@ -2871,6 +2871,70 @@ out_dir = Path(sys.argv[5])
 watcher_wait_p = out_dir / "watcher_wait.txt"
 tracked_p = out_dir / ".watcher_tracked_pids.txt"
 self_pid = os.getpid()
+# --- desk-local patch (dataset-desk, 2026-11-12): signal only our own descendants -----------------
+# A PID read from .watcher_tracked_pids.txt can be recycled over a multi-hour window. A tracked PID is
+# signalled only if it is alive and either (a) its (pid, start time) was verified earlier as a descendant of
+# the launcher (recorded in .watcher_verified_pids.txt), or (b) it is no older than the launcher and its
+# parent chain reaches the launcher (main_pid). Skipped live PIDs are logged to guards.log.
+def _stat_fields(pid):
+    try:
+        rest = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(") ", 1)[1].split()
+        return int(rest[1]), int(rest[19])
+    except Exception:
+        return None
+
+_verified_p = tracked_p.parent / ".watcher_verified_pids.txt"
+_verified = {}
+_skip_logged = set()
+if _verified_p.is_file():
+    for _ln in _verified_p.read_text(encoding="utf-8", errors="replace").splitlines():
+        _bits = _ln.split()
+        if len(_bits) == 2 and _bits[0].isdigit() and _bits[1].isdigit():
+            _verified[int(_bits[0])] = int(_bits[1])
+
+def mark_verified(pid):
+    f = _stat_fields(pid)
+    if f is None or _verified.get(pid) == f[1]:
+        return
+    _verified[pid] = f[1]
+    try:
+        with _verified_p.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(f"{pid} {f[1]}\n")
+    except OSError:
+        pass
+
+def is_our_descendant(pid):
+    cur = _stat_fields(pid)
+    if cur is None:
+        return False
+    if _verified.get(pid) == cur[1]:
+        return True
+    me = _stat_fields(main_pid)
+    ok = False
+    if me is not None and cur[1] >= me[1]:
+        node, hops = pid, 0
+        while hops < 64:
+            f = _stat_fields(node)
+            if f is None:
+                break
+            if f[0] == main_pid:
+                ok = True
+                break
+            if f[0] <= 1:
+                break
+            node, hops = f[0], hops + 1
+    if ok:
+        mark_verified(pid)
+        return True
+    if pid not in _skip_logged:
+        _skip_logged.add(pid)
+        try:
+            with (tracked_p.parent / "guards.log").open("a", encoding="utf-8", newline="\n") as fh:
+                fh.write(f"TRACKED_PID_SKIPPED pid={pid} ppid={cur[0]} start_ticks={cur[1]} (not a verified descendant of the launcher)\n")
+        except OSError:
+            pass
+    return False
+# --- end desk-local patch ---------------------------------------------------------------------------
 
 def stop_completed() -> bool:
     marker = f"session={session}"
@@ -2896,7 +2960,7 @@ def record_children(flush: bool = False) -> None:
                 line = line.strip()
                 if line.isdigit():
                     pid = int(line)
-                    if pid not in (main_pid, watcher_pid, self_pid):
+                    if pid not in (main_pid, watcher_pid, self_pid) and is_our_descendant(pid):
                         tracked_pids.add(pid)
         except OSError:
             pass
@@ -2910,6 +2974,7 @@ def record_children(flush: bool = False) -> None:
         seen.add(cur)
         if cur != main_pid:
             tracked_pids.add(cur)
+            mark_verified(cur)
         ch_file = Path(f"/proc/{cur}/task/{cur}/children")
         if ch_file.is_file():
             used_task_children = True
@@ -2938,6 +3003,7 @@ def record_children(flush: bool = False) -> None:
             seen.add(cur)
             if cur != main_pid:
                 tracked_pids.add(cur)
+                mark_verified(cur)
             stack.extend(children.get(cur, []))
     if tracked_pids and (flush or tracked_pids != last_written_pids):
         try:
@@ -2960,7 +3026,7 @@ def session_was_opened() -> bool:
 def kill_tracked() -> None:
     record_children(flush=True)
     for pid in sorted(tracked_pids, reverse=True):
-        if pid not in (main_pid, watcher_pid, self_pid):
+        if pid not in (main_pid, watcher_pid, self_pid) and is_our_descendant(pid):
             try:
                 os.kill(pid, signal.SIGKILL)
             except OSError:
@@ -2991,7 +3057,7 @@ PYEOF
 
   local wait_rc=0
   if [ "${pre_trip_rc}" -eq 0 ]; then
-    rm -f "${out_dir}/.watcher_tracked_pids.txt"
+    rm -f "${out_dir}/.watcher_tracked_pids.txt" "${out_dir}/.watcher_verified_pids.txt"
     return 0
   elif [ "${pre_trip_rc}" -eq 1 ]; then
     wait_rc=1
@@ -3017,6 +3083,70 @@ stop_reached_p = out_dir / "stop_reached.txt"
 watcher_wait_p = out_dir / "watcher_wait.txt"
 tracked_p = out_dir / ".watcher_tracked_pids.txt"
 self_pid = os.getpid()
+# --- desk-local patch (dataset-desk, 2026-11-12): signal only our own descendants -----------------
+# A PID read from .watcher_tracked_pids.txt can be recycled over a multi-hour window. A tracked PID is
+# signalled only if it is alive and either (a) its (pid, start time) was verified earlier as a descendant of
+# the launcher (recorded in .watcher_verified_pids.txt), or (b) it is no older than the launcher and its
+# parent chain reaches the launcher (main_pid). Skipped live PIDs are logged to guards.log.
+def _stat_fields(pid):
+    try:
+        rest = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(") ", 1)[1].split()
+        return int(rest[1]), int(rest[19])
+    except Exception:
+        return None
+
+_verified_p = tracked_p.parent / ".watcher_verified_pids.txt"
+_verified = {}
+_skip_logged = set()
+if _verified_p.is_file():
+    for _ln in _verified_p.read_text(encoding="utf-8", errors="replace").splitlines():
+        _bits = _ln.split()
+        if len(_bits) == 2 and _bits[0].isdigit() and _bits[1].isdigit():
+            _verified[int(_bits[0])] = int(_bits[1])
+
+def mark_verified(pid):
+    f = _stat_fields(pid)
+    if f is None or _verified.get(pid) == f[1]:
+        return
+    _verified[pid] = f[1]
+    try:
+        with _verified_p.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(f"{pid} {f[1]}\n")
+    except OSError:
+        pass
+
+def is_our_descendant(pid):
+    cur = _stat_fields(pid)
+    if cur is None:
+        return False
+    if _verified.get(pid) == cur[1]:
+        return True
+    me = _stat_fields(main_pid)
+    ok = False
+    if me is not None and cur[1] >= me[1]:
+        node, hops = pid, 0
+        while hops < 64:
+            f = _stat_fields(node)
+            if f is None:
+                break
+            if f[0] == main_pid:
+                ok = True
+                break
+            if f[0] <= 1:
+                break
+            node, hops = f[0], hops + 1
+    if ok:
+        mark_verified(pid)
+        return True
+    if pid not in _skip_logged:
+        _skip_logged.add(pid)
+        try:
+            with (tracked_p.parent / "guards.log").open("a", encoding="utf-8", newline="\n") as fh:
+                fh.write(f"TRACKED_PID_SKIPPED pid={pid} ppid={cur[0]} start_ticks={cur[1]} (not a verified descendant of the launcher)\n")
+        except OSError:
+            pass
+    return False
+# --- end desk-local patch ---------------------------------------------------------------------------
 
 def stop_completed() -> bool:
     marker = f"session={session}"
@@ -3041,7 +3171,7 @@ def record_children() -> None:
                 line = line.strip()
                 if line.isdigit():
                     pid = int(line)
-                    if pid not in (main_pid, watcher_pid, self_pid):
+                    if pid not in (main_pid, watcher_pid, self_pid) and is_our_descendant(pid):
                         tracked_pids.add(pid)
         except OSError:
             pass
@@ -3063,6 +3193,7 @@ def record_children() -> None:
         seen.add(cur)
         if cur != main_pid:
             tracked_pids.add(cur)
+            mark_verified(cur)
         stack.extend(children.get(cur, []))
     if tracked_pids:
         try:
@@ -3142,12 +3273,12 @@ watcher_wait_p.write_text("escalated_cleanup_overran\n", encoding="utf-8", newli
 sys.exit(1)
 PYEOF
   else
-    rm -f "${out_dir}/.watcher_tracked_pids.txt"
+    rm -f "${out_dir}/.watcher_tracked_pids.txt" "${out_dir}/.watcher_verified_pids.txt"
     return 0
   fi
 
   if [ "${wait_rc}" -ne 1 ] || grep -q "^STOP_COMPLETED .*session=${session}" "${out_dir}/stop.log" 2>/dev/null; then
-    rm -f "${out_dir}/.watcher_tracked_pids.txt"
+    rm -f "${out_dir}/.watcher_tracked_pids.txt" "${out_dir}/.watcher_verified_pids.txt"
     return 0
   fi
 
@@ -3164,11 +3295,75 @@ main_pid = int(sys.argv[1])
 watcher_pid = int(sys.argv[2])
 tracked_p = Path(sys.argv[3])
 self_pid = os.getpid()
+# --- desk-local patch (dataset-desk, 2026-11-12): signal only our own descendants -----------------
+# A PID read from .watcher_tracked_pids.txt can be recycled over a multi-hour window. A tracked PID is
+# signalled only if it is alive and either (a) its (pid, start time) was verified earlier as a descendant of
+# the launcher (recorded in .watcher_verified_pids.txt), or (b) it is no older than the launcher and its
+# parent chain reaches the launcher (main_pid). Skipped live PIDs are logged to guards.log.
+def _stat_fields(pid):
+    try:
+        rest = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(") ", 1)[1].split()
+        return int(rest[1]), int(rest[19])
+    except Exception:
+        return None
+
+_verified_p = tracked_p.parent / ".watcher_verified_pids.txt"
+_verified = {}
+_skip_logged = set()
+if _verified_p.is_file():
+    for _ln in _verified_p.read_text(encoding="utf-8", errors="replace").splitlines():
+        _bits = _ln.split()
+        if len(_bits) == 2 and _bits[0].isdigit() and _bits[1].isdigit():
+            _verified[int(_bits[0])] = int(_bits[1])
+
+def mark_verified(pid):
+    f = _stat_fields(pid)
+    if f is None or _verified.get(pid) == f[1]:
+        return
+    _verified[pid] = f[1]
+    try:
+        with _verified_p.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(f"{pid} {f[1]}\n")
+    except OSError:
+        pass
+
+def is_our_descendant(pid):
+    cur = _stat_fields(pid)
+    if cur is None:
+        return False
+    if _verified.get(pid) == cur[1]:
+        return True
+    me = _stat_fields(main_pid)
+    ok = False
+    if me is not None and cur[1] >= me[1]:
+        node, hops = pid, 0
+        while hops < 64:
+            f = _stat_fields(node)
+            if f is None:
+                break
+            if f[0] == main_pid:
+                ok = True
+                break
+            if f[0] <= 1:
+                break
+            node, hops = f[0], hops + 1
+    if ok:
+        mark_verified(pid)
+        return True
+    if pid not in _skip_logged:
+        _skip_logged.add(pid)
+        try:
+            with (tracked_p.parent / "guards.log").open("a", encoding="utf-8", newline="\n") as fh:
+                fh.write(f"TRACKED_PID_SKIPPED pid={pid} ppid={cur[0]} start_ticks={cur[1]} (not a verified descendant of the launcher)\n")
+        except OSError:
+            pass
+    return False
+# --- end desk-local patch ---------------------------------------------------------------------------
 roots: list[int] = []
 if tracked_p.is_file():
     for line in tracked_p.read_text(encoding="utf-8", errors="replace").splitlines():
         line = line.strip()
-        if line.isdigit():
+        if line.isdigit() and is_our_descendant(int(line)):
             roots.append(int(line))
 children: dict[int, list[int]] = {}
 for stat_p in Path("/proc").glob("[0-9]*/stat"):
@@ -3207,7 +3402,7 @@ PYEOF
     "${py_bin}" "${out_dir}" "${lane}" "${session}" "${card}" \
     "${cap}" "${wall_s}" "${grace_s}" "${margin}" \
     "${opened_at}" "${closed_at}" 137 "${shas_json}" || true
-  rm -f "${out_dir}/.watcher_tracked_pids.txt"
+  rm -f "${out_dir}/.watcher_tracked_pids.txt" "${out_dir}/.watcher_verified_pids.txt"
   colab_scrub_all_logs "${py_bin}" "${guards_py}" "${out_dir}" || true
 
   "${py_bin}" - "${main_pid}" "${watcher_pid}" << 'PYEOF'

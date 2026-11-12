@@ -226,6 +226,8 @@ def _payloads(revision: str, cfg: dict) -> dict[str, bytes]:
         files[f"model-0000{shard}-of-00004.safetensors"] = weights_bytes + bytes([shard])
     if cfg.get("weight_omit_vocab"):
         files.pop("vocab.json")
+    if cfg.get("weight_extra_file"):
+        files["extra.bin"] = b"extra"
     return files
 
 

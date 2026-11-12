@@ -14,8 +14,10 @@ import os
 import pathlib
 import re
 import shutil
+import sys
 import tarfile
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -35,7 +37,7 @@ DESK_DRAFT_HELPER_PY = COLAB_DIR / "desk_draft_helper.py"
 DESK_LOCK_FILE = COLAB_DIR / "locks" / "desk_draft.lock"
 
 EXPECTED_SDLAB_COMMIT = "df9a1b3be2f8729a57776253e9b0cb32b7f5299c"
-EXPECTED_COLAB_WINDOW_SHA = "3ad4cfb34de3d559f66976a8a2a5e73509b48a9b1be37ebf8bf82644cbaa8267"
+EXPECTED_COLAB_WINDOW_SHA = "e5a25bce118d60f95e50ae235ccc91101a348cbcb60699d6a4350d559e2d5752"
 EXPECTED_LAUNCH_GUARDS_SHA = "4c0c0ab6410eaa511a808d00f09a09d42d5d5b7d0504d85d58cfe3c65baeb085"
 EXPECTED_REMOTE_RUNNER_SHA = "393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 
@@ -1736,33 +1738,90 @@ class PreL4HardeningTests(ColabTempTestCase):
     @unittest.skipUnless(os.name == "posix", "needs /proc")
     def test_tracked_pid_kill_spares_unrelated_process_and_kills_own_descendants(self) -> None:
         import subprocess
+        import time
 
         text = LAUNCH_SH.read_text(encoding="utf-8")
         starts = [text.index(m) for m in ("desk_pid_stat_fields() {", "desk_kill_tracked_children() {") if m in text]
         funcs = text[min(starts) : text.index("cleanup_on_exit() {")]
         outd = self.tmp_path / "kill_out"
         outd.mkdir()
-        unrelated = subprocess.Popen(["sleep", "300"], start_new_session=True)
-        self.addCleanup(unrelated.wait)
-        self.addCleanup(unrelated.kill)
         driver = (
             "set -u\n"
             + funcs
             + f'OUT_DIR="{outd}"\n'
             + "sleep 300 & CHILD=$!\n"
             + "bash -c 'sleep 300 & echo $! > \"$0\"; wait' \"${OUT_DIR}/grandchild.pid\" & MID=$!\n"
-            + 'for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "${OUT_DIR}/grandchild.pid" ] && break; sleep 0.1; done\n'
+            + 'for _ in $(seq 1 100); do [ -s "${OUT_DIR}/grandchild.pid" ] && break; sleep 0.1; done\n'
             + 'GC="$(cat "${OUT_DIR}/grandchild.pid")"\n'
-            + f'printf "%s\\n%s\\n%s\\n999999\\n" "${{CHILD}}" "${{MID}}" "{unrelated.pid}" > "${{OUT_DIR}}/.watcher_tracked_pids.txt"\n'
+            + 'echo ready > "${OUT_DIR}/ready"\n'
+            + 'for _ in $(seq 1 200); do [ -s "${OUT_DIR}/unrelated.pid" ] && break; sleep 0.1; done\n'
+            + 'printf "%s\\n%s\\n%s\\n999999\\n" "${CHILD}" "${MID}" "$(cat "${OUT_DIR}/unrelated.pid")" > "${OUT_DIR}/.watcher_tracked_pids.txt"\n'
             + 'printf "%s\\n" "${GC}" >> "${OUT_DIR}/.watcher_tracked_pids.txt"\n'
             + "desk_kill_tracked_children\n"
             + "sleep 0.5\n"
             + 'for p in "${CHILD}" "${MID}" "${GC}"; do kill -0 "${p}" 2>/dev/null && echo "alive:${p}" || echo "dead:${p}"; done\n'
         )
-        res = subprocess.run(["bash", "-c", driver], capture_output=True, text=True, timeout=60, check=False)
-        self.assertEqual(res.returncode, 0, msg=res.stderr)
-        self.assertIsNone(unrelated.poll(), msg="an unrelated process holding a tracked PID was killed")
-        self.assertEqual(sum(1 for ln in res.stdout.splitlines() if ln.startswith("dead:")), 3, msg=res.stdout)
+        proc = subprocess.Popen(["bash", "-c", driver], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        unrelated = None
+        try:
+            for _ in range(200):
+                if (outd / "ready").exists():
+                    break
+                time.sleep(0.1)
+            # Started after the launcher, so only the ancestry walk (not the start-time check) can spare it.
+            unrelated = subprocess.Popen(["sleep", "300"], start_new_session=True)
+            (outd / "unrelated.pid").write_text(f"{unrelated.pid}\n", encoding="utf-8")
+            stdout, stderr = proc.communicate(timeout=60)
+            self.assertEqual(proc.returncode, 0, msg=stderr)
+            self.assertIsNone(unrelated.poll(), msg="an unrelated process holding a tracked PID was killed")
+            self.assertEqual(sum(1 for ln in stdout.splitlines() if ln.startswith("dead:")), 3, msg=stdout)
+            guards = (outd / "guards.log").read_text(encoding="utf-8")
+            self.assertIn(f"TRACKED_PID_SKIPPED pid={unrelated.pid} ", guards)
+        finally:
+            if unrelated is not None:
+                unrelated.kill()
+                unrelated.wait()
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+    @unittest.skipUnless(os.name == "posix", "needs /proc")
+    def test_vendored_watcher_guard_signals_only_verified_descendants(self) -> None:
+        import subprocess
+        import time
+
+        text = COLAB_WINDOW_SH.read_text(encoding="utf-8")
+        start = text.index("# --- desk-local patch (dataset-desk")
+        end = text.index("# --- end desk-local patch")
+        guard_src = text[start:end]
+        self.assertEqual(text.count("def is_our_descendant(pid):"), 3, msg="all three watcher snippets carry the guard")
+        outd = self.tmp_path / "watch_out"
+        outd.mkdir()
+        mid = subprocess.Popen(["bash", "-c", "sleep 300 & echo $! > \"$0\"; wait", str(outd / "gc.pid")])
+        unrelated = subprocess.Popen(["sleep", "300"], start_new_session=True)
+        try:
+            for _ in range(100):
+                if (outd / "gc.pid").exists() and (outd / "gc.pid").read_text().strip():
+                    break
+                time.sleep(0.1)
+            grandchild = int((outd / "gc.pid").read_text().strip())
+            from pathlib import Path
+
+            ns = {"Path": Path, "main_pid": mid.pid, "tracked_p": outd / ".watcher_tracked_pids.txt"}
+            exec(compile(guard_src, "guard", "exec"), ns)
+            self.assertTrue(ns["is_our_descendant"](grandchild))
+            self.assertFalse(ns["is_our_descendant"](unrelated.pid))
+            self.assertIn(f"pid={unrelated.pid} ", (outd / "guards.log").read_text(encoding="utf-8"))
+            # Identity is remembered: a verified child that is later orphaned still counts, a recycled PID does not.
+            self.assertIn(str(grandchild), (outd / ".watcher_verified_pids.txt").read_text(encoding="utf-8"))
+        finally:
+            for pr in (unrelated, mid):
+                pr.kill()
+                pr.wait()
+            try:
+                os.kill(int((outd / "gc.pid").read_text().strip()), 9)
+            except (OSError, ValueError):
+                pass
 
     # ---- fix 2: no absolute rig paths in any kept file ----
 
@@ -1804,6 +1863,78 @@ class PreL4HardeningTests(ColabTempTestCase):
         self.assertEqual(res.returncode, 0, msg=res.stderr)
         total += self._assert_no_rig_paths(out_d, "stub run")
         self.assertGreater(total, 20)
+
+    def test_scrub_covers_case_spaces_wsl_unc_url_encoding_and_suffixless_files(self) -> None:
+        helper = _load_module("desk_draft_helper_scrub2_test", DESK_DRAFT_HELPER_PY)
+        cases = [
+            "C:\\users\\mikey\\x",
+            "/mnt/c/users/mikey/x",
+            "C:\\Users\\John Smith\\x",
+            "/Users/John Smith/x",
+            "\\\\wsl.localhost\\Ubuntu\\home\\mikey\\x",
+            "\\\\wsl$\\Ubuntu\\home\\mikey",
+            "C%3A%5CUsers%5Cmikey%5Cx",
+            "%2Fhome%2Fmikey%2Fx",
+            "file:///C:/Users/mikey/x",
+        ]
+        for raw in cases:
+            cleaned = helper.scrub_rig_paths(f"see {raw} here")
+            self.assertNotRegex(cleaned, r"(?i)mikey|john|smith|ubuntu", msg=f"{raw!r} -> {cleaned!r}")
+        out_dir = self.tmp_path / "scrub_sfx"
+        out_dir.mkdir()
+        (out_dir / "noext").write_text("error at /home/mikey/x\n", encoding="utf-8")
+        for name in ("a.err", "a.out", "a.html", "a.ini", "a.cfg"):
+            (out_dir / name).write_text("path C:\\Users\\mikey\\z\n", encoding="utf-8")
+        (out_dir / "blob.bin").write_bytes(b"\x00\x01/home/mikey/x")
+        ns = mock.MagicMock(out_dir=str(out_dir), root=[])
+        self.assertEqual(helper.cmd_scrub_kept_paths(ns), 0)
+        for name in ("noext", "a.err", "a.out", "a.html", "a.ini", "a.cfg"):
+            self.assertNotIn("mikey", (out_dir / name).read_text(encoding="utf-8"), msg=name)
+        report = json.loads((out_dir / "scrub_report.json").read_text(encoding="utf-8"))
+        self.assertEqual(report["skipped"], ["blob.bin (binary)"])
+
+    def test_watcher_exit_path_scrubs_last_and_startup_sweeps_earlier_runs(self) -> None:
+        import subprocess
+
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        watcher = text[text.index("colab_run_wall_watcher \\") : text.index("WALL_WATCHER_PID=\"$!\"", text.index("colab_run_wall_watcher \\"))]
+        self.assertLess(watcher.index("desk_clean_rig_staging"), watcher.index("desk_scrub_kept_paths"))
+        self.assertIn("desk_sweep_earlier_runs", text)
+
+        # What the watcher writes after the launcher's own scrub: window.json, outcome, guards.log, stop.log.
+        out_dir = self.tmp_path / "watch_scrub" / "run_a"
+        out_dir.mkdir(parents=True)
+        for name, body in (
+            ("window.json", '{"refusal_why": "upload /home/mikey/p/x.png failed"}'),
+            ("outcome.draft.json", '{"why": "C:\\\\Users\\\\mikey\\\\p"}'),
+            ("guards.log", "WALL_WATCHER_ESCALATED /mnt/c/Users/mikey/p\n"),
+            ("stop.log", "stopped from /home/mikey\n"),
+        ):
+            (out_dir / name).write_text(body, encoding="utf-8")
+        funcs = text[text.index("desk_scrub_kept_paths() {") : text.index("# desk_sweep_earlier_runs")]
+        driver = (
+            f'OUT_DIR="{out_dir}"; PY_BIN="{sys.executable}"; HELPER_PY="{DESK_DRAFT_HELPER_PY}"\n'
+            + 'PROJECT_DIR=""; REPO_ROOT="/nonexistent-repo"\n'
+            + funcs
+            + "desk_scrub_kept_paths\n"
+        )
+        res = subprocess.run(["bash", "-c", driver], capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(res.returncode, 0, msg=res.stderr)
+        self._assert_no_rig_paths(out_dir, "watcher exit scrub")
+
+        # An earlier desk run folder left unscrubbed (SIGKILL) is swept by the next run's startup.
+        old_run = self.tmp_path / "watch_scrub" / "run_old"
+        old_run.mkdir()
+        (old_run / "window.json").write_text('{"why": "/home/mikey/x"}', encoding="utf-8")
+        (old_run / "remote_desk_draft.sh").write_text("echo /home/mikey\n", encoding="utf-8")
+        other = self.tmp_path / "watch_scrub" / "not_a_run"
+        other.mkdir()
+        (other / "notes.txt").write_text("/home/mikey/keep\n", encoding="utf-8")
+        helper = _load_module("desk_draft_helper_sweep_test", DESK_DRAFT_HELPER_PY)
+        ns = types.SimpleNamespace(parent=str(out_dir.parent), exclude=str(out_dir))
+        self.assertEqual(helper.cmd_sweep_unscrubbed(ns), 0)
+        self._assert_no_rig_paths(old_run, "startup sweep")
+        self.assertIn("/home/mikey/keep", (other / "notes.txt").read_text(encoding="utf-8"))
 
     def test_scrub_rig_paths_unit(self) -> None:
         helper = _load_module("desk_draft_helper_scrub_test", DESK_DRAFT_HELPER_PY)
@@ -1859,6 +1990,34 @@ class PreL4HardeningTests(ColabTempTestCase):
         rel2, _n = helper._collect_compose_upload_files(proj2, desk, description_gate)
         self.assertFalse(any("rejected" in r.lower() for r, _ in rel2), msg=[r for r, _ in rel2])
 
+    @unittest.skipUnless(hasattr(os, "symlink"), "needs symlinks")
+    def test_symlink_into_rejected_never_uploads_and_aliases_are_caught(self) -> None:
+        from dataset_desk import description_gate, desk
+
+        helper = _load_module("desk_draft_helper_symlink_test", DESK_DRAFT_HELPER_PY)
+        for alias in ("rejected.", "REJECTED", "Rejected ", "REJECT~1"):
+            self.assertTrue(helper.has_rejected_component(f"a/{alias}/b.png"), msg=alias)
+        self.assertFalse(helper.has_rejected_component("a/rejection/b.png"))
+
+        proj, _cfg = self.make_project("sym_src", flagged_count=1, unflagged_count=1)
+        (proj / "outputs" / "rejected").mkdir(parents=True)
+        shutil.copy2(proj / "outputs" / "wave-1" / "flagged_00.png", proj / "outputs" / "rejected" / "bad.png")
+        try:
+            os.symlink(proj / "outputs" / "rejected" / "bad.png", proj / "outputs" / "wave-1" / "linked.png")
+            os.symlink(proj / "outputs" / "rejected", proj / "outputs" / "wave-1" / "linkdir", target_is_directory=True)
+        except OSError:
+            self.skipTest("symlinks not permitted here")
+        for rec_id, asset in (("lnk_file", "outputs/wave-1/linked.png"), ("lnk_dir", "outputs/wave-1/linkdir/bad.png")):
+            (proj / "records" / f"{rec_id}.json").write_text(
+                json.dumps({"id": rec_id, "asset_path": asset, "judgment": {"status": "approved", "explanation": "x"}}),
+                encoding="utf-8",
+            )
+        rel_files, _n = helper._collect_compose_upload_files(proj, desk, description_gate)
+        rels = [r for r, _ in rel_files]
+        self.assertFalse(any("linked" in r or "linkdir" in r or "rejected" in r for r in rels), msg=rels)
+        for _r, real in rel_files:
+            self.assertNotIn("rejected", str(real.relative_to(proj.resolve())).lower())
+
     def test_non_image_asset_is_refused_and_avif_heic_are_detected(self) -> None:
         from dataset_desk import description_gate, desk
 
@@ -1871,6 +2030,30 @@ class PreL4HardeningTests(ColabTempTestCase):
         self.assertEqual(helper.detect_image_magic_bytes(b"\x00\x00\x00\x1cftypavif\x00\x00\x00\x00avifmif1"), "image/avif")
         self.assertEqual(helper.detect_image_magic_bytes(b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"), "image/heic")
         self.assertIsNone(helper.detect_image_magic_bytes(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00isom"))
+
+    def test_upload_tar_carries_scrubbed_copies_of_records_and_wave_metadata(self) -> None:
+        proj, cap_cfg = self.make_project("gen_src", flagged_count=1, unflagged_count=1)
+        gen = proj / "outputs" / "wave-1" / "generation.json"
+        gen.write_text(json.dumps({"output_dir": "/home/mikey/work/wave-1", "src": "C:\\Users\\mikey\\w"}), encoding="utf-8")
+        helper = _load_module("desk_draft_helper_gen_test", DESK_DRAFT_HELPER_PY)
+        out_dir = self.tmp_path / "gen_out"
+        out_dir.mkdir()
+        ns = mock.MagicMock(
+            repo_root=str(REPO_ROOT), project=str(proj), caption_config=str(cap_cfg), out_dir=str(out_dir),
+            isolate_user_config=True,
+        )
+        self.assertEqual(helper.cmd_preflight_project(ns), 0)
+        with tarfile.open(out_dir / "_rig_stage" / "project_input.tar") as tf:
+            member = tf.extractfile("outputs/wave-1/generation.json")
+            self.assertIsNotNone(member)
+            body = member.read().decode("utf-8")
+            png_member = tf.extractfile("outputs/wave-1/flagged_00.png")
+            png_head = png_member.read(8)
+        self.assertNotIn("mikey", body)
+        self.assertEqual(png_head, bytes([0x89]) + b"PNG" + bytes([0x0D, 0x0A, 0x1A, 0x0A]))
+        manifest = json.loads((out_dir / "project_manifest.json").read_text(encoding="utf-8"))
+        entry = next(e for e in manifest["files"] if e["path"] == "outputs/wave-1/generation.json")
+        self.assertEqual(entry["sha256"], hashlib.sha256(body.encode("utf-8")).hexdigest())
 
     # ---- fix 4: no image bundle left behind when the rig-side PRIVATE_IMAGE_IN_BUNDLE check fires ----
 
@@ -1950,6 +2133,16 @@ class PreL4HardeningTests(ColabTempTestCase):
         win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
         self.assertEqual(win["refusal_code"], "WEIGHT_FILE_MISSING")
         self.assertIn("vocab.json", str(win["why"]))
+
+    def test_extra_file_beyond_the_sixteen_pinned_refuses(self) -> None:
+        proj, cap_cfg = self.make_project("w6x_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("w6_extra", config={"weight_extra_file": True})
+        out_dir = self.tmp_path / "out_w6_extra"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir))
+        self.assertNotEqual(res.returncode, 0)
+        win = json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertEqual(win["refusal_code"], "WEIGHT_UNEXPECTED_FILE")
+        self.assertIn("extra.bin", str(win["why"]))
 
     def test_missing_pinned_weight_file_unit_checks(self) -> None:
         from types import SimpleNamespace

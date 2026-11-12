@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import io
 import json
 import os
 import pathlib
@@ -132,26 +133,60 @@ def is_image_file_by_magic(path: pathlib.Path) -> bool:
         return False
 
 
+_REJECTED_83_RE = re.compile(r"^reject~\d+$")
+
+
+def _is_rejected_component(part: str) -> bool:
+    # Windows ignores trailing dots and spaces ("rejected." is the directory "rejected") and may show a long
+    # name as an 8.3 short name ("REJECT~1"); both count as rejected.
+    norm = part.rstrip(". ").lower()
+    return norm == "rejected" or bool(_REJECTED_83_RE.match(norm))
+
+
 def has_rejected_component(rel_posix: str) -> bool:
-    """True when any component of a project-relative path is `rejected` (case-insensitive)."""
+    """True when any component of a project-relative path is `rejected` (case-insensitive, Windows aliases too)."""
     parts = [p for p in str(rel_posix).replace("\\", "/").split("/") if p]
-    return any(p.lower() == "rejected" for p in parts)
+    return any(_is_rejected_component(p) for p in parts)
+
+
+def path_is_rejected(proj_dir: pathlib.Path, rel: object) -> bool:
+    """True if `rel` names a path under `rejected/`, either as written or AFTER symlinks and junctions resolve."""
+    rel_s = str(rel or "").replace("\\", "/").strip("/")
+    if not rel_s:
+        return False
+    if has_rejected_component(rel_s):
+        return True
+    try:
+        real = (pathlib.Path(proj_dir) / rel_s).resolve()
+        real_rel = os.path.relpath(str(real), str(pathlib.Path(proj_dir).resolve())).replace("\\", "/")
+    except (OSError, ValueError):
+        return False
+    if real_rel.startswith(".."):
+        return False
+    return has_rejected_component(real_rel)
 
 
 # Kept-file path scrubbing (Publisher, 2026-11-12): nothing under the out dir may name a rig home, a Windows or
 # WSL user directory, a drive root, or the studio config path. Explicit roots (out dir, repo, project, home, the
 # user-config file) become named placeholders first; the generic patterns then catch whatever is left.
 RIG_PATH_PLACEHOLDER = "<rig>"
-_STUDIO_CONFIG_PATTERN = re.compile(r"[^\s\"'<>]*dataset-desk[\\/]+config\.json")
+_SEP = r"(?:\\\\|\\|/)+"
+_USER = r"[^\\/\"'\r\n:;,<>|]+"
+_STUDIO_CONFIG_PATTERN = re.compile(r"[^\s\"'<>]*dataset-desk[\\/]+config\.json", re.I)
 _RIG_PATH_PATTERNS = (
-    re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:(?:\\\\|\\|/)+Users(?:\\\\|\\|/)+[^\\/\s\"']+"),
-    re.compile(r"/mnt/[A-Za-z]/Users/[^/\s\"']+"),
-    re.compile(r"/home/[^/\s\"']+"),
-    re.compile(r"/Users/[^/\s\"']+"),
-    re.compile(r"(?<![A-Za-z0-9])/mnt/[A-Za-z](?=/)"),
+    # \\wsl.localhost\<distro>\... and \\wsl$\<distro>\...
+    re.compile(r"(?:\\{2,4}|//)wsl(?:\.localhost|\$)(?:\\{1,4}|/)+[^\\/\s\"']+(?:(?:\\{1,4}|/)+home(?:\\{1,4}|/)+[^\\/\s\"']+)?", re.I),
+    # URL-encoded forms: C%3A%5CUsers%5Cname, %2Fhome%2Fname, %2Fmnt%2Fc%2FUsers%2Fname
+    re.compile(r"[A-Za-z]%3A(?:%5C|%2F)+Users(?:%5C|%2F)+[^%\s\"'&/\\]+", re.I),
+    re.compile(r"%2Fmnt%2F[A-Za-z]%2FUsers%2F[^%\s\"'&/\\]+", re.I),
+    re.compile(r"%2F(?:home|Users)%2F[^%\s\"'&/\\]+", re.I),
+    re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:" + _SEP + r"Users" + _SEP + _USER, re.I),
+    re.compile(r"/mnt/[A-Za-z]/Users/" + _USER, re.I),
+    re.compile(r"/home/[^/\s\"']+", re.I),
+    re.compile(r"/Users/" + _USER, re.I),
+    re.compile(r"(?<![A-Za-z0-9])/mnt/[A-Za-z](?=/)", re.I),
     re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:(?=\\|/(?!/))"),
 )
-_SCRUB_SUFFIXES = {".log", ".json", ".jsonl", ".txt", ".sh", ".md", ".csv", ".yaml", ".yml", ".toml", ".py"}
 _SCRUB_MAX_BYTES = 64 * 1024 * 1024
 
 
@@ -175,6 +210,31 @@ def scrub_rig_paths(text: str, roots: list[tuple[str, str]] | None = None) -> st
     return out
 
 
+def _scrub_dir(out_dir: pathlib.Path, roots: list[tuple[str, str]]) -> dict:
+    scrubbed = 0
+    skipped: list[str] = []
+    for fpath in sorted(out_dir.rglob("*")):
+        try:
+            rel = fpath.relative_to(out_dir).as_posix()
+            if fpath.is_symlink() or not fpath.is_file() or rel == "scrub_report.json":
+                continue
+            if fpath.stat().st_size > _SCRUB_MAX_BYTES:
+                skipped.append(f"{rel} (over {_SCRUB_MAX_BYTES} bytes)")
+                continue
+            raw = fpath.read_bytes()
+            if b"\x00" in raw:
+                skipped.append(f"{rel} (binary)")
+                continue
+            text = raw.decode("utf-8", errors="replace")
+            cleaned = scrub_rig_paths(text, roots)
+            if cleaned != text:
+                fpath.write_text(cleaned, encoding="utf-8", newline="\n")
+                scrubbed += 1
+        except OSError as exc:
+            skipped.append(f"{fpath.name} (unreadable: {exc.__class__.__name__})")
+    return {"scrubbed_files": scrubbed, "skipped": skipped}
+
+
 def cmd_scrub_kept_paths(args: argparse.Namespace) -> int:
     out_dir = pathlib.Path(args.out_dir)
     if not out_dir.is_dir():
@@ -194,24 +254,33 @@ def cmd_scrub_kept_paths(args: argparse.Namespace) -> int:
     cfg_env = os.environ.get("DATASET_DESK_USER_CONFIG", "").strip()
     if cfg_env:
         roots.append((cfg_env, "<studio-config>"))
-    scrubbed = 0
-    for fpath in sorted(out_dir.rglob("*")):
+    report = _scrub_dir(out_dir, roots)
+    try:
+        write_json_lf(out_dir / "scrub_report.json", {"scrubbed_files": report["scrubbed_files"], "skipped": report["skipped"]})
+    except OSError:
+        pass
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
+def cmd_sweep_unscrubbed(args: argparse.Namespace) -> int:
+    """Scrub earlier desk-lane run folders (they hold window.json and remote_desk_draft.sh) next to this one."""
+    parent = pathlib.Path(args.parent)
+    exclude = pathlib.Path(args.exclude).resolve() if args.exclude else None
+    if not parent.is_dir():
+        return 0
+    swept = 0
+    for child in sorted(parent.iterdir())[:200]:
         try:
-            if not fpath.is_file() or fpath.is_symlink() or fpath.suffix.lower() not in _SCRUB_SUFFIXES:
+            if not child.is_dir() or child.is_symlink() or (exclude is not None and child.resolve() == exclude):
                 continue
-            if fpath.stat().st_size > _SCRUB_MAX_BYTES:
+            if not ((child / "window.json").is_file() and (child / "remote_desk_draft.sh").is_file()):
                 continue
-            raw = fpath.read_bytes()
-            if b"\x00" in raw:
-                continue
-            text = raw.decode("utf-8", errors="replace")
-            cleaned = scrub_rig_paths(text, roots)
-            if cleaned != text:
-                fpath.write_text(cleaned, encoding="utf-8", newline="\n")
-                scrubbed += 1
+            _scrub_dir(child, [])
+            swept += 1
         except OSError:
             continue
-    print(json.dumps({"scrubbed_files": scrubbed}, sort_keys=True))
+    print(json.dumps({"swept_run_dirs": swept}, sort_keys=True))
     return 0
 
 
@@ -460,7 +529,7 @@ def _collect_compose_upload_files(
         approved = [
             e
             for e in approved
-            if not has_rejected_component(str(e["record_file"])) and not has_rejected_component(str(e["asset_path"]))
+            if not path_is_rejected(proj_dir, e["record_file"]) and not path_is_rejected(proj_dir, e["asset_path"])
         ]
         if not approved:
             raise RefusalError("NO_APPROVED_RECORDS", f"--project {proj_dir.name!r} contains zero approved records")
@@ -501,8 +570,8 @@ def _collect_compose_upload_files(
             e
             for e in (gate_mod._extract_record_fields(r) for r in sc_scan.get("records", []))
             if e["status"] == "approved"
-            and not has_rejected_component(str(e["asset_path"]))
-            and not has_rejected_component(str(e.get("sidecar_file") or ""))
+            and not path_is_rejected(proj_dir, e["asset_path"])
+            and not path_is_rejected(proj_dir, e.get("sidecar_file"))
         ]
         if not approved_sc:
             raise RefusalError("NO_APPROVED_RECORDS", f"--project {proj_dir.name!r} contains zero paired sidecar records")
@@ -546,6 +615,12 @@ def _collect_compose_upload_files(
         real = _verify_inside_project(proj_dir, cand, label=norm_rel)
         if not real.is_file():
             raise RefusalError("PROJECT_FILE_MISSING", f"expected file missing at {norm_rel!r}")
+        # A symlink or junction whose target sits under rejected/ is rejected too (checked on the resolved path).
+        if path_is_rejected(proj_dir, norm_rel):
+            raise RefusalError(
+                "PRIVATE_IMAGE_ROUTE_FORBIDDEN",
+                f"project path {norm_rel!r} resolves into rejected/ and is never uploaded",
+            )
         # Only the approved assets are images; every other uploaded file is a record, sidecar, or config.
         if norm_rel in asset_rels:
             if not is_image_file_by_magic(real):
@@ -721,28 +796,43 @@ def cmd_preflight_project(args: argparse.Namespace) -> int:
 
     with tarfile.open(tar_path, "w", format=tarfile.PAX_FORMAT) as tf:
         for rel_posix, real_path in rel_files:
-            st = real_path.stat()
-            fsha = sha256_file(real_path)
+            payload: bytes | None = None
+            if not is_image_file_by_magic(real_path):
+                # Records, sidecars, configs and wave metadata are uploaded as scrubbed copies: they can carry
+                # absolute rig paths (generation.json source dirs, record provenance) that must not reach the VM.
+                raw_bytes = real_path.read_bytes()
+                try:
+                    as_text = raw_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    as_text = None
+                payload = raw_bytes if as_text is None else scrub_rig_paths(as_text).encode("utf-8")
+            if payload is not None:
+                size_up, fsha = len(payload), sha256_bytes(payload)
+            else:
+                size_up, fsha = real_path.stat().st_size, sha256_file(real_path)
             manifest_entries.append(
                 {
                     "path": rel_posix,
-                    "bytes": st.st_size,
+                    "bytes": size_up,
                     "sha256": fsha,
                 }
             )
             ti = tarfile.TarInfo(name=rel_posix)
-            ti.size = st.st_size
+            ti.size = size_up
             ti.mtime = 0
             ti.mode = 0o644
             ti.uid = 0
             ti.gid = 0
             ti.uname = ""
             ti.gname = ""
-            with real_path.open("rb") as fh:
-                tf.addfile(ti, fh)
+            if payload is not None:
+                tf.addfile(ti, io.BytesIO(payload))
+            else:
+                with real_path.open("rb") as fh:
+                    tf.addfile(ti, fh)
 
     staged_cap = stage_dir / "caption_config.json"
-    cap_bytes = json.dumps(cap_doc, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    cap_bytes = scrub_rig_paths(json.dumps(cap_doc, indent=2, sort_keys=True)).encode("utf-8") + b"\n"
     staged_cap.write_bytes(cap_bytes)
 
     uploaded_file_count = len(manifest_entries)
@@ -1422,6 +1512,18 @@ def cmd_download_weights(args: argparse.Namespace) -> int:
             raise RefusalError(
                 "WEIGHT_FILE_MISSING",
                 f"pinned revision lists {len(present)} files; missing {len(missing)}: {', '.join(missing)}",
+                step=step,
+            )
+        on_disk = {
+            f.relative_to(snapshot_dir).as_posix()
+            for f in snapshot_dir.rglob("*")
+            if (f.is_file() or f.is_symlink()) and ".cache" not in f.relative_to(snapshot_dir).parts
+        }
+        extra = sorted((present | on_disk) - PINNED_QWEN3_VL_FILES - {None})
+        if extra:
+            raise RefusalError(
+                "WEIGHT_UNEXPECTED_FILE",
+                f"pinned revision holds {len(extra)} file(s) beyond the 16 pinned names: {', '.join(extra)}",
                 step=step,
             )
 
@@ -2452,6 +2554,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_cln = sub.add_parser("vm-cleanup-workdir")
     p_cln.add_argument("--content-root", default="/content")
     p_cln.set_defaults(func=cmd_vm_cleanup_workdir)
+
+    p_sw = sub.add_parser("sweep-unscrubbed")
+    p_sw.add_argument("--parent", required=True)
+    p_sw.add_argument("--exclude", default="")
+    p_sw.set_defaults(func=cmd_sweep_unscrubbed)
 
     p_scr = sub.add_parser("scrub-kept-paths")
     p_scr.add_argument("--out-dir", required=True)
