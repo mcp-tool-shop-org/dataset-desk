@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     first counted read must be pre+1 else `RATE_UNATTRIBUTABLE`; GPU spend never comes from the shared account
     balance (`spend_basis`, `account_balance_drop`, `account_shared`, `pre_open_assignments`,
     `spend_ccu_at_priced_rate` in window.json).
+  - Review round 3: the scrub can no longer corrupt JSON (home pattern stops at a backslash; `.json`/`.jsonl` are
+    re-parsed, redone on decoded values if needed, else the original is kept or the upload refused
+    `UPLOAD_SCRUB_INVALID_JSON`); scrub writes are atomic and skip non-UTF-8 files; the watcher subshell scrubs only on
+    escalation; hard-linked image uploads refuse `PROJECT_ASSET_HARDLINKED`; `path_is_rejected` fails closed.
   - Coverage unchanged (the lane scripts sit outside the measured `dataset_desk` package; floor 90 stays).
 
 ### Added

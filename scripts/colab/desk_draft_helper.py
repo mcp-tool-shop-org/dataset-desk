@@ -159,9 +159,11 @@ def path_is_rejected(proj_dir: pathlib.Path, rel: object) -> bool:
     try:
         real = (pathlib.Path(proj_dir) / rel_s).resolve()
         real_rel = os.path.relpath(str(real), str(pathlib.Path(proj_dir).resolve())).replace("\\", "/")
-    except (OSError, ValueError):
-        return False
-    if real_rel.startswith(".."):
+    except (OSError, ValueError) as exc:
+        # Fail closed: a path that cannot be resolved is treated as rejected and never uploads.
+        print(f"REJECTED_PATH_CHECK_FAILED {rel_s!r}: {exc.__class__.__name__}", file=sys.stderr)
+        return True
+    if real_rel == ".." or real_rel.startswith("../"):
         return False
     return has_rejected_component(real_rel)
 
@@ -182,7 +184,7 @@ _RIG_PATH_PATTERNS = (
     re.compile(r"%2F(?:home|Users)%2F[^%\s\"'&/\\]+", re.I),
     re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:" + _SEP + r"Users" + _SEP + _USER, re.I),
     re.compile(r"/mnt/[A-Za-z]/Users/" + _USER, re.I),
-    re.compile(r"/home/[^/\s\"']+", re.I),
+    re.compile(r"/home/[^/\\\s\"']+", re.I),
     re.compile(r"/Users/" + _USER, re.I),
     re.compile(r"(?<![A-Za-z0-9])/mnt/[A-Za-z](?=/)", re.I),
     re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:(?=\\|/(?!/))"),
@@ -210,13 +212,79 @@ def scrub_rig_paths(text: str, roots: list[tuple[str, str]] | None = None) -> st
     return out
 
 
+def _scrub_json_values(node, roots):
+    if isinstance(node, str):
+        return scrub_rig_paths(node, roots)
+    if isinstance(node, list):
+        return [_scrub_json_values(v, roots) for v in node]
+    if isinstance(node, dict):
+        return {scrub_rig_paths(str(k), roots): _scrub_json_values(v, roots) for k, v in node.items()}
+    return node
+
+
+def _json_text_ok(text: str, jsonl: bool) -> bool:
+    try:
+        if jsonl:
+            for ln in text.splitlines():
+                if ln.strip():
+                    json.loads(ln)
+        else:
+            json.loads(text)
+        return True
+    except ValueError:
+        return False
+
+
+def scrub_text_for_file(name: str, text: str, roots: list[tuple[str, str]] | None = None) -> tuple[str, str]:
+    """Scrub `text` of the file `name`. Returns (cleaned, status); status is ok, json_fallback or json_error.
+
+    A scrub must never turn valid JSON into invalid JSON. If the regex scrub breaks a parsable .json/.jsonl, redo it
+    on the decoded string values; if that fails too, return the ORIGINAL text with status json_error."""
+    cleaned = scrub_rig_paths(text, roots)
+    suffix = pathlib.PurePosixPath(name).suffix.lower()
+    if suffix not in (".json", ".jsonl") or cleaned == text:
+        return cleaned, "ok"
+    jsonl = suffix == ".jsonl"
+    if _json_text_ok(cleaned, jsonl):
+        return cleaned, "ok"
+    if not _json_text_ok(text, jsonl):
+        return text, "json_error"
+    try:
+        if jsonl:
+            lines = [json.dumps(_scrub_json_values(json.loads(ln), roots), ensure_ascii=False) for ln in text.splitlines() if ln.strip()]
+            redone = "\n".join(lines) + "\n"
+        else:
+            redone = json.dumps(_scrub_json_values(json.loads(text), roots), ensure_ascii=False, indent=2) + "\n"
+    except ValueError:
+        return text, "json_error"
+    return redone, "json_fallback"
+
+
+def _atomic_write_text(path: pathlib.Path, text: str) -> None:
+    """Write via a temp file in the same directory and rename, so a kill cannot leave a truncated file."""
+    tmp = path.with_name(f".{path.name}.scrub_tmp_{os.getpid()}")
+    try:
+        with tmp.open("w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
 def _scrub_dir(out_dir: pathlib.Path, roots: list[tuple[str, str]]) -> dict:
     scrubbed = 0
     skipped: list[str] = []
+    errors: list[str] = []
     for fpath in sorted(out_dir.rglob("*")):
         try:
             rel = fpath.relative_to(out_dir).as_posix()
-            if fpath.is_symlink() or not fpath.is_file() or rel == "scrub_report.json":
+            if fpath.is_symlink() or not fpath.is_file() or rel == "scrub_report.json" or ".scrub_tmp_" in fpath.name:
                 continue
             if fpath.stat().st_size > _SCRUB_MAX_BYTES:
                 skipped.append(f"{rel} (over {_SCRUB_MAX_BYTES} bytes)")
@@ -225,14 +293,22 @@ def _scrub_dir(out_dir: pathlib.Path, roots: list[tuple[str, str]]) -> dict:
             if b"\x00" in raw:
                 skipped.append(f"{rel} (binary)")
                 continue
-            text = raw.decode("utf-8", errors="replace")
-            cleaned = scrub_rig_paths(text, roots)
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                # Decoding with replacement would write U+FFFD into the file for good.
+                skipped.append(f"{rel} (not utf-8)")
+                continue
+            cleaned, status = scrub_text_for_file(rel, text, roots)
+            if status == "json_error":
+                errors.append(f"{rel} (scrub would break the JSON; original kept)")
+                continue
             if cleaned != text:
-                fpath.write_text(cleaned, encoding="utf-8", newline="\n")
+                _atomic_write_text(fpath, cleaned)
                 scrubbed += 1
         except OSError as exc:
             skipped.append(f"{fpath.name} (unreadable: {exc.__class__.__name__})")
-    return {"scrubbed_files": scrubbed, "skipped": skipped}
+    return {"scrubbed_files": scrubbed, "skipped": skipped, "scrub_errors": errors}
 
 
 def cmd_scrub_kept_paths(args: argparse.Namespace) -> int:
@@ -256,7 +332,10 @@ def cmd_scrub_kept_paths(args: argparse.Namespace) -> int:
         roots.append((cfg_env, "<studio-config>"))
     report = _scrub_dir(out_dir, roots)
     try:
-        write_json_lf(out_dir / "scrub_report.json", {"scrubbed_files": report["scrubbed_files"], "skipped": report["skipped"]})
+        write_json_lf(
+            out_dir / "scrub_report.json",
+            {"scrub_errors": report["scrub_errors"], "scrubbed_files": report["scrubbed_files"], "skipped": report["skipped"]},
+        )
     except OSError:
         pass
     print(json.dumps(report, sort_keys=True))
@@ -270,7 +349,11 @@ def cmd_sweep_unscrubbed(args: argparse.Namespace) -> int:
     if not parent.is_dir():
         return 0
     swept = 0
-    for child in sorted(parent.iterdir())[:200]:
+    children = sorted(parent.iterdir())
+    if len(children) > 200 and exclude is not None and exclude.is_dir():
+        with (exclude / "guards.log").open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(f"SWEEP_LIMIT_REACHED parent holds {len(children)} entries; only the first 200 were checked\n")
+    for child in children[:200]:
         try:
             if not child.is_dir() or child.is_symlink() or (exclude is not None and child.resolve() == exclude):
                 continue
@@ -625,6 +708,12 @@ def _collect_compose_upload_files(
         if norm_rel in asset_rels:
             if not is_image_file_by_magic(real):
                 raise RefusalError("PROJECT_ASSET_NOT_IMAGE", f"upload asset {norm_rel!r} is not an image (magic bytes)")
+            if real.stat().st_nlink > 1:
+                # A hard link cannot be traced to its other names (one may sit under rejected/): copy the file instead.
+                raise RefusalError(
+                    "PROJECT_ASSET_HARDLINKED",
+                    f"upload asset {norm_rel!r} has {real.stat().st_nlink} hard links; copy it to a plain file",
+                )
         elif is_image_file_by_magic(real):
             raise RefusalError(
                 "PRIVATE_IMAGE_ROUTE_FORBIDDEN",
@@ -805,7 +894,16 @@ def cmd_preflight_project(args: argparse.Namespace) -> int:
                     as_text = raw_bytes.decode("utf-8")
                 except UnicodeDecodeError:
                     as_text = None
-                payload = raw_bytes if as_text is None else scrub_rig_paths(as_text).encode("utf-8")
+                if as_text is None:
+                    payload = raw_bytes
+                else:
+                    cleaned_text, scrub_status = scrub_text_for_file(rel_posix, as_text)
+                    if scrub_status == "json_error":
+                        raise RefusalError(
+                            "UPLOAD_SCRUB_INVALID_JSON",
+                            f"{rel_posix!r} is not valid JSON and a rig-path scrub cannot be verified; fix or remove it",
+                        )
+                    payload = cleaned_text.encode("utf-8")
             if payload is not None:
                 size_up, fsha = len(payload), sha256_bytes(payload)
             else:

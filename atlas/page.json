@@ -21,7 +21,7 @@
   "changes": {
     "fileCounts": {
       "added": 0,
-      "changed": 6,
+      "changed": 4,
       "moved": 0,
       "parts": 3,
       "removed": 0
@@ -29,13 +29,13 @@
     "items": [
       {
         "kind": "counts",
-        "sentence": "Nothing structural changed since 2026-11-12; 6 files changed content.",
+        "sentence": "Nothing structural changed since 2026-11-12; 4 files changed content.",
         "subjects": []
       }
     ],
     "since": {
-      "commit": "b43a048566a37a3e169171094d030f456b9a04b9",
-      "generatedAt": "2026-11-12T18:38:33.850Z"
+      "commit": "2220dec1268b93e38d1fb7517373f23d19409445",
+      "generatedAt": "2026-11-12T19:03:25.119Z"
     },
     "unchanged": true
   },
@@ -44,7 +44,7 @@
     "Window: 180 days; a pair counts from 3 shared commits, since the window holds fewer than 30 qualifying commits."
   ],
   "changesTogetherWithTests": 0,
-  "commit": "2220dec1268b93e38d1fb7517373f23d19409445",
+  "commit": "97d36abcd476fd1f578d9647d67d4f27e0af28ec",
   "defaultBranch": "main",
   "derived": "6 parts, mostly Python (20 files), shell (3), CSS (2), TypeScript (2), Astro (1) and JavaScript (1). Work enters through 4 doors; the busiest is CI, which reaches 4 parts. It publishes to PyPI. It deploys a site to GitHub Pages. People run dataset-desk.",
   "doors": [
@@ -192,7 +192,7 @@
   "edges": [],
   "engine": "1.26.0",
   "generated": [],
-  "generatedAt": "2026-11-12T19:03:25.119Z",
+  "generatedAt": "2026-11-12T19:31:01.208Z",
   "limits": [
     "3 imports could not be resolved: `scripts/colab/desk_bundle_now.py` imports a path built at run time; `tests/test_colab_draft_lane.py` imports a path built at run time; `tests/test_training_captions.py` imports a path built at run time.",
     "6 writes and 7 reads use paths built at run time and are not named here.",

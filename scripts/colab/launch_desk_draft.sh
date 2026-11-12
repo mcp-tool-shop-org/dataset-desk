@@ -32,9 +32,9 @@ PINNED_COLAB_WINDOW_SHA="415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725
 PINNED_LAUNCH_GUARDS_SHA="2998b4f8e3aea3aea2ecc9f779c743b4b44824b30e7ff55fb1da782d7a416c69"
 PINNED_REMOTE_RUNNER_SHA="393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 PINNED_DESK_BUNDLE_NOW_SHA="b1e83c20f046716433d927fa442e43fe3e6c821c90adc84cd87cfccae9aed1ac"
-PINNED_DESK_DRAFT_HELPER_SHA="74b437a2c6ac5ec469b8683bb193e166b888dec27064235bab03adad5e3fb920"
+PINNED_DESK_DRAFT_HELPER_SHA="784471c37c9a1e93f27330ec5abe60b9ede8c328be4ac176f24f1eb1a734d311"
 PINNED_DESK_LOCK_SHA="7d718664b0289b53532ff50541e63942166c1921a2f52cb0e48900958bf90510"
-PINNED_SELF_SHA="3ac166b40c8a4f99cb3eb584345d25f29f2721309b7ecd4ee4509e5312f8f682"
+PINNED_SELF_SHA="e961f4c2352d83589e4ee27a34b11728d79f83a7a433cea63ba94e939c959fbf"
 
 if pwd -W >/dev/null 2>&1; then
   export MSYS2_ARG_CONV_EXCL="/content"
@@ -1237,8 +1237,11 @@ case "${OSTYPE:-}" in
         "train" "${SESSION}" "${CARD}" "${CAP}" "${WALL_S}" "${GRACE_S}" "${MARGIN}" \
         "${OPENED_AT}" "${SHAS_JSON}" || true
       desk_clean_rig_staging
-      # The watcher writes window.json, outcome, guards.log and stop.log after the launcher's own scrub.
-      desk_scrub_kept_paths
+      # Only the escalation path: the watcher writes window.json, outcome, guards.log and stop.log after the
+      # launcher's own scrub. On a normal exit (STOP_COMPLETED) the launcher is still writing and scrubs itself.
+      if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
+        desk_scrub_kept_paths
+      fi
     ) &
     WALL_WATCHER_PID="$!"
     ;;

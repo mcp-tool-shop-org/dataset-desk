@@ -2329,6 +2329,94 @@ class PreL4HardeningTests(ColabTempTestCase):
             self.assertFalse((out / "session_open_started.txt").exists(), name)
         self.assertNotIn("new", [c["subcmd"] for c in env.colab_calls()])
 
+    # ---- review round 3: JSON-safe scrub, normal-exit watcher, edge cases ----
+
+    def test_scrub_keeps_json_and_jsonl_valid_around_escaped_quotes(self) -> None:
+        helper = _load_module("desk_draft_helper_json_test", DESK_DRAFT_HELPER_PY)
+        doc = {"m": 'HOME="/home/bob"', "w": 'C:\\Users\\bob\\x', "u": "/Users/Jane Doe/p", "n": ["/mnt/c/Users/bob/z"]}
+        text = json.dumps(doc)
+        cleaned, status = helper.scrub_text_for_file("a.json", text)
+        self.assertEqual(status, "ok")
+        parsed = json.loads(cleaned)
+        self.assertNotRegex(json.dumps(parsed), r"(?i)bob|jane")
+        jl = "\n".join(json.dumps(doc) for _ in range(3)) + "\n"
+        cleaned_jl, status_jl = helper.scrub_text_for_file("a.jsonl", jl)
+        self.assertEqual(status_jl, "ok")
+        self.assertEqual(len([json.loads(ln) for ln in cleaned_jl.splitlines()]), 3)
+        # A scrub that would break parsable JSON falls back to the decoded values; unparsable JSON keeps its original.
+        self.assertEqual(helper.scrub_text_for_file("bad.json", '{"a": "/home/bob", ')[1], "json_error")
+        out_dir = self.tmp_path / "json_scrub"
+        out_dir.mkdir()
+        (out_dir / "window.json").write_text(text, encoding="utf-8")
+        (out_dir / "bad.json").write_text('{"a": "/home/bob", ', encoding="utf-8")
+        (out_dir / "latin.txt").write_bytes("caf\xe9 /home/bob".encode("latin-1"))
+        rep = helper._scrub_dir(out_dir, [])
+        json.loads((out_dir / "window.json").read_text(encoding="utf-8"))
+        self.assertIn("/home/bob", (out_dir / "bad.json").read_text(encoding="utf-8"))
+        self.assertEqual(rep["scrub_errors"], ["bad.json (scrub would break the JSON; original kept)"])
+        self.assertEqual((out_dir / "latin.txt").read_bytes(), "caf\xe9 /home/bob".encode("latin-1"))
+        self.assertIn("latin.txt (not utf-8)", rep["skipped"])
+        self.assertEqual([f.name for f in out_dir.iterdir() if ".scrub_tmp_" in f.name], [])
+
+    def test_upload_refuses_json_the_scrub_cannot_verify_and_hard_linked_images(self) -> None:
+        from dataset_desk import description_gate, desk
+
+        helper = _load_module("desk_draft_helper_edge_test", DESK_DRAFT_HELPER_PY)
+        proj, cap_cfg = self.make_project("edge_src", flagged_count=1, unflagged_count=1)
+        out_dir = self.tmp_path / "edge_out"
+        out_dir.mkdir()
+        ns = types.SimpleNamespace(
+            repo_root=str(REPO_ROOT), project=str(proj), caption_config=str(cap_cfg), out_dir=str(out_dir), isolate_user_config=True
+        )
+        (proj / "outputs" / "wave-1" / "generation.json").write_text('{"a": "/home/bob", ', encoding="utf-8")
+        with self.assertRaises(helper.RefusalError) as ctx:
+            helper.cmd_preflight_project(ns)
+        self.assertEqual(ctx.exception.code, "UPLOAD_SCRUB_INVALID_JSON")
+        (proj / "outputs" / "wave-1" / "generation.json").unlink()
+        img = proj / "outputs" / "wave-1" / "flagged_00.png"
+        try:
+            os.link(img, proj / "outputs" / "wave-1" / "twin.png")
+        except OSError:
+            self.skipTest("hard links not permitted here")
+        with self.assertRaises(helper.RefusalError) as ctx2:
+            helper._collect_compose_upload_files(proj, desk, description_gate)
+        self.assertEqual(ctx2.exception.code, "PROJECT_ASSET_HARDLINKED")
+
+    def test_path_is_rejected_dotdot_name_and_fail_closed(self) -> None:
+        helper = _load_module("desk_draft_helper_pr_test", DESK_DRAFT_HELPER_PY)
+        proj = self.tmp_path / "pr_proj"
+        (proj / "..old").mkdir(parents=True)
+        (proj / "..old" / "a.png").write_bytes(b"x")
+        self.assertFalse(helper.path_is_rejected(proj, "..old/a.png"))
+        with mock.patch.object(pathlib.Path, "resolve", side_effect=OSError("boom")):
+            self.assertTrue(helper.path_is_rejected(proj, "keep/a.png"))
+
+    def test_sweep_logs_when_it_stops_at_the_entry_limit(self) -> None:
+        helper = _load_module("desk_draft_helper_sweep2_test", DESK_DRAFT_HELPER_PY)
+        parent = self.tmp_path / "many"
+        parent.mkdir()
+        for i in range(205):
+            (parent / f"d{i:03d}").mkdir()
+        mine = parent / "zz_mine"
+        mine.mkdir()
+        ns = types.SimpleNamespace(parent=str(parent), exclude=str(mine))
+        self.assertEqual(helper.cmd_sweep_unscrubbed(ns), 0)
+        self.assertIn("SWEEP_LIMIT_REACHED", (mine / "guards.log").read_text(encoding="utf-8"))
+
+    def test_watcher_subshell_scrubs_only_on_escalation_and_a_normal_exit_keeps_closing_evidence(self) -> None:
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        a = text.index("colab_run_wall_watcher \\")
+        watcher = text[a : text.index('WALL_WATCHER_PID="$!"', a)]
+        guard = watcher.index('watcher_escalated.txt')
+        self.assertLess(guard, watcher.index("desk_scrub_kept_paths"))
+        proj, cap_cfg = self.make_project("norm_src", flagged_count=2, unflagged_count=1)
+        env = self.make_env("norm_env")
+        out_dir = self.tmp_path / "out_norm"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir))
+        self.assertEqual(res.returncode, 0, msg=res.stderr[-800:])
+        self.assertIn("No active sessions.", (out_dir / "colab.log").read_text(encoding="utf-8"))
+        self.assertIn("STOP_COMPLETED", (out_dir / "stop.log").read_text(encoding="utf-8") + (out_dir / "guards.log").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
