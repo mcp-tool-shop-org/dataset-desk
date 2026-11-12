@@ -2474,7 +2474,7 @@ class PreL4HardeningTests(ColabTempTestCase):
 
     # ---- review round 5: fail-closed marker, per-line JSONL, per-file token scrub ----
 
-    def test_scrub_pending_folder_is_swept_refused_by_the_guard_and_kept_on_error(self) -> None:
+    def test_scrub_pending_folder_is_refused_by_the_guard_cleaned_by_scrub_leftovers_and_kept_on_error(self) -> None:
         import subprocess
 
         helper = _load_module("desk_draft_helper_pending_test", DESK_DRAFT_HELPER_PY)
@@ -2598,7 +2598,7 @@ class PreL4HardeningTests(ColabTempTestCase):
 
     def test_launcher_takes_the_run_lock_and_never_sweeps(self) -> None:
         text = LAUNCH_SH.read_text(encoding="utf-8")
-        self.assertIn('exec 8>"${OUT_DIR}/.run.lock"', text)
+        self.assertIn('exec 8>>"${OUT_DIR}/.run.lock"', text)
         self.assertIn("flock -n 8", text)
         self.assertNotIn("sweep", text.lower())
         proj, cap_cfg = self.make_project("lock_src", flagged_count=1, unflagged_count=1)
@@ -2648,6 +2648,69 @@ class PreL4HardeningTests(ColabTempTestCase):
         esc = json.dumps({"access_token": 'a"b', "x": 1})
         out = guards.scrub_colab_tokens(esc)
         self.assertEqual(json.loads(out), {"access_token": "[REDACTED]", "x": 1})
+
+    # ---- review round 7 ----
+
+    @unittest.skipUnless(os.name == "posix", "needs flock")
+    def test_a_second_launch_on_a_held_run_lock_refuses_and_leftovers_refuse_unverifiable_locks(self) -> None:
+        import subprocess
+
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        a = text.index('if command -v flock >/dev/null 2>&1; then\n  exec 8>>"${OUT_DIR}/.run.lock"')
+        block = text[a : text.index('export COLAB_ACTIVE_OUT_DIR="${OUT_DIR}"')]
+        out_dir = self.tmp_path / "lock_held"
+        out_dir.mkdir()
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import fcntl, sys, time\nfh = open(sys.argv[1], 'a')\nfcntl.flock(fh, fcntl.LOCK_EX)\nprint('held', flush=True)\ntime.sleep(60)",
+             str(out_dir / ".run.lock")],
+            stdout=subprocess.PIPE, text=True,
+        )
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            res = subprocess.run(["bash", "-c", f'OUT_DIR="{out_dir}"; WALL_S=300\n{block}\necho survived'], capture_output=True, text=True, timeout=30, check=False)
+        finally:
+            holder.kill()
+            holder.wait()
+            holder.stdout.close()
+        self.assertEqual(res.returncode, 2, msg=res.stdout + res.stderr)
+        self.assertIn("REFUSED: RUN_LOCK_HELD", res.stderr)
+        self.assertNotIn("survived", res.stdout)
+        # A free lock is taken and records its mode.
+        free = self.tmp_path / "lock_free"
+        free.mkdir()
+        res2 = subprocess.run(["bash", "-c", f'OUT_DIR="{free}"; WALL_S=300\n{block}\ncat "{free}/.run.lock"'], capture_output=True, text=True, timeout=30, check=False)
+        self.assertEqual(res2.returncode, 0, msg=res2.stderr)
+        self.assertTrue(res2.stdout.split()[-1] in ("flock", "none"))
+
+        helper = _load_module("desk_draft_helper_r7_test", DESK_DRAFT_HELPER_PY)
+        nolock = self.tmp_path / "left_nolock"
+        nolock.mkdir()
+        (nolock / ".scrub_pending").write_text("", encoding="utf-8")
+        (nolock / "a.log").write_text("/home/bob/x\n", encoding="utf-8")
+        with self.assertRaises(helper.RefusalError) as c1:
+            helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(nolock), force=False))
+        self.assertEqual(c1.exception.code, "RUN_LOCK_UNVERIFIABLE")
+        self.assertTrue((nolock / ".scrub_pending").exists())
+        mode_none = self.tmp_path / "left_none"
+        mode_none.mkdir()
+        (mode_none / ".scrub_pending").write_text("", encoding="utf-8")
+        (mode_none / ".run.lock").write_text("1 300 none\n", encoding="utf-8")
+        with self.assertRaises(helper.RefusalError) as c2:
+            helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(mode_none), force=False))
+        self.assertEqual(c2.exception.code, "RUN_LOCK_UNVERIFIABLE")
+        self.assertEqual(helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(mode_none), force=True)), 0)
+
+    def test_token_keys_are_redacted_even_when_nothing_else_changes_and_lookalike_keys_are_kept(self) -> None:
+        helper = _load_module("desk_draft_helper_r7tok_test", DESK_DRAFT_HELPER_PY)
+        out, status = helper.scrub_text_for_file("a.json", json.dumps({"refresh_token": "SECRET", "token_count": 5}))
+        parsed = json.loads(out)
+        self.assertEqual(parsed, {"refresh_token": "[REDACTED]", "token_count": 5})
+        out2, _ = helper.scrub_text_for_file("b.json", json.dumps({"Authorization": "SECRET"}))
+        self.assertEqual(json.loads(out2), {"Authorization": "[REDACTED]"})
+        out3, _ = helper.scrub_text_for_file("c.jsonl", json.dumps({"authorization": "SECRET"}) + "\n" + json.dumps({"n": 1}) + "\n")
+        self.assertNotIn("SECRET", out3)
+        self.assertEqual(len(out3.splitlines()), 2)
 
 
 if __name__ == "__main__":

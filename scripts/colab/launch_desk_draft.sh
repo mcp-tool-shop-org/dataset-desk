@@ -32,9 +32,9 @@ PINNED_COLAB_WINDOW_SHA="415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725
 PINNED_LAUNCH_GUARDS_SHA="35b321678ecc32e4a5712b91a5eca65deaf6fc7571c2218660daeb46c735cf03"
 PINNED_REMOTE_RUNNER_SHA="393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 PINNED_DESK_BUNDLE_NOW_SHA="b1e83c20f046716433d927fa442e43fe3e6c821c90adc84cd87cfccae9aed1ac"
-PINNED_DESK_DRAFT_HELPER_SHA="7c41dfab98296c7012fe5f614526f1551257f9eb9425afc340ba8db4982080e9"
+PINNED_DESK_DRAFT_HELPER_SHA="6040f4157adc1b2b6fc7bf70738959a63d05379e4b572a93fa9fd5b85432034f"
 PINNED_DESK_LOCK_SHA="7d718664b0289b53532ff50541e63942166c1921a2f52cb0e48900958bf90510"
-PINNED_SELF_SHA="473b9cdafeda52f28e35f33465311d1becba11909d8d8ad9b7675021d019140e"
+PINNED_SELF_SHA="290f3013b6a76e513fbf2eb26d432b56b59d00092a467f89d0d216ff281819fa"
 
 if pwd -W >/dev/null 2>&1; then
   export MSYS2_ARG_CONV_EXCL="/content"
@@ -479,11 +479,12 @@ mkdir -p "${OUT_DIR}"
 # Live-run lock: held on fd 8 (inherited by the watcher subshell and kept through the escalated sleep) until this
 # process ends, so `scrub-leftovers` refuses a live run. Without flock (msys) it refuses unless --force.
 if command -v flock >/dev/null 2>&1; then
-  exec 8>"${OUT_DIR}/.run.lock"
-  flock -n 8 || true
-  printf '%s %s\n' "$(date -u +%s)" "${WALL_S:-0}" >&8 2>/dev/null || true
+  exec 8>>"${OUT_DIR}/.run.lock"
+  flock -n 8 || { echo "REFUSED: RUN_LOCK_HELD: ${OUT_DIR}/.run.lock is held by another run" >&2; exit 2; }
+  : > "${OUT_DIR}/.run.lock"
+  printf '%s %s flock\n' "$(date -u +%s)" "${WALL_S:-0}" >&8 2>/dev/null || true
 else
-  printf '%s %s\n' "$(date -u +%s)" "${WALL_S:-0}" > "${OUT_DIR}/.run.lock"
+  printf '%s %s none\n' "$(date -u +%s)" "${WALL_S:-0}" > "${OUT_DIR}/.run.lock"
 fi
 export COLAB_ACTIVE_OUT_DIR="${OUT_DIR}"
 TOKEN_DIR=""

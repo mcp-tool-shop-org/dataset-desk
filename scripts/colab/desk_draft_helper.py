@@ -194,6 +194,7 @@ _RIG_PATH_PATTERNS = (
 _SCRUB_MAX_BYTES = 64 * 1024 * 1024
 _TEXT_SUFFIXES = {".log", ".txt", ".json", ".jsonl"}
 _TOKEN_KEYS = {"access_token", "refresh_token", "id_token", "token", "authorization"}
+_TOKEN_KEY_RE = re.compile(r'"(?:access_token|refresh_token|id_token|token|authorization)"\s*:', re.I)
 
 
 _GUARDS_MODULE: object = None
@@ -274,9 +275,21 @@ def scrub_text_for_file(name: str, text: str, roots: list[tuple[str, str]] | Non
     original parsed and neither scrub could keep it valid; the ORIGINAL text is returned)."""
     cleaned = scrub_rig_paths(text, roots)
     suffix = pathlib.PurePosixPath(name).suffix.lower()
-    if suffix not in (".json", ".jsonl") or cleaned == text:
+    if suffix not in (".json", ".jsonl"):
         return cleaned, "ok"
     jsonl = suffix == ".jsonl"
+    if _TOKEN_KEY_RE.search(text) and _json_text_ok(text, jsonl):
+        # A token key is present in JSON that parses: always redact on the decoded values, whether or not the regex
+        # scrub changed anything or left the JSON valid (redaction must not depend on an unrelated path).
+        try:
+            if jsonl:
+                lines = [json.dumps(_scrub_json_values(json.loads(ln), roots), ensure_ascii=False) for ln in text.splitlines() if ln.strip()]
+                return "\n".join(lines) + "\n", "json_values"
+            return json.dumps(_scrub_json_values(json.loads(text), roots), ensure_ascii=False, indent=2) + "\n", "json_values"
+        except ValueError:
+            return text, "json_error"
+    if cleaned == text:
+        return cleaned, "ok"
     if _json_text_ok(cleaned, jsonl):
         return cleaned, "ok"
     if not _json_text_ok(text, jsonl):
@@ -450,7 +463,24 @@ def cmd_scrub_leftovers(args: argparse.Namespace) -> int:
         raise RefusalError("OUT_DIR_MISSING", f"{out_dir.name!r} is not a folder")
     lock = out_dir / ".run.lock"
     held_file = None
-    if lock.exists():
+    if not lock.exists():
+        if (out_dir / SCRUB_PENDING_MARKER).exists() and not args.force:
+            raise RefusalError(
+                "RUN_LOCK_UNVERIFIABLE",
+                "the folder is marked unscrubbed but has no .run.lock, so a live run cannot be ruled out; "
+                "make sure the run is dead, then pass --force",
+            )
+    else:
+        try:
+            lock_words = lock.read_text(encoding="utf-8").split()
+        except OSError:
+            lock_words = []
+        if len(lock_words) >= 3 and lock_words[2] == "none" and not args.force:
+            raise RefusalError(
+                "RUN_LOCK_UNVERIFIABLE",
+                "the run was launched without flock (lock mode none), so a live run cannot be ruled out; "
+                "make sure the run is dead, then pass --force",
+            )
         try:
             import fcntl
         except ImportError:
