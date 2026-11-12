@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     `sha_verified_count` and `blob_verified_count`.
   - Review round 2: a symlink or junction into `rejected/` (and `rejected.`, `REJECT~1` aliases) never uploads; the
     vendored wall watcher signals only verified descendants (desk-local patch, `TRACKED_PID_SKIPPED` logged); the
-    watcher exit path scrubs after its last write and each launch sweeps earlier unscrubbed run folders; the scrub
+    watcher exit path scrubs after its last write and the scrub
     is case-insensitive and covers spaces, `\wsl.localhost`, URL-encoded paths and suffixless files (skips logged in
     `scrub_report.json`); records, sidecars, configs and wave metadata upload as scrubbed copies; an extra file in the
     pinned weight revision refuses `WEIGHT_UNEXPECTED_FILE`.
@@ -44,10 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     escalated cleanup branches no longer scrub while the watcher writes; the token scrub in `launch_guards.py` stops at
     a backslash (JSON stays valid), writes atomically with the original mode and skips non-UTF-8 files; uploads refuse
     non-UTF-8 text (`UPLOAD_NON_UTF8_TEXT`).
-  - Review round 5: fail-closed `.scrub_pending` marker (written first, removed only after a clean scrub; the launch sweep
-    selects on it and also scrubs tokens; `check-out-dir-scrubbed` refuses `OUT_DIR_SCRUB_PENDING`); JSONL scrubbed per
-    line; the token scrub carries on past a bad file and exits non-zero with `TOKEN_SCRUB_FAILED`, handles `\/` and the
-    JSON `"access_token": "..."` form.
+  - Review rounds 5-6: fail-closed `.scrub_pending` marker (written first, removed only after a complete scrub);
+    `check-out-dir-scrubbed` refuses `OUT_DIR_SCRUB_PENDING`; the launcher holds `flock` on `<out>/.run.lock` and no
+    launch touches another run's folder (no sibling sweep); a person cleans a dead run with
+    `desk_draft_helper.py scrub-leftovers <dir>` (`RUN_LOCK_HELD`, `RUN_LOCK_UNVERIFIABLE` without `--force`). JSONL is
+    scrubbed per line; a token under a token key is redacted on the decoded-value paths; NUL-padded text files and a
+    failed `launch_guards` import keep the scrub incomplete; the token scrub carries on past a bad file
+    (`TOKEN_SCRUB_FAILED`), handles `\/`, escaped quotes and the JSON `"access_token": "..."` form.
   - Coverage unchanged (the lane scripts sit outside the measured `dataset_desk` package; floor 90 stays).
 
 ### Added

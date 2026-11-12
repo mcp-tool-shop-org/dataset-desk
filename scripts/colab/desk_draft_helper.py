@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import types
 import tomllib
 import zipfile
 
@@ -191,6 +192,8 @@ _RIG_PATH_PATTERNS = (
     re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:(?=\\|/(?!/))"),
 )
 _SCRUB_MAX_BYTES = 64 * 1024 * 1024
+_TEXT_SUFFIXES = {".log", ".txt", ".json", ".jsonl"}
+_TOKEN_KEYS = {"access_token", "refresh_token", "id_token", "token", "authorization"}
 
 
 _GUARDS_MODULE: object = None
@@ -208,6 +211,11 @@ def _token_scrub(text: str) -> str:
         except Exception:
             _GUARDS_MODULE = False
     return _GUARDS_MODULE.scrub_colab_tokens(text) if _GUARDS_MODULE else text
+
+
+def _token_scrub_available() -> bool:
+    _token_scrub("")
+    return bool(_GUARDS_MODULE)
 
 
 def scrub_rig_paths(text: str, roots: list[tuple[str, str]] | None = None) -> str:
@@ -236,7 +244,12 @@ def _scrub_json_values(node, roots):
     if isinstance(node, list):
         return [_scrub_json_values(v, roots) for v in node]
     if isinstance(node, dict):
-        return {scrub_rig_paths(str(k), roots): _scrub_json_values(v, roots) for k, v in node.items()}
+        return {
+            scrub_rig_paths(str(k), roots): (
+                "[REDACTED]" if str(k).lower() in _TOKEN_KEYS and isinstance(v, str) else _scrub_json_values(v, roots)
+            )
+            for k, v in node.items()
+        }
     return node
 
 
@@ -322,6 +335,9 @@ def _scrub_dir(out_dir: pathlib.Path, roots: list[tuple[str, str]]) -> dict:
     scrubbed = 0
     skipped: list[str] = []
     errors: list[str] = []
+    if not _token_scrub_available():
+        # Never report a scrub complete when the token half could not run.
+        errors.append("launch_guards.py import failed: tokens were not scrubbed")
     for fpath in sorted(out_dir.rglob("*")):
         try:
             rel = fpath.relative_to(out_dir).as_posix()
@@ -332,7 +348,11 @@ def _scrub_dir(out_dir: pathlib.Path, roots: list[tuple[str, str]]) -> dict:
                 continue
             raw = fpath.read_bytes()
             if b"\x00" in raw:
-                skipped.append(f"{rel} (binary)")
+                if fpath.suffix.lower() in _TEXT_SUFFIXES:
+                    # A text file with NUL bytes (power-loss padding) cannot be verified clean.
+                    skipped.append(f"{rel} (binary text file)")
+                else:
+                    skipped.append(f"{rel} (binary)")
                 continue
             try:
                 text = raw.decode("utf-8")
@@ -365,7 +385,7 @@ def _scrub_complete(report: dict) -> bool:
     """A scrub is complete only with no scrub_errors and nothing that could not be rewritten or read as text."""
     if report["scrub_errors"]:
         return False
-    return not any(("replace_failed" in x) or ("not utf-8" in x) or ("over " in x) or ("unreadable" in x) for x in report["skipped"])
+    return not any(("replace_failed" in x) or ("not utf-8" in x) or ("over " in x) or ("unreadable" in x) or ("binary text file" in x) for x in report["skipped"])
 
 
 def cmd_check_out_dir_scrubbed(args: argparse.Namespace) -> int:
@@ -376,7 +396,7 @@ def cmd_check_out_dir_scrubbed(args: argparse.Namespace) -> int:
         raise RefusalError(
             "OUT_DIR_SCRUB_PENDING",
             f"{out_dir.name!r} still carries {SCRUB_PENDING_MARKER}: its kept files may hold unscrubbed rig paths; "
-            "run scrub-kept-paths or the next launch's sweep, and review scrub_report.json",
+            "run `scrub-leftovers <dir>` (only if the run is dead) and review scrub_report.json",
         )
     print(json.dumps({"scrubbed": True}, sort_keys=True))
     return 0
@@ -420,32 +440,39 @@ def cmd_scrub_kept_paths(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_sweep_unscrubbed(args: argparse.Namespace) -> int:
-    """Scrub earlier desk-lane run folders next to this one: any folder with .scrub_pending (a run killed before its
-    scrub, or an escalated run whose watcher died) or remote_desk_draft.sh. Paths and tokens are both scrubbed."""
-    parent = pathlib.Path(args.parent)
-    exclude = pathlib.Path(args.exclude).resolve() if args.exclude else None
-    if not parent.is_dir():
-        return 0
-    swept = 0
-    children = sorted(parent.iterdir())
-    if len(children) > 200 and exclude is not None and exclude.is_dir():
-        with (exclude / "guards.log").open("a", encoding="utf-8", newline="\n") as fh:
-            fh.write(f"SWEEP_LIMIT_REACHED parent holds {len(children)} entries; only the first 200 were checked\n")
-    for child in children[:200]:
+def cmd_scrub_leftovers(args: argparse.Namespace) -> int:
+    """Explicit, person-run cleanup of ONE named run folder left by a dead run (rig shutdown, OOM, a watcher that died
+    after escalating). No launch ever calls this. It refuses RUN_LOCK_HELD while that run still holds its .run.lock,
+    and refuses RUN_LOCK_UNVERIFIABLE where flock is unavailable (msys) unless --force. It scrubs paths and tokens and
+    removes .scrub_pending only on a complete scrub."""
+    out_dir = pathlib.Path(args.dir)
+    if not out_dir.is_dir():
+        raise RefusalError("OUT_DIR_MISSING", f"{out_dir.name!r} is not a folder")
+    lock = out_dir / ".run.lock"
+    held_file = None
+    if lock.exists():
         try:
-            if not child.is_dir() or child.is_symlink() or (exclude is not None and child.resolve() == exclude):
-                continue
-            if not ((child / SCRUB_PENDING_MARKER).exists() or (child / "remote_desk_draft.sh").is_file()):
-                continue
-            report = _scrub_dir(child, [])
-            if (child / SCRUB_PENDING_MARKER).exists() and _scrub_complete(report):
-                (child / SCRUB_PENDING_MARKER).unlink()
-            swept += 1
-        except OSError:
-            continue
-    print(json.dumps({"swept_run_dirs": swept}, sort_keys=True))
-    return 0
+            import fcntl
+        except ImportError:
+            fcntl = None
+        if fcntl is None:
+            if not args.force:
+                raise RefusalError(
+                    "RUN_LOCK_UNVERIFIABLE",
+                    "this platform has no flock, so a live run cannot be ruled out; make sure the run is dead, then pass --force",
+                )
+        else:
+            held_file = lock.open("a")
+            try:
+                fcntl.flock(held_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                held_file.close()
+                raise RefusalError("RUN_LOCK_HELD", f"{out_dir.name!r} still belongs to a live run (its .run.lock is held)") from None
+    try:
+        return cmd_scrub_kept_paths(types.SimpleNamespace(out_dir=str(out_dir), root=[]))
+    finally:
+        if held_file is not None:
+            held_file.close()
 
 
 def sanitize_pool_detection(pd: object) -> object:
@@ -2741,10 +2768,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_chk.add_argument("--out-dir", required=True)
     p_chk.set_defaults(func=cmd_check_out_dir_scrubbed)
 
-    p_sw = sub.add_parser("sweep-unscrubbed")
-    p_sw.add_argument("--parent", required=True)
-    p_sw.add_argument("--exclude", default="")
-    p_sw.set_defaults(func=cmd_sweep_unscrubbed)
+    p_lo = sub.add_parser("scrub-leftovers")
+    p_lo.add_argument("dir")
+    p_lo.add_argument("--force", action="store_true")
+    p_lo.set_defaults(func=cmd_scrub_leftovers)
 
     p_scr = sub.add_parser("scrub-kept-paths")
     p_scr.add_argument("--out-dir", required=True)

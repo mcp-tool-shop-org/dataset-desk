@@ -7,7 +7,7 @@
 #        fleet ruling 2026-11-09. sdlab df9a1b3b predates it, so this copy differs from that export by that rule.)
 #       (+ parallel-window rate fix: polyglot-mcp main bd6414fd, PR #80, ported function by function; and a
 #        desk-local watcher ancestry guard. launch_guards.py carries the same port.)
-#   - scripts/colab/launch_guards.py sha256 07e1e5fd8c7e4a2f4b1d00f200040f123ba1296fe82ea33e4ff4fa9b0ccbbb39
+#   - scripts/colab/launch_guards.py sha256 35b321678ecc32e4a5712b91a5eca65deaf6fc7571c2218660daeb46c735cf03
 #   - scripts/colab/remote_runner.py sha256 393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb
 #
 # Modes:
@@ -29,12 +29,12 @@ PINNED_QWEN3_VL_REPO="Qwen/Qwen3-VL-8B-Instruct"
 PINNED_QWEN3_VL_REVISION="0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
 
 PINNED_COLAB_WINDOW_SHA="415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725b987132e7"
-PINNED_LAUNCH_GUARDS_SHA="07e1e5fd8c7e4a2f4b1d00f200040f123ba1296fe82ea33e4ff4fa9b0ccbbb39"
+PINNED_LAUNCH_GUARDS_SHA="35b321678ecc32e4a5712b91a5eca65deaf6fc7571c2218660daeb46c735cf03"
 PINNED_REMOTE_RUNNER_SHA="393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 PINNED_DESK_BUNDLE_NOW_SHA="b1e83c20f046716433d927fa442e43fe3e6c821c90adc84cd87cfccae9aed1ac"
-PINNED_DESK_DRAFT_HELPER_SHA="991239ca0b65fbf6ed10fc1c55f700a874c0cd094f029886e48314b28d250c80"
+PINNED_DESK_DRAFT_HELPER_SHA="7c41dfab98296c7012fe5f614526f1551257f9eb9425afc340ba8db4982080e9"
 PINNED_DESK_LOCK_SHA="7d718664b0289b53532ff50541e63942166c1921a2f52cb0e48900958bf90510"
-PINNED_SELF_SHA="39913730ffbcaf08a5031af4b5547e76d0b74bef4ae96bb0331726f1f24389c2"
+PINNED_SELF_SHA="473b9cdafeda52f28e35f33465311d1becba11909d8d8ad9b7675021d019140e"
 
 if pwd -W >/dev/null 2>&1; then
   export MSYS2_ARG_CONV_EXCL="/content"
@@ -474,8 +474,17 @@ PIN_OVERRIDE_VARS=(
 
 mkdir -p "${OUT_DIR}"
 # Fail closed: this folder is unscrubbed until `scrub-kept-paths` completes cleanly and removes the marker. A run
-# killed before that (rig shutdown, OOM, a dead escalated watcher) stays marked; the next launch's sweep retries it.
+# killed before that (rig shutdown, OOM, a dead escalated watcher) stays marked; a person runs `scrub-leftovers` on it. A launch never touches another run's folder.
 : > "${OUT_DIR}/.scrub_pending"
+# Live-run lock: held on fd 8 (inherited by the watcher subshell and kept through the escalated sleep) until this
+# process ends, so `scrub-leftovers` refuses a live run. Without flock (msys) it refuses unless --force.
+if command -v flock >/dev/null 2>&1; then
+  exec 8>"${OUT_DIR}/.run.lock"
+  flock -n 8 || true
+  printf '%s %s\n' "$(date -u +%s)" "${WALL_S:-0}" >&8 2>/dev/null || true
+else
+  printf '%s %s\n' "$(date -u +%s)" "${WALL_S:-0}" > "${OUT_DIR}/.run.lock"
+fi
 export COLAB_ACTIVE_OUT_DIR="${OUT_DIR}"
 TOKEN_DIR=""
 
@@ -530,14 +539,6 @@ desk_scrub_kept_paths() {
   "${PY_BIN}" "${HELPER_PY}" "${_scrub_args[@]}" >/dev/null 2>&1 || true
 }
 
-# desk_sweep_earlier_runs: a SIGKILL or power loss can skip an earlier run's exit scrub. At startup, scrub any
-# sibling run folder (a desk lane out dir: it holds window.json and remote_desk_draft.sh) with the generic patterns.
-desk_sweep_earlier_runs() {
-  [ -n "${OUT_DIR:-}" ] && [ -d "${OUT_DIR}" ] || return 0
-  [ -n "${PY_BIN:-}" ] && [ -f "${HELPER_PY:-}" ] || return 0
-  "${PY_BIN}" "${HELPER_PY}" sweep-unscrubbed --parent "$(dirname -- "${OUT_DIR}")" --exclude "${OUT_DIR}" >/dev/null 2>&1 || true
-}
-
 desk_pre_session_exit() {
   local rc=$?
   if [ -n "${TOKEN_DIR:-}" ]; then
@@ -549,7 +550,6 @@ desk_pre_session_exit() {
   exit "${rc}"
 }
 trap desk_pre_session_exit EXIT
-desk_sweep_earlier_runs
 trap 'exit 143' TERM INT
 
 colab_refuse_live_pin_overrides "${OUT_DIR}" "${TEST_MODE}" "${PIN_OVERRIDE_VARS[@]}"
@@ -1157,7 +1157,7 @@ cleanup_on_exit() {
 
   if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
     # No scrub here: the escalated watcher is still writing stop.log, window.json and outcome. Its own subshell
-    # scrubs after its last write, and the next launch sweeps this folder.
+    # scrubs after its last write, and a person runs `scrub-leftovers` on a dead run.
     desk_clean_rig_staging
     sleep 3600
     exit 137
@@ -1169,7 +1169,7 @@ cleanup_on_exit() {
   fi
   if [ -f "${OUT_DIR}/watcher_escalated.txt" ]; then
     # No scrub here: the escalated watcher is still writing stop.log, window.json and outcome. Its own subshell
-    # scrubs after its last write, and the next launch sweeps this folder.
+    # scrubs after its last write, and a person runs `scrub-leftovers` on a dead run.
     desk_clean_rig_staging
     sleep 3600
     exit 137

@@ -38,7 +38,7 @@ DESK_LOCK_FILE = COLAB_DIR / "locks" / "desk_draft.lock"
 
 EXPECTED_SDLAB_COMMIT = "df9a1b3be2f8729a57776253e9b0cb32b7f5299c"
 EXPECTED_COLAB_WINDOW_SHA = "415e5f541cb6bfed3eac98c6a0cd926d61c3b1fbeb9d69618d08725b987132e7"
-EXPECTED_LAUNCH_GUARDS_SHA = "07e1e5fd8c7e4a2f4b1d00f200040f123ba1296fe82ea33e4ff4fa9b0ccbbb39"
+EXPECTED_LAUNCH_GUARDS_SHA = "35b321678ecc32e4a5712b91a5eca65deaf6fc7571c2218660daeb46c735cf03"
 EXPECTED_REMOTE_RUNNER_SHA = "393929ed704ccbacaee2b590010e348a5d635cbdd70361209d3e0103d1fba6eb"
 
 
@@ -1893,13 +1893,13 @@ class PreL4HardeningTests(ColabTempTestCase):
         report = json.loads((out_dir / "scrub_report.json").read_text(encoding="utf-8"))
         self.assertEqual(report["skipped"], ["blob.bin (binary)"])
 
-    def test_watcher_exit_path_scrubs_last_and_startup_sweeps_earlier_runs(self) -> None:
+    def test_watcher_exit_path_scrubs_last_and_no_launch_touches_another_runs_folder(self) -> None:
         import subprocess
 
         text = LAUNCH_SH.read_text(encoding="utf-8")
         watcher = text[text.index("colab_run_wall_watcher \\") : text.index("WALL_WATCHER_PID=\"$!\"", text.index("colab_run_wall_watcher \\"))]
         self.assertLess(watcher.index("desk_clean_rig_staging"), watcher.index("desk_scrub_kept_paths"))
-        self.assertIn("desk_sweep_earlier_runs", text)
+        self.assertNotIn("sweep", text.lower())
 
         # What the watcher writes after the launcher's own scrub: window.json, outcome, guards.log, stop.log.
         out_dir = self.tmp_path / "watch_scrub" / "run_a"
@@ -1911,7 +1911,7 @@ class PreL4HardeningTests(ColabTempTestCase):
             ("stop.log", "stopped from /home/mikey\n"),
         ):
             (out_dir / name).write_text(body, encoding="utf-8")
-        funcs = text[text.index("desk_scrub_kept_paths() {") : text.index("# desk_sweep_earlier_runs")]
+        funcs = text[text.index("desk_scrub_kept_paths() {") : text.index("desk_pre_session_exit() {")]
         driver = (
             f'OUT_DIR="{out_dir}"; PY_BIN="{sys.executable}"; HELPER_PY="{DESK_DRAFT_HELPER_PY}"\n'
             + 'PROJECT_DIR=""; REPO_ROOT="/nonexistent-repo"\n'
@@ -1921,20 +1921,6 @@ class PreL4HardeningTests(ColabTempTestCase):
         res = subprocess.run(["bash", "-c", driver], capture_output=True, text=True, timeout=60, check=False)
         self.assertEqual(res.returncode, 0, msg=res.stderr)
         self._assert_no_rig_paths(out_dir, "watcher exit scrub")
-
-        # An earlier desk run folder left unscrubbed (SIGKILL) is swept by the next run's startup.
-        old_run = self.tmp_path / "watch_scrub" / "run_old"
-        old_run.mkdir()
-        (old_run / "window.json").write_text('{"why": "/home/mikey/x"}', encoding="utf-8")
-        (old_run / "remote_desk_draft.sh").write_text("echo /home/mikey\n", encoding="utf-8")
-        other = self.tmp_path / "watch_scrub" / "not_a_run"
-        other.mkdir()
-        (other / "notes.txt").write_text("/home/mikey/keep\n", encoding="utf-8")
-        helper = _load_module("desk_draft_helper_sweep_test", DESK_DRAFT_HELPER_PY)
-        ns = types.SimpleNamespace(parent=str(out_dir.parent), exclude=str(out_dir))
-        self.assertEqual(helper.cmd_sweep_unscrubbed(ns), 0)
-        self._assert_no_rig_paths(old_run, "startup sweep")
-        self.assertIn("/home/mikey/keep", (other / "notes.txt").read_text(encoding="utf-8"))
 
     def test_scrub_rig_paths_unit(self) -> None:
         helper = _load_module("desk_draft_helper_scrub_test", DESK_DRAFT_HELPER_PY)
@@ -2391,18 +2377,6 @@ class PreL4HardeningTests(ColabTempTestCase):
         with mock.patch.object(pathlib.Path, "resolve", side_effect=OSError("boom")):
             self.assertTrue(helper.path_is_rejected(proj, "keep/a.png"))
 
-    def test_sweep_logs_when_it_stops_at_the_entry_limit(self) -> None:
-        helper = _load_module("desk_draft_helper_sweep2_test", DESK_DRAFT_HELPER_PY)
-        parent = self.tmp_path / "many"
-        parent.mkdir()
-        for i in range(205):
-            (parent / f"d{i:03d}").mkdir()
-        mine = parent / "zz_mine"
-        mine.mkdir()
-        ns = types.SimpleNamespace(parent=str(parent), exclude=str(mine))
-        self.assertEqual(helper.cmd_sweep_unscrubbed(ns), 0)
-        self.assertIn("SWEEP_LIMIT_REACHED", (mine / "guards.log").read_text(encoding="utf-8"))
-
     def test_watcher_subshell_scrubs_only_on_escalation_and_a_normal_exit_keeps_closing_evidence(self) -> None:
         text = LAUNCH_SH.read_text(encoding="utf-8")
         a = text.index("colab_run_wall_watcher \\")
@@ -2515,11 +2489,33 @@ class PreL4HardeningTests(ColabTempTestCase):
         with self.assertRaises(helper.RefusalError) as ctx:
             helper.cmd_check_out_dir_scrubbed(types.SimpleNamespace(out_dir=str(dead)))
         self.assertEqual(ctx.exception.code, "OUT_DIR_SCRUB_PENDING")
-        self.assertEqual(helper.cmd_sweep_unscrubbed(types.SimpleNamespace(parent=str(parent), exclude=str(mine))), 0)
+        # scrub-leftovers refuses a folder whose run lock is held, and scrubs it once the holder is gone.
+        lock = dead / ".run.lock"
+        lock.write_text("1 300\n", encoding="utf-8")
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import fcntl, sys, time\nfh = open(sys.argv[1], 'a')\nfcntl.flock(fh, fcntl.LOCK_EX)\nprint('held', flush=True)\ntime.sleep(60)",
+             str(lock)],
+            stdout=subprocess.PIPE, text=True,
+        )
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            with self.assertRaises(helper.RefusalError) as held_ctx:
+                helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(dead), force=False))
+            self.assertEqual(held_ctx.exception.code, "RUN_LOCK_HELD")
+            self.assertTrue((dead / ".scrub_pending").exists())
+            self.assertIn("bob", (dead / "guards.log").read_text(encoding="utf-8"))
+        finally:
+            holder.kill()
+            holder.wait()
+            holder.stdout.close()
+        self.assertEqual(helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(dead), force=False)), 0)
         log = (dead / "guards.log").read_text(encoding="utf-8")
         self.assertNotIn("bob", log)
         self.assertNotIn("SECRET", log)
         self.assertFalse((dead / ".scrub_pending").exists())
+        # A sibling next to a live launch is never touched by a launch (nothing in the launcher calls a sweep).
+        self.assertTrue(mine.is_dir())
         self.assertEqual(helper.cmd_check_out_dir_scrubbed(types.SimpleNamespace(out_dir=str(dead))), 0)
 
         # A scrub that reports an error keeps the marker.
@@ -2581,6 +2577,77 @@ class PreL4HardeningTests(ColabTempTestCase):
         self.assertNotIn("SECRET1", good.read_text(encoding="utf-8"))
         self.assertNotIn("SECRET3", good2.read_text(encoding="utf-8"))
         json.loads(good2.read_text(encoding="utf-8"))
+
+    # ---- review round 6: no sibling sweep; fail-closed notes ----
+
+    def test_scrub_leftovers_without_flock_refuses_unless_forced_and_keeps_the_marker_on_error(self) -> None:
+        helper = _load_module("desk_draft_helper_force_test", DESK_DRAFT_HELPER_PY)
+        d = self.tmp_path / "left_force"
+        d.mkdir()
+        (d / ".scrub_pending").write_text("", encoding="utf-8")
+        (d / ".run.lock").write_text("1 300\n", encoding="utf-8")
+        (d / "a.log").write_text("/home/bob/x\n", encoding="utf-8")
+        with mock.patch.dict(sys.modules, {"fcntl": None}):
+            with self.assertRaises(helper.RefusalError) as ctx:
+                helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(d), force=False))
+            self.assertEqual(ctx.exception.code, "RUN_LOCK_UNVERIFIABLE")
+            self.assertTrue((d / ".scrub_pending").exists())
+            self.assertEqual(helper.cmd_scrub_leftovers(types.SimpleNamespace(dir=str(d), force=True)), 0)
+        self.assertFalse((d / ".scrub_pending").exists())
+        self.assertNotIn("bob", (d / "a.log").read_text(encoding="utf-8"))
+
+    def test_launcher_takes_the_run_lock_and_never_sweeps(self) -> None:
+        text = LAUNCH_SH.read_text(encoding="utf-8")
+        self.assertIn('exec 8>"${OUT_DIR}/.run.lock"', text)
+        self.assertIn("flock -n 8", text)
+        self.assertNotIn("sweep", text.lower())
+        proj, cap_cfg = self.make_project("lock_src", flagged_count=1, unflagged_count=1)
+        env = self.make_env("lock_env")
+        out_dir = self.tmp_path / "out_lock"
+        res = env.run_launch(self._gpu_args(proj, cap_cfg, out_dir, "--dry"))
+        self.assertEqual(res.returncode, 0, msg=res.stderr[-600:])
+        self.assertTrue((out_dir / ".run.lock").is_file())
+
+    def test_nul_padded_text_file_and_failed_token_import_keep_the_scrub_incomplete(self) -> None:
+        helper = _load_module("desk_draft_helper_nul_test", DESK_DRAFT_HELPER_PY)
+        d = self.tmp_path / "nul"
+        d.mkdir()
+        (d / ".scrub_pending").write_text("", encoding="utf-8")
+        (d / "a.log").write_bytes(b"/home/bob/x\n" + b"\x00" * 16)
+        (d / "blob.bin").write_bytes(b"\x00\x01")
+        helper.cmd_scrub_kept_paths(types.SimpleNamespace(out_dir=str(d), root=[]))
+        self.assertTrue((d / ".scrub_pending").exists())
+        rep = json.loads((d / "scrub_report.json").read_text(encoding="utf-8"))
+        self.assertIn("a.log (binary text file)", rep["skipped"])
+        self.assertIn("blob.bin (binary)", rep["skipped"])
+        d2 = self.tmp_path / "noimport"
+        d2.mkdir()
+        (d2 / ".scrub_pending").write_text("", encoding="utf-8")
+        (d2 / "a.log").write_text("/home/bob/x\n", encoding="utf-8")
+        with mock.patch.object(helper, "_GUARDS_MODULE", False):
+            helper.cmd_scrub_kept_paths(types.SimpleNamespace(out_dir=str(d2), root=[]))
+        self.assertTrue((d2 / ".scrub_pending").exists())
+        self.assertIn("launch_guards.py import failed", (d2 / "scrub_report.json").read_text(encoding="utf-8"))
+
+    def test_token_keys_are_redacted_on_the_decoded_value_paths_and_escaped_quotes_are_handled(self) -> None:
+        helper = _load_module("desk_draft_helper_tokkey_test", DESK_DRAFT_HELPER_PY)
+        guards = _load_module("launch_guards_tokkey_test", LAUNCH_GUARDS_PY)
+        line = '{"access_token": "SECRET", "p": "x\\/home/bob/y"}'
+        # per-line JSONL path (the file as a whole does not parse)
+        cleaned, status = helper.scrub_text_for_file("e.jsonl", line + '\n{"cut": "/home/b')
+        self.assertEqual(status, "json_error_scrubbed")
+        self.assertNotIn("SECRET", cleaned)
+        json.loads(cleaned.splitlines()[0])
+        # json_fallback path (the regex scrub alone would break this valid JSON)
+        cleaned2, status2 = helper.scrub_text_for_file("e.json", line)
+        self.assertNotIn("SECRET", cleaned2)
+        self.assertNotIn("bob", cleaned2)
+        json.loads(cleaned2)
+        for key in ("refresh_token", "id_token", "token", "authorization"):
+            self.assertNotIn("SECRET", helper.scrub_text_for_file("k.json", json.dumps({key: "SECRET", "p": "x\\/home/bob"}).replace("\\\\/", "\\/"))[0])
+        esc = json.dumps({"access_token": 'a"b', "x": 1})
+        out = guards.scrub_colab_tokens(esc)
+        self.assertEqual(json.loads(out), {"access_token": "[REDACTED]", "x": 1})
 
 
 if __name__ == "__main__":

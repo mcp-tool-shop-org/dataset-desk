@@ -32,7 +32,7 @@ OOM_KILL_RE = re.compile(r"\boom_kill\s+([1-9]\d*)\b|\bOut of memory: Killed pro
 TOKEN_SCRUB_PATTERNS = [
     (re.compile(r"(colab-runtime-proxy-token=)(?:\\/|[^\s&\\\"'])+"), r"\1[REDACTED]"),
     (re.compile(r"(access_token=)(?:\\/|[^\s&\\\"'])+"), r"\1[REDACTED]"),
-    (re.compile(r"((?:\\)?\"access_token(?:\\)?\"\s*:\s*(?:\\)?\")(?:\\/|[^\"\\])+"), r"\1[REDACTED]"),
+    (re.compile(r"((?:\\)?\"access_token(?:\\)?\"\s*:\s*(?:\\)?\")(?:\\/|\\\"|[^\"\\])+"), r"\1[REDACTED]"),
     (re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]+"), r"\1[REDACTED]"),
     (re.compile(r"\bhf_[A-Za-z0-9]{16,}\b"), "hf_[REDACTED]"),
 ]
