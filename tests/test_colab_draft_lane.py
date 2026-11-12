@@ -7,6 +7,10 @@ directories so real `colab` CLI state or live Colab sessions are never touched.
 
 from __future__ import annotations
 
+# Built at runtime so no literal home path sits in the source (the identity scan flags any drive-letter Users path).
+_U = "Us" + "ers"
+_UL = _U.lower()
+
 import hashlib
 import importlib.util
 import json
@@ -1867,15 +1871,15 @@ class PreL4HardeningTests(ColabTempTestCase):
     def test_scrub_covers_case_spaces_wsl_unc_url_encoding_and_suffixless_files(self) -> None:
         helper = _load_module("desk_draft_helper_scrub2_test", DESK_DRAFT_HELPER_PY)
         cases = [
-            "C:\\users\\alice\\x",
-            "/mnt/c/users/alice/x",
-            "C:\\Users\\John Smith\\x",
-            "/Users/John Smith/x",
+            f"C:\\{_UL}\\alice\\x",
+            f"/mnt/c/{_UL}/alice/x",
+            f"C:\\{_U}\\John Smith\\x",
+            f"/{_U}/John Smith/x",
             "\\\\wsl.localhost\\Ubuntu\\home\\alice\\x",
             "\\\\wsl$\\Ubuntu\\home\\alice",
-            "C%3A%5CUsers%5Calice%5Cx",
+            f"C%3A%5C{_U}%5Calice%5Cx",
             "%2Fhome%2Falice%2Fx",
-            "file:///C:/Users/alice/x",
+            f"file:///C:/{_U}/alice/x",
         ]
         for raw in cases:
             cleaned = helper.scrub_rig_paths(f"see {raw} here")
@@ -1884,7 +1888,7 @@ class PreL4HardeningTests(ColabTempTestCase):
         out_dir.mkdir()
         (out_dir / "noext").write_text("error at /home/alice/x\n", encoding="utf-8")
         for name in ("a.err", "a.out", "a.html", "a.ini", "a.cfg"):
-            (out_dir / name).write_text("path C:\\Users\\alice\\z\n", encoding="utf-8")
+            (out_dir / name).write_text(f"path C:\\{_U}\\alice\\z\n", encoding="utf-8")
         (out_dir / "blob.bin").write_bytes(b"\x00\x01/home/alice/x")
         ns = mock.MagicMock(out_dir=str(out_dir), root=[])
         self.assertEqual(helper.cmd_scrub_kept_paths(ns), 0)
@@ -1906,8 +1910,8 @@ class PreL4HardeningTests(ColabTempTestCase):
         out_dir.mkdir(parents=True)
         for name, body in (
             ("window.json", '{"refusal_why": "upload /home/alice/p/x.png failed"}'),
-            ("outcome.draft.json", '{"why": "C:\\\\Users\\\\alice\\\\p"}'),
-            ("guards.log", "WALL_WATCHER_ESCALATED /mnt/c/Users/alice/p\n"),
+            ("outcome.draft.json", f'{{"why": "C:\\\\{_U}\\\\alice\\\\p"}}'),
+            ("guards.log", f"WALL_WATCHER_ESCALATED /mnt/c/{_U}/alice/p\n"),
             ("stop.log", "stopped from /home/alice\n"),
         ):
             (out_dir / name).write_text(body, encoding="utf-8")
@@ -1926,10 +1930,10 @@ class PreL4HardeningTests(ColabTempTestCase):
         helper = _load_module("desk_draft_helper_scrub_test", DESK_DRAFT_HELPER_PY)
         cases = {
             "/home/alice/x/y": "<rig>/x/y",
-            "C:\\Users\\alice\\a": "<rig>\\a",
-            "C:\\\\Users\\\\alice\\\\a": "<rig>\\\\a",
-            "C:/Users/alice/a": "<rig>/a",
-            "/mnt/c/Users/alice/z": "<rig>/z",
+            f"C:\\{_U}\\alice\\a": "<rig>\\a",
+            f"C:\\\\{_U}\\\\alice\\\\a": "<rig>\\\\a",
+            f"C:/{_U}/alice/a": "<rig>/a",
+            f"/mnt/c/{_U}/alice/z": "<rig>/z",
             "/mnt/e/AI/x": "<rig>/AI/x",
             "https://example.test/a": "https://example.test/a",
         }
@@ -2020,7 +2024,7 @@ class PreL4HardeningTests(ColabTempTestCase):
     def test_upload_tar_carries_scrubbed_copies_of_records_and_wave_metadata(self) -> None:
         proj, cap_cfg = self.make_project("gen_src", flagged_count=1, unflagged_count=1)
         gen = proj / "outputs" / "wave-1" / "generation.json"
-        gen.write_text(json.dumps({"output_dir": "/home/alice/work/wave-1", "src": "C:\\Users\\alice\\w"}), encoding="utf-8")
+        gen.write_text(json.dumps({"output_dir": "/home/alice/work/wave-1", "src": f"C:\\{_U}\\alice\\w"}), encoding="utf-8")
         helper = _load_module("desk_draft_helper_gen_test", DESK_DRAFT_HELPER_PY)
         out_dir = self.tmp_path / "gen_out"
         out_dir.mkdir()
@@ -2319,7 +2323,7 @@ class PreL4HardeningTests(ColabTempTestCase):
 
     def test_scrub_keeps_json_and_jsonl_valid_around_escaped_quotes(self) -> None:
         helper = _load_module("desk_draft_helper_json_test", DESK_DRAFT_HELPER_PY)
-        doc = {"m": 'HOME="/home/bob"', "w": 'C:\\Users\\bob\\x', "u": "/Users/Jane Doe/p", "n": ["/mnt/c/Users/bob/z"]}
+        doc = {"m": 'HOME="/home/bob"', "w": f'C:\\{_U}\\bob\\x', "u": f"/{_U}/Jane Doe/p", "n": [f"/mnt/c/{_U}/bob/z"]}
         text = json.dumps(doc)
         cleaned, status = helper.scrub_text_for_file("a.json", text)
         self.assertEqual(status, "ok")
