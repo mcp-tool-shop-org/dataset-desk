@@ -1297,20 +1297,60 @@ def scan_sidecar_project(project: str) -> dict:
     }
 
 
-def save_sidecar_import(out_dir: str, scan_result: dict) -> tuple[str, str]:
+def format_pool_detection_note(pool_detection: dict | None) -> str:
+    """Format a single-line Markdown summary of `pool_detection` with counts and source paths only (never hashes)."""
+    if not isinstance(pool_detection, dict):
+        return ""
+    status = str(pool_detection.get("status") or "off").strip()
+    if status == "on":
+        pools_map = pool_detection.get("pools")
+        counts_map = pool_detection.get("counts") or {}
+        pool_names = sorted(
+            pools_map.keys()
+            if isinstance(pools_map, dict) and pools_map
+            else (counts_map.keys() if isinstance(counts_map, dict) and counts_map else KNOWN_MULTIMODAL_POOLS)
+        )
+        segments: list[str] = []
+        for p_name in pool_names:
+            p_entry = pools_map.get(p_name) if isinstance(pools_map, dict) else None
+            cnt = int(p_entry.get("count", 0)) if isinstance(p_entry, dict) else int(counts_map.get(p_name, 0))
+            srcs = p_entry.get("sources") if isinstance(p_entry, dict) else None
+            if isinstance(srcs, list) and srcs:
+                src_labels = [
+                    f"{s.get('via', 'source')}: {s.get('path', '')}".replace("\n", " ").strip()
+                    for s in srcs
+                    if isinstance(s, dict)
+                ]
+                segments.append(f"{p_name}: {cnt} ({'; '.join(src_labels)})" if src_labels else f"{p_name}: {cnt}")
+            else:
+                segments.append(f"{p_name}: {cnt}")
+        return f"Pool detection (`pool_detection`): `on` — {', '.join(segments)}."
+    warn_txt = str(pool_detection.get("warning") or "warning: renamed-copy detection is off").replace("\n", " ").strip()
+    return f"Pool detection (`pool_detection`): `off` — {warn_txt}."
+
+
+def save_sidecar_import(
+    out_dir: str,
+    scan_result: dict,
+    *,
+    pool_detection: dict | None = None,
+) -> tuple[str, str]:
     """Persist imported sidecar records and missing-sidecar report under `out_dir` (never inside `project`)."""
     os.makedirs(out_dir, exist_ok=True)
     recs_path = os.path.join(out_dir, SIDECAR_RECORDS_FILENAME)
     with open(recs_path, "w", encoding="utf-8") as f:
         for rec in scan_result.get("records") or []:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            row_doc = {**rec, "pool_detection": pool_detection} if pool_detection is not None else rec
+            f.write(json.dumps(row_doc, ensure_ascii=False) + "\n")
     rep_path = os.path.join(out_dir, SIDECAR_REPORT_FILENAME)
-    rep_doc = {
+    rep_doc: dict[str, Any] = {
         "total_images": int(scan_result.get("total_images", 0)),
         "paired_count": len(scan_result.get("records") or []),
         "images_without_sidecar": list(scan_result.get("images_without_sidecar") or []),
         "orphan_sidecars": list(scan_result.get("orphan_sidecars") or []),
     }
+    if pool_detection is not None:
+        rep_doc["pool_detection"] = pool_detection
     with open(rep_path, "w", encoding="utf-8") as f:
         json.dump(rep_doc, f, indent=2, ensure_ascii=False)
         f.write("\n")
@@ -1350,22 +1390,28 @@ def import_sidecars(
     dhashes: dict[str, str] | None = None,
     image_vecs: dict[str, Any] | None = None,
     token_counter: Callable[[list[str]], list[int]] | dict[str, int] | None = None,
+    pool_detection: dict | None = None,
 ) -> dict:
     """Import `(image, .txt)` sidecar pairs from `project`, run the description gate, and write review files under `out_dir`."""
     _ensure_out_outside_project(project, out_dir)
+    from . import desk
+
+    if pool_detection is None:
+        pool_detection = desk.check_multimodal_pool(project, "none", images_only=True)
     eff_rules = (
         coerce_caption_rules(caption_rules, project=project)
         if caption_rules is not None
         else load_caption_rules(project=project)
     )
     scan_res = scan_sidecar_project(project)
-    recs_path, rep_path = save_sidecar_import(out_dir, scan_res)
+    recs_path, rep_path = save_sidecar_import(out_dir, scan_res, pool_detection=pool_detection)
     audit = audit_records(
         scan_res["records"],
         token_counter=token_counter,
         caption_rules=eff_rules,
     )
     audit["images_without_sidecar"] = list(scan_res["images_without_sidecar"])
+    audit["pool_detection"] = pool_detection
     if drafter is not None:
         draft_flagged_records(project, audit, drafter)
     rev_jsonl, rev_ws = write_review_files(
@@ -1374,7 +1420,9 @@ def import_sidecars(
         audit,
         dhashes=dhashes,
         image_vecs=image_vecs,
+        pool_detection=pool_detection,
     )
+    desk.write_pool_detection_status(out_dir, pool_detection, command="sidecar-import")
     return {
         "total_images": scan_res["total_images"],
         "paired": len(scan_res["records"]),
@@ -1386,6 +1434,7 @@ def import_sidecars(
         "sidecar_report_path": rep_path,
         "review_jsonl_path": rev_jsonl,
         "worksheet_path": rev_ws,
+        "pool_detection": pool_detection,
         "audit": audit,
     }
 
@@ -1486,7 +1535,12 @@ def draft_flagged_records(project: str, audit: dict, drafter) -> dict:
     return audit
 
 
-def write_drafter_raw(out_dir: str, rows: list[dict]) -> str | None:
+def write_drafter_raw(
+    out_dir: str,
+    rows: list[dict],
+    *,
+    pool_detection: dict | None = None,
+) -> str | None:
     """Persist per-image full raw drafter outputs under `<out_dir>/drafter-raw.jsonl` when present."""
     drafted = [r for r in rows if r.get("drafter_id") and (r.get("drafter_raw_output") is not None or r.get("draft") or r.get("florence2_draft"))]
     if not drafted:
@@ -1495,7 +1549,7 @@ def write_drafter_raw(out_dir: str, rows: list[dict]) -> str | None:
     raw_path = os.path.join(out_dir, DRAFTER_RAW_FILENAME)
     with open(raw_path, "w", encoding="utf-8") as f:
         for r in drafted:
-            f.write(json.dumps({
+            row_doc: dict[str, Any] = {
                 "id": r["id"],
                 "asset_path": r.get("asset_path", ""),
                 "drafter_id": r.get("drafter_id"),
@@ -1509,7 +1563,10 @@ def write_drafter_raw(out_dir: str, rows: list[dict]) -> str | None:
                     else (r.get("draft") or r.get("florence2_draft") or "")
                 ),
                 "draft": r.get("draft") or r.get("florence2_draft") or "",
-            }, ensure_ascii=False) + "\n")
+            }
+            if pool_detection is not None:
+                row_doc["pool_detection"] = pool_detection
+            f.write(json.dumps(row_doc, ensure_ascii=False) + "\n")
     return raw_path
 
 
@@ -1592,6 +1649,7 @@ def write_review_files(
     dhashes: dict[str, str] | None = None,
     image_vecs: dict[str, Any] | None = None,
     seat_edits: dict[str, dict] | None = None,
+    pool_detection: dict | None = None,
 ) -> tuple[str, str]:
     """Write description-review.jsonl and description-worksheet.md under out_dir.
 
@@ -1607,6 +1665,7 @@ def write_review_files(
     The worksheet NEVER shows the current text, `canon.subject`, the drafter prompt, or the generation prompt.
     """
     os.makedirs(out_dir, exist_ok=True)
+    eff_pool_detection = pool_detection if pool_detection is not None else audit.get("pool_detection")
     dh_map = dict(dhashes or {})
     edits = seat_edits if seat_edits is not None else load_seat_edits(out_dir)
     pool_assets: list[dict] = []
@@ -1622,7 +1681,7 @@ def write_review_files(
             seen_pool.add(ap)
             pool_assets.append({"asset_path": ap, "dhash": dh_map.get(ap) or _fallback_hash_hex(ap)})
 
-    write_drafter_raw(out_dir, audit["records"])
+    write_drafter_raw(out_dir, audit["records"], pool_detection=eff_pool_detection)
 
     jsonl_path = os.path.join(out_dir, "description-review.jsonl")
     with open(jsonl_path, "w", encoding="utf-8") as f:
@@ -1636,7 +1695,7 @@ def write_review_files(
             seat_edit_val = r.get("seat_edit") or (ed_entry["edited_text"] if ed_entry else None)
             seat_id_val = r.get("seat_id") or (ed_entry["seat"] if ed_entry else None)
             draft_val = r.get("draft") or r.get("florence2_draft") or ""
-            row_out = {
+            row_out: dict[str, Any] = {
                 "id": r["id"],
                 "asset_path": r["asset_path"],
                 "caption_class": r.get("caption_class"),
@@ -1676,6 +1735,8 @@ def write_review_files(
                 "canon_subject": r["canon_subject"],
                 "prompt": r["prompt"],
             }
+            if eff_pool_detection is not None:
+                row_out["pool_detection"] = eff_pool_detection
             f.write(json.dumps(row_out, ensure_ascii=False) + "\n")
 
     def _fmt_link(asset: str) -> str:
@@ -1692,6 +1753,8 @@ def write_review_files(
         "",
         f"Stopwords sha256: `{audit['stopwords_sha256']}`.",
     ]
+    if eff_pool_detection is not None:
+        lines.append(format_pool_detection_note(eff_pool_detection))
     if audit.get("drafter_id"):
         lines.append(f"Drafter: `{audit['drafter_id']}` @ `{audit.get('drafter_revision', 'unknown')}`.")
     lines += [
@@ -1797,6 +1860,7 @@ def import_worksheet_edits(
     *,
     seat: str | None = None,
     project: str | None = None,
+    pool_detection: dict | None = None,
 ) -> dict:
     """Re-import blind worksheet edits under `out_dir` and record each edit with its `seat:<name>` writer id."""
     _ensure_out_outside_project(project, out_dir)
@@ -1805,6 +1869,15 @@ def import_worksheet_edits(
     default_seat = (seat or "").strip()
     if default_seat and not _SEAT_NAME_RE.match(default_seat):
         raise DeskError("INPUT_BAD_ARGUMENT", f"invalid seat name {default_seat!r}: use letters, digits, '.', '_' or '-'")
+    from . import desk
+
+    eff_pd = pool_detection
+    if eff_pd is None:
+        eff_pd = (
+            desk.check_multimodal_pool(project, "none", images_only=True)
+            if project
+            else desk.resolve_pool_detection(emit_warning=True)[0]
+        )
 
     ws_sha = _sha256_file(worksheet_path)
     with open(worksheet_path, encoding="utf-8") as f:
@@ -1854,12 +1927,15 @@ def import_worksheet_edits(
             "seat": eff_seat,
             "writer": f"seat:{eff_seat}",
             "worksheet_sha256": ws_sha,
+            "pool_detection": eff_pd,
         })
 
     os.makedirs(out_dir, exist_ok=True)
     merged = load_seat_edits(out_dir)
     for row in imported_rows:
         merged[row["id"]] = row
+    for existing_row in merged.values():
+        existing_row["pool_detection"] = eff_pd
 
     edits_path = os.path.join(out_dir, SEAT_EDITS_FILENAME)
     with open(edits_path, "w", encoding="utf-8") as f:
@@ -1875,6 +1951,7 @@ def import_worksheet_edits(
                     updated_rev.append(json.loads(line))
         for r in updated_rev:
             ed = merged.get(str(r.get("id")))
+            r["pool_detection"] = eff_pd
             if ed is not None:
                 r["seat_edit"] = ed["edited_text"]
                 r["seat_id"] = ed["seat"]
@@ -1891,11 +1968,13 @@ def import_worksheet_edits(
             for r in updated_rev:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
+    desk.write_pool_detection_status(out_dir, eff_pd, command="import-edits")
     return {
         "imported": len(imported_rows),
         "total_seat_edits": len(merged),
         "seat_edits_path": edits_path,
         "records": imported_rows,
+        "pool_detection": eff_pd,
     }
 
 
@@ -1951,6 +2030,7 @@ def compose_captions(
     token_counter: Callable[[list[str]], list[int]] | dict[str, int] | None = None,
     manifest_name: str = CAPTION_MANIFEST_FILENAME,
     sidecars: bool = False,
+    pool_detection: dict | None = None,
 ) -> dict:
     """Compose final training captions under `out_dir` (never inside `project`) and emit a lane-3 dataset manifest.
 
@@ -1975,6 +2055,9 @@ def compose_captions(
             "INPUT_BAD_ARGUMENT",
             f"compose requires a non-empty 'prefix' in {CAPTION_RULES_FILENAME} or --caption-config <path>",
         )
+    from . import desk
+
+    eff_pd = pool_detection if pool_detection is not None else desk.check_multimodal_pool(project, "none", images_only=True)
 
     raw_recs = load_project_records(project) if not sidecars else []
     missing_sidecars: list[str] = []
@@ -1983,7 +2066,7 @@ def compose_captions(
         if sidecars or not cached_sc_recs:
             sc_scan = scan_sidecar_project(project)
             if sidecars or sc_scan["records"]:
-                save_sidecar_import(out_dir, sc_scan)
+                save_sidecar_import(out_dir, sc_scan, pool_detection=eff_pd)
                 raw_recs = sc_scan["records"]
                 missing_sidecars = sc_scan["images_without_sidecar"]
         else:
@@ -2174,6 +2257,7 @@ def compose_captions(
         caption_rules=rules,
         allow_composed_source=True,
     )
+    audit["pool_detection"] = eff_pd
     if missing_sidecars:
         audit["images_without_sidecar"] = list(missing_sidecars)
     first_d_info = next((m["draft_info"] for m in meta_by_id.values() if m["draft_info"] is not None), None)
@@ -2211,14 +2295,16 @@ def compose_captions(
         dhashes=dhashes,
         image_vecs=image_vecs,
         seat_edits=edits_map,
+        pool_detection=eff_pd,
     )
 
     os.makedirs(out_dir, exist_ok=True)
     manifest_path = os.path.join(out_dir, manifest_name)
-    manifest_doc = {"items": manifest_items}
+    manifest_doc = {"pool_detection": eff_pd, "items": manifest_items}
     with open(manifest_path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(manifest_doc, f, indent=2, ensure_ascii=False)
         f.write("\n")
+    desk.write_pool_detection_status(out_dir, eff_pd, command="compose")
 
     return {
         "manifest_path": manifest_path,
@@ -2226,5 +2312,6 @@ def compose_captions(
         "worksheet_path": rev_ws,
         "items": manifest_items,
         "images_without_sidecar": missing_sidecars,
+        "pool_detection": eff_pd,
         "audit": audit,
     }

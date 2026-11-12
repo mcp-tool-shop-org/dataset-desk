@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import tempfile
 import types
 import unittest
@@ -1042,6 +1043,419 @@ class Addendum1SidecarAndPoolLockTests(unittest.TestCase):
 
         # Project folder untouched byte-for-byte
         self.assertEqual(_snapshot_tree(sidecar_proj), before_snap)
+
+
+class Addendum2PoolDetectionStatusTests(unittest.TestCase):
+    """Synthetic tests for Addendum 2 (Parts A-C):
+    1. With nothing configured, each command's output file carries `status: "off"` and `stderr` carries the warning once;
+    2. With a manifest or a pool dir configured, the output carries `status: "on"` with per-pool counts, and `stderr`
+       has no warning;
+    3. No locked-pool `sha256` value appears in any output file (and no `sha256` value appears in `pool_detection` or
+       pool-detection reports).
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = self._tmp.name
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
+        os.environ.pop("DATASET_DESK_POOL_DIRS", None)
+        os.environ["DATASET_DESK_USER_CONFIG"] = ""
+
+    def _build_synthetic_projects(self, tag: str) -> tuple[str, str, str]:
+        proj = os.path.join(self.tmp, f"proj-{tag}")
+        os.makedirs(os.path.join(proj, "outputs", "w1"), exist_ok=True)
+        os.makedirs(os.path.join(proj, "records"), exist_ok=True)
+        _write_png(os.path.join(proj, "outputs", "w1", "arch_01.png"), (70, 105, 140), seed=71)
+        _write_png(os.path.join(proj, "outputs", "w1", "arch_02.png"), (140, 95, 70), seed=72)
+
+        with open(os.path.join(proj, "caption-rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"prefix": "copperplate study,", "drafter": "fake"}, f)
+
+        rec_ok = {
+            "id": "arch_01",
+            "asset_path": "outputs/w1/arch_01.png",
+            "judgment": {
+                "status": "approved",
+                "explanation": "copperplate study, weathered limestone arch above flagged stone steps",
+            },
+            "provenance": {"prompt": "distant ridge line"},
+        }
+        rec_flagged = {
+            "id": "arch_02",
+            "asset_path": "outputs/w1/arch_02.png",
+            "judgment": {
+                "status": "approved",
+                "explanation": "carved wooden lintel beside narrow iron lantern",
+            },
+            "provenance": {"prompt": "harbor mist"},
+        }
+        with open(os.path.join(proj, "records", "arch_01.json"), "w", encoding="utf-8") as f:
+            json.dump(rec_ok, f)
+        with open(os.path.join(proj, "records", "arch_02.json"), "w", encoding="utf-8") as f:
+            json.dump(rec_flagged, f)
+
+        sidecar_proj = os.path.join(self.tmp, f"sidecar-{tag}")
+        os.makedirs(sidecar_proj, exist_ok=True)
+        _write_png(os.path.join(sidecar_proj, "plate_01.png"), (95, 130, 115), seed=73)
+        with open(os.path.join(sidecar_proj, "plate_01.txt"), "w", encoding="utf-8") as f:
+            f.write("copperplate study, carved timber gate set between mortared stone piers")
+        with open(os.path.join(sidecar_proj, "caption-rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"prefix": "copperplate study,", "drafter": "none"}, f)
+
+        subjects_file = os.path.join(self.tmp, f"subjects-{tag}.txt")
+        with open(subjects_file, "w", encoding="utf-8") as f:
+            f.write("limestone arch\ntimber gate\n")
+
+        return proj, sidecar_proj, subjects_file
+
+    @staticmethod
+    def _fill_worksheet_edit(ws_path: str, row_id: str, edited_text: str) -> None:
+        with open(ws_path, encoding="utf-8") as f:
+            ws_text = f.read()
+        row_line = next(ln for ln in ws_text.splitlines() if ln.startswith(f"| `{row_id}` |"))
+        cells = row_line.split("|")
+        cells[7] = f" {edited_text} "
+        with open(ws_path, "w", encoding="utf-8") as f:
+            f.write(ws_text.replace(row_line, "|".join(cells)))
+
+    def test_nothing_configured_records_status_off_in_every_command_output_and_warns_once(self):
+        proj, sidecar_proj, subjects_file = self._build_synthetic_projects("off")
+        out_dir = os.path.join(self.tmp, "out-off")
+        out_sc = os.path.join(self.tmp, "out-off-sc")
+
+        def run_cmd(argv: list[str]) -> tuple[str, str]:
+            out_buf, err_buf = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+                rc = desk.run(argv)
+            self.assertEqual(rc, EXIT_OK, err_buf.getvalue())
+            return out_buf.getvalue(), err_buf.getvalue()
+
+        # 1. `index`: fails at 62a2f41 where `<out>/fake/meta.json` lacks `"pool_detection"`
+        _o, err_idx = run_cmd(["index", "--project", proj, "--out", out_dir, "--backend", "fake"])
+        self.assertEqual(err_idx.count("renamed-copy detection is off"), 1)
+        with open(os.path.join(out_dir, "fake", "meta.json"), encoding="utf-8") as f:
+            meta_doc = json.load(f)
+        self.assertIn("pool_detection", meta_doc)
+        self.assertEqual(meta_doc["pool_detection"]["status"], "off")
+        self.assertIn("renamed-copy detection is off", meta_doc["pool_detection"]["warning"])
+
+        # 2. `scan`: CLI command + `<out>/scan-report.json` + `<out>/pool-detection.json`
+        _o, err_scan = run_cmd(["scan", "--project", proj, "--out", out_dir])
+        self.assertEqual(err_scan.count("renamed-copy detection is off"), 1)
+        with open(os.path.join(out_dir, "scan-report.json"), encoding="utf-8") as f:
+            scan_doc = json.load(f)
+        self.assertEqual(scan_doc["pool_detection"]["status"], "off")
+
+        # 3. `dupes`: `<out>/dupes-fake.json`
+        _o, err_dupes = run_cmd(["dupes", "--project", proj, "--out", out_dir, "--backend", "fake"])
+        self.assertEqual(err_dupes.count("renamed-copy detection is off"), 1)
+        with open(os.path.join(out_dir, "dupes-fake.json"), encoding="utf-8") as f:
+            dupes_doc = json.load(f)
+        self.assertEqual(dupes_doc["pool_detection"]["status"], "off")
+
+        # 4. `search`: `<out>/search-fake.json`
+        _o, err_search = run_cmd([
+            "search", "--project", proj, "--out", out_dir, "--backend", "fake", "--text", "limestone arch",
+        ])
+        self.assertEqual(err_search.count("renamed-copy detection is off"), 1)
+        with open(os.path.join(out_dir, "search-fake.json"), encoding="utf-8") as f:
+            search_doc = json.load(f)
+        self.assertEqual(search_doc["pool_detection"]["status"], "off")
+
+        # 5. `coverage`: `<out>/coverage-fake.json`
+        _o, err_cov = run_cmd([
+            "coverage", "--project", proj, "--out", out_dir, "--backend", "fake", "--subjects", subjects_file,
+        ])
+        self.assertEqual(err_cov.count("renamed-copy detection is off"), 1)
+        with open(os.path.join(out_dir, "coverage-fake.json"), encoding="utf-8") as f:
+            cov_doc = json.load(f)
+        self.assertEqual(cov_doc["pool_detection"]["status"], "off")
+
+        # 6. `report --draft fake`: Markdown report note, worksheet note, review JSONL, drafter-raw JSONL
+        _o, err_rep = run_cmd(["report", "--project", proj, "--out", out_dir, "--backend", "fake", "--draft", "fake"])
+        self.assertEqual(err_rep.count("renamed-copy detection is off"), 1)
+        with open(os.path.join(out_dir, "report-fake.md"), encoding="utf-8") as f:
+            rep_md = f.read()
+        self.assertIn("Pool detection (`pool_detection`): `off`", rep_md)
+        self.assertIn("renamed-copy detection is off", rep_md)
+        with open(os.path.join(out_dir, "description-worksheet.md"), encoding="utf-8") as f:
+            ws_md = f.read()
+        self.assertIn("Pool detection (`pool_detection`): `off`", ws_md)
+        with open(os.path.join(out_dir, "description-review.jsonl"), encoding="utf-8") as f:
+            rev_rows = [json.loads(ln) for ln in f if ln.strip()]
+        self.assertTrue(all(r["pool_detection"]["status"] == "off" for r in rev_rows))
+        with open(os.path.join(out_dir, "drafter-raw.jsonl"), encoding="utf-8") as f:
+            raw_rows = [json.loads(ln) for ln in f if ln.strip()]
+        self.assertTrue(all(r["pool_detection"]["status"] == "off" for r in raw_rows))
+
+        # 7. `import-edits`: warns once on stderr and writes `status: "off"` into `seat-edits.jsonl`
+        self._fill_worksheet_edit(
+            os.path.join(out_dir, "description-worksheet.md"),
+            "arch_02",
+            "carved granite arch beside stone steps",
+        )
+        _o, err_imp = run_cmd(["import-edits", "--project", proj, "--out", out_dir, "--seat", "seat-beta"])
+        self.assertEqual(err_imp.count("renamed-copy detection is off"), 1)
+        with open(os.path.join(out_dir, "seat-edits.jsonl"), encoding="utf-8") as f:
+            edit_rows = [json.loads(ln) for ln in f if ln.strip()]
+        self.assertEqual(edit_rows[0]["pool_detection"]["status"], "off")
+
+        # 8. `compose`: `<out>/captions-manifest.json` + `<out>/pool-detection.json`
+        _o, err_comp = run_cmd(["compose", "--project", proj, "--out", out_dir, "--draft", "fake"])
+        self.assertEqual(err_comp.count("renamed-copy detection is off"), 1)
+        with open(os.path.join(out_dir, "captions-manifest.json"), encoding="utf-8") as f:
+            comp_doc = json.load(f)
+        self.assertEqual(comp_doc["pool_detection"]["status"], "off")
+        with open(os.path.join(out_dir, "pool-detection.json"), encoding="utf-8") as f:
+            pd_doc = json.load(f)
+        self.assertEqual(pd_doc["pool_detection"]["status"], "off")
+
+        # 9. `sidecar-import`: `<out>/sidecar-import.json`, `sidecar-records.jsonl`, `description-worksheet.md`
+        _o, err_sc = run_cmd(["sidecar-import", "--project", sidecar_proj, "--out", out_sc])
+        self.assertEqual(err_sc.count("renamed-copy detection is off"), 1)
+        with open(os.path.join(out_sc, "sidecar-import.json"), encoding="utf-8") as f:
+            sc_doc = json.load(f)
+        self.assertEqual(sc_doc["pool_detection"]["status"], "off")
+        with open(os.path.join(out_sc, "sidecar-records.jsonl"), encoding="utf-8") as f:
+            sc_rows = [json.loads(ln) for ln in f if ln.strip()]
+        self.assertTrue(all(r["pool_detection"]["status"] == "off" for r in sc_rows))
+        with open(os.path.join(out_sc, "description-worksheet.md"), encoding="utf-8") as f:
+            sc_ws = f.read()
+        self.assertIn("Pool detection (`pool_detection`): `off`", sc_ws)
+
+        # 10. Tagged locked-pool project (`multimodal_pool: "salt-road"`) ALSO warns once when detection is off
+        tagged_proj = os.path.join(self.tmp, "tagged-off")
+        out_tagged = os.path.join(self.tmp, "out-tagged-off")
+        _write_png(os.path.join(tagged_proj, "outputs", "w1", "t_01.png"), (65, 95, 125), seed=74)
+        with open(os.path.join(tagged_proj, "project.json"), "w", encoding="utf-8") as f:
+            json.dump({"multimodal_pool": "salt-road"}, f)
+        _o, err_tag = run_cmd(["index", "--project", tagged_proj, "--out", out_tagged, "--backend", "none"])
+        self.assertEqual(err_tag.count("renamed-copy detection is off"), 1)
+        with open(os.path.join(out_tagged, "none", "meta.json"), encoding="utf-8") as f:
+            tag_meta = json.load(f)
+        self.assertEqual(tag_meta["pool_detection"]["status"], "off")
+
+    def test_manifest_and_pool_dir_configured_records_status_on_with_counts_and_no_warning(self):
+        proj, sidecar_proj, subjects_file = self._build_synthetic_projects("on")
+        out_dir = os.path.join(self.tmp, "out-on")
+        out_sc = os.path.join(self.tmp, "out-on-sc")
+
+        # Synthetic manifest via DATASET_DESK_POOL_MANIFEST (3 hashes in salt-road, 1 in rustline)
+        manifest_path = os.path.join(self.tmp, "synthetic-pool-manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "salt-road": ["1" * 64, "2" * 64, "3" * 64],
+                    "rustline": ["4" * 64],
+                },
+                f,
+            )
+        os.environ["DATASET_DESK_POOL_MANIFEST"] = manifest_path
+
+        # Synthetic locked-pool folder for tallow-fen (2 distinct synthetic images) via --locked-pool-dir
+        locked_tallow = os.path.join(self.tmp, "tallow-fen")
+        _write_png(os.path.join(locked_tallow, "outputs", "w1", "tf_01.png"), (30, 80, 50), seed=81)
+        _write_png(os.path.join(locked_tallow, "outputs", "w1", "tf_02.png"), (50, 30, 80), seed=82)
+
+        expected_counts = {"hesperia": 0, "rustline": 1, "salt-road": 3, "tallow-fen": 2}
+
+        # Direct API check: fails at 62a2f41 where `check_multimodal_pool` returned `None`
+        err_direct = io.StringIO()
+        with contextlib.redirect_stderr(err_direct):
+            pd_direct = desk.check_multimodal_pool(proj, "fake", locked_pool_dirs=[locked_tallow])
+        self.assertIsInstance(pd_direct, dict)
+        self.assertEqual(err_direct.getvalue(), "")
+        self.assertEqual(pd_direct["status"], "on")
+        self.assertEqual(pd_direct["counts"], expected_counts)
+        self.assertEqual(pd_direct["pools"]["salt-road"]["sources"][0]["via"], "DATASET_DESK_POOL_MANIFEST")
+        self.assertEqual(pd_direct["pools"]["tallow-fen"]["sources"][0]["via"], "--locked-pool-dir")
+
+        # Verify `user_config` source attribution when configured via DATASET_DESK_USER_CONFIG
+        os.environ.pop("DATASET_DESK_POOL_MANIFEST", None)
+        ucfg_path = os.path.join(self.tmp, "desk-user-cfg.json")
+        with open(ucfg_path, "w", encoding="utf-8") as f:
+            json.dump({"pool_manifest": manifest_path}, f)
+        os.environ["DATASET_DESK_USER_CONFIG"] = ucfg_path
+        err_ucfg = io.StringIO()
+        with contextlib.redirect_stderr(err_ucfg):
+            pd_ucfg = desk.check_multimodal_pool(proj, "fake", locked_pool_dirs=[locked_tallow])
+        self.assertEqual(err_ucfg.getvalue(), "")
+        self.assertEqual(pd_ucfg["pools"]["salt-road"]["sources"][0]["via"], "user_config")
+        os.environ["DATASET_DESK_USER_CONFIG"] = ""
+        os.environ["DATASET_DESK_POOL_MANIFEST"] = manifest_path
+
+        def run_on(argv: list[str]) -> str:
+            out_buf, err_buf = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+                rc = desk.run([*argv, "--locked-pool-dir", locked_tallow])
+            self.assertEqual(rc, EXIT_OK, err_buf.getvalue())
+            self.assertEqual(err_buf.getvalue(), "")
+            return out_buf.getvalue()
+
+        run_on(["scan", "--project", proj, "--out", out_dir])
+        run_on(["index", "--project", proj, "--out", out_dir, "--backend", "fake"])
+        run_on(["dupes", "--project", proj, "--out", out_dir, "--backend", "fake"])
+        run_on(["search", "--project", proj, "--out", out_dir, "--backend", "fake", "--text", "limestone arch"])
+        run_on(["coverage", "--project", proj, "--out", out_dir, "--backend", "fake", "--subjects", subjects_file])
+        run_on(["report", "--project", proj, "--out", out_dir, "--backend", "fake", "--draft", "fake"])
+        self._fill_worksheet_edit(
+            os.path.join(out_dir, "description-worksheet.md"),
+            "arch_02",
+            "carved granite arch beside stone steps",
+        )
+        run_on(["import-edits", "--project", proj, "--out", out_dir, "--seat", "seat-gamma"])
+        run_on(["compose", "--project", proj, "--out", out_dir, "--draft", "fake"])
+        run_on(["sidecar-import", "--project", sidecar_proj, "--out", out_sc])
+
+        for json_rel in (
+            "scan-report.json",
+            os.path.join("fake", "meta.json"),
+            "dupes-fake.json",
+            "search-fake.json",
+            "coverage-fake.json",
+            "captions-manifest.json",
+            "pool-detection.json",
+        ):
+            with open(os.path.join(out_dir, json_rel), encoding="utf-8") as f:
+                doc = json.load(f)
+            self.assertEqual(doc["pool_detection"]["status"], "on", json_rel)
+            self.assertEqual(doc["pool_detection"]["counts"], expected_counts, json_rel)
+
+        for jsonl_rel in ("description-review.jsonl", "drafter-raw.jsonl", "seat-edits.jsonl"):
+            with open(os.path.join(out_dir, jsonl_rel), encoding="utf-8") as f:
+                rows = [json.loads(ln) for ln in f if ln.strip()]
+            self.assertTrue(rows, jsonl_rel)
+            for r in rows:
+                self.assertEqual(r["pool_detection"]["status"], "on", jsonl_rel)
+                self.assertEqual(r["pool_detection"]["counts"], expected_counts, jsonl_rel)
+
+        with open(os.path.join(out_sc, "sidecar-import.json"), encoding="utf-8") as f:
+            sc_doc = json.load(f)
+        self.assertEqual(sc_doc["pool_detection"]["status"], "on")
+        self.assertEqual(sc_doc["pool_detection"]["counts"], expected_counts)
+
+        for md_path in (
+            os.path.join(out_dir, "report-fake.md"),
+            os.path.join(out_dir, "description-worksheet.md"),
+            os.path.join(out_sc, "description-worksheet.md"),
+        ):
+            with open(md_path, encoding="utf-8") as f:
+                md_txt = f.read()
+            self.assertIn("Pool detection (`pool_detection`): `on`", md_txt)
+            self.assertIn("salt-road: 3", md_txt)
+            self.assertIn("tallow-fen: 2", md_txt)
+            self.assertIn("rustline: 1", md_txt)
+            self.assertIn("hesperia: 0", md_txt)
+
+    def test_no_sha256_value_appears_in_pool_detection_or_locked_pool_outputs(self):
+        proj, sidecar_proj, subjects_file = self._build_synthetic_projects("nosha")
+        out_dir = os.path.join(self.tmp, "out-nosha")
+        out_sc = os.path.join(self.tmp, "out-nosha-sc")
+
+        mf_sha_1 = "a1b2c3d4" * 8
+        mf_sha_2 = "b2c3d4e5" * 8
+        mf_sha_3 = "c3d4e5f6" * 8
+        manifest_path = os.path.join(self.tmp, "secret-pool-manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump({"salt-road": [mf_sha_1, mf_sha_2], "hesperia": [mf_sha_3]}, f)
+
+        locked_rust = os.path.join(self.tmp, "rustline")
+        dir_sha_1 = _write_png(os.path.join(locked_rust, "outputs", "w1", "rl_01.png"), (15, 45, 75), seed=91)
+        dir_sha_2 = _write_png(os.path.join(locked_rust, "outputs", "w1", "rl_02.png"), (75, 45, 15), seed=92)
+        forbidden_shas = {mf_sha_1, mf_sha_2, mf_sha_3, dir_sha_1, dir_sha_2}
+
+        captured_streams: list[str] = []
+
+        def run_checked(argv: list[str]) -> None:
+            out_buf, err_buf = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+                rc = desk.run([
+                    *argv,
+                    "--pool-manifest", manifest_path,
+                    "--locked-pool-dir", locked_rust,
+                ])
+            self.assertEqual(rc, EXIT_OK, err_buf.getvalue())
+            self.assertEqual(err_buf.getvalue(), "")
+            captured_streams.append(out_buf.getvalue())
+
+        run_checked(["scan", "--project", proj, "--out", out_dir])
+        run_checked(["index", "--project", proj, "--out", out_dir, "--backend", "fake"])
+        run_checked(["dupes", "--project", proj, "--out", out_dir, "--backend", "fake"])
+        run_checked(["search", "--project", proj, "--out", out_dir, "--backend", "fake", "--text", "limestone arch"])
+        run_checked(["coverage", "--project", proj, "--out", out_dir, "--backend", "fake", "--subjects", subjects_file])
+        run_checked(["report", "--project", proj, "--out", out_dir, "--backend", "fake", "--draft", "fake"])
+        self._fill_worksheet_edit(
+            os.path.join(out_dir, "description-worksheet.md"),
+            "arch_02",
+            "carved granite arch beside stone steps",
+        )
+        run_checked(["import-edits", "--project", proj, "--out", out_dir, "--seat", "seat-delta"])
+        run_checked(["compose", "--project", proj, "--out", out_dir, "--draft", "fake"])
+        run_checked(["sidecar-import", "--project", sidecar_proj, "--out", out_sc])
+
+        # Fails at 62a2f41 where `<out>/pool-detection.json` is never written
+        self.assertTrue(os.path.isfile(os.path.join(out_dir, "pool-detection.json")))
+
+        hex64_re = re.compile(r"\b[0-9a-f]{64}\b", flags=re.IGNORECASE)
+
+        # 1. No locked-pool sha256 (or 12-hex prefix of one) appears in ANY output file or stdout stream
+        all_stream_text = "\n".join(captured_streams).lower()
+        for f_sha in forbidden_shas:
+            self.assertNotIn(f_sha.lower(), all_stream_text)
+            self.assertNotIn(f_sha[:12].lower(), all_stream_text)
+
+        inspected_files = 0
+        for root_out in (out_dir, out_sc):
+            for dirpath, _dirnames, filenames in os.walk(root_out):
+                for fn in filenames:
+                    inspected_files += 1
+                    full_path = os.path.join(dirpath, fn)
+                    with open(full_path, "rb") as f:
+                        raw_bytes = f.read()
+                    lower_latin = raw_bytes.decode("latin-1").lower()
+                    for f_sha in forbidden_shas:
+                        self.assertNotIn(f_sha.lower(), lower_latin, full_path)
+                        self.assertNotIn(f_sha[:12].lower(), lower_latin, full_path)
+
+                    if fn.endswith((".json", ".jsonl", ".md")):
+                        txt = raw_bytes.decode("utf-8")
+                        if fn in (
+                            "pool-detection.json",
+                            "scan-report.json",
+                            "dupes-fake.json",
+                            "search-fake.json",
+                            "coverage-fake.json",
+                            "sidecar-import.json",
+                            "report-fake.md",
+                        ):
+                            self.assertEqual(hex64_re.findall(txt), [], f"unexpected sha256 in {full_path}")
+                        if fn.endswith(".json"):
+                            doc = json.loads(txt)
+                            if isinstance(doc, dict) and "pool_detection" in doc:
+                                self.assertEqual(
+                                    hex64_re.findall(json.dumps(doc["pool_detection"])),
+                                    [],
+                                    full_path,
+                                )
+                        elif fn.endswith(".jsonl"):
+                            for ln in txt.splitlines():
+                                if ln.strip():
+                                    row = json.loads(ln)
+                                    if isinstance(row, dict) and "pool_detection" in row:
+                                        self.assertEqual(
+                                            hex64_re.findall(json.dumps(row["pool_detection"])),
+                                            [],
+                                            full_path,
+                                        )
+                        elif fn.endswith(".md"):
+                            for ln in txt.splitlines():
+                                if "Pool detection (`pool_detection`)" in ln:
+                                    self.assertEqual(hex64_re.findall(ln), [], full_path)
+        self.assertGreaterEqual(inspected_files, 14)
 
 
 if __name__ == "__main__":
